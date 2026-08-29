@@ -222,3 +222,29 @@ switch(id) 执行：
 dsh 风格对话区作为官方装配层的宿主试点：原始事件流接入 → ConversationLocationIndex/
 assembler 构建 timeline/projection → dsh 风格渲染层吃装配输出（消息块/定位条/轨迹入口）。
 default/minimal 两种风格不受影响。
+## 八、官方 web 连接层清单 vs Mirach 连接层（2026-08-30）
+
+### 官方 web 连接层连接了什么
+
+1. **载体**：host-webserver（node:http，exact/prefix 路由 + WS upgrade 座，零业务）
+2. **浏览器侧 transport**：client-connection（zod 校验 RPC 协议、代际生命周期、退避重连、api-request-trust 浏览器信任栅、browser-auth）
+3. **host 侧分发**：api-gateway 把 RPC 分发到各服务插件注册的面
+4. **业务 RPC 面**：session controller（事件流/发送/历史）、jobs、deliverables、attachments、user-questions、feedback、workflow、cordis 自省（tool-cordis/web-cordis）
+5. **client-runtime**：projection 座（tokenUsage/sessionStats/contextPressure）+ snapshot 选择器——StatsLine/ContextMeter/定位器/轨迹/JobPanel 全部吃它
+
+### Mirach 连接层缺的（按补齐顺序）
+
+| # | 缺口 | 补法 |
+|---|---|---|
+| 1 | **原始 SessionEvent 流** | sidecar adapter 转发原始事件（✅ 本轮已补 raw_session_event）|
+| 2 | contextPressure projection | token-meter 投影透出 |
+| 3 | jobs RPC 面 | jobs-local 已挂，加 RPC 透传 |
+| 4 | attachments RPC | attachment-local 已挂，加透传 |
+| 5 | session-query 面 | 开 first-search + 落盘 path |
+| 6 | cordis 自省面 | tool-cordis 已挂，加透传 |
+| 7 | approval/auth 栅 | 复用 user-questions 通道 |
+
+### dsh 原生风格对话区直接用官方装配层——可行，前置是 #1+#2
+
+dsh 风格对话区作为装配层宿主试点：事件流接入 → ConversationLocationIndex/assembler
+构建 timeline/projection → dsh 风格渲染层吃装配输出。default/minimal 不受影响。
