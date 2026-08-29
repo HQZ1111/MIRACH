@@ -186,3 +186,26 @@ npm run tauri dev
   multi-model-provider，NODE_PATH 已追加）
 - 官方源码 clone：C:\dsh-src\deepseek-harness（sparse，packages/client 部分；网络对
   GitHub 大 blob 不稳，重试或换网）
+
+---
+
+# 架构迁移完成（2026-08-30）：apps/mirach 并入官方 workspace
+
+- **新位置**：G:\\deepseek-harness-master\\apps\\mirach（官方 0.1.2-alpha.1 workspace 成员，apps/* glob 自动收录）
+- **形态**：桌面版（Tauri + stdio JSON-RPC sidecar），对话区三种 UI 保持 Mirach 形式
+- **插件树**：对齐官方 dsh-base 全树（约 60 运行时插件，含沙箱/审批/搜索/目标/查询/自动命名等）
+- **仓库**：apps/mirach 独立 git（本仓库），双远程 Gitee/GitHub force 基线 74fd7f8；旧历史在 G:\\mirach\\.git 与远程 tag 备份（old-g-mirach-backup 本地 tag）
+- **数据目录**：C:UsersAdministrator\\.mirach（会话/插件/存储；原 .hermes 已随迁）
+
+## 迁移后待验证清单
+
+1. 新对话发消息：persona（奎木狼）+ 联网搜索 + 全部插件行为
+2. 侧边栏成员 8 人（奎木狼+社区七身份）、环境切换单独团队
+3. 沙箱：写工作区外路径被拒（DSH_PERMISSION_MODE 可调）
+4. 画廊：弧形/拖拽/选中放大（WebGL）
+5. 登录流程：密码跳过/保存→模型页(仅首次)→主页
+
+## 后续大件（评估见 docs/research-isolation.md 第五节）
+
+- 官方 0.1.1 新装配体系（消息定位器/轨迹/JobPanel 底座）——事件溯源层移植（分阶段路线已写）
+- 记忆接入（per-env root）、定时任务 envId 隔离、成员模板导入（+tavern 角色卡）
