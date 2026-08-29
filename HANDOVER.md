@@ -209,3 +209,12 @@ npm run tauri dev
 
 - 官方 0.1.1 新装配体系（消息定位器/轨迹/JobPanel 底座）——事件溯源层移植（分阶段路线已写）
 - 记忆接入（per-env root）、定时任务 envId 隔离、成员模板导入（+tavern 角色卡）
+
+---
+
+# ⚠️ 仓库位置变更（2026-08-30）：统一在 apps/mirach
+
+- **唯一工作目录**：G:\\deepseek-harness-master\\apps\\mirach（官方 0.1.2-alpha.1 workspace 内）
+- 旧 G:\\mirach 目录已归档停用（其 git 历史保留在本地 .git；远程已 force 对齐新基线）
+- **双远程**：origin=Gitee HANQINGZHOU/mirach、github=git@github.com:HQZ1111/MIRACH.git（SSH）
+- 若有其他窗口/会话在旧目录工作，请全部关闭，避免再次分叉
