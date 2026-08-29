@@ -1,0 +1,625 @@
+@import "tailwindcss";
+/* zosma 简约对话档专用样式（对话风格 = 简约；令牌/组件 CSS 全套移植） */
+@import "./components/zosma/minimal.css";
+
+/* ===== Design Tokens ===== */
+
+@theme {
+  /* --- Colors --- */
+  --color-background: #ffffff;
+  --color-foreground: #1a1a1a;
+  --color-card: #ffffff;
+  --color-card-foreground: #1a1a1a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1a1a1a;
+  --color-primary: #1a1a1a;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f5f5f5;
+  --color-secondary-foreground: #1a1a1a;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-accent: #f5f5f5;
+  --color-accent-foreground: #1a1a1a;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e5e5e5;
+  --color-input: #e5e5e5;
+  --color-ring: #1a1a1a;
+  --color-sidebar-toolbar: #edeef0;
+  --color-scrollbar: #c7c9ce;
+
+  /* --- 下拉/折叠卡片令牌（zosma CustomProviderRow 外观） ---
+     这是「下拉栏」的唯一真源：以后要换下拉栏样式，改这里的色值 +
+     下方 .dropdown-card 系列语义类结构即可，登录页/侧栏全部自动生效。 */
+  --color-dropdown-border: #e5e5e5;  /* 卡片边框 / borderTop 分隔线 */
+  --color-dropdown-bg: #ffffff;      /* 卡片与内容区背景 */
+  --color-dropdown-hover: #f5f5f5;   /* 头部悬停 */
+  --color-dropdown-title: #303030;   /* 头部标题 */
+  --color-dropdown-sub: #737373;     /* 头部副文案 / 右侧说明 */
+  --color-dropdown-icon: #737373;    /* 头部图标 / chevron */
+  --color-dropdown-accent: #026cfe;  /* 强调色图标（登录页入口卡） */
+
+  /* --- Radius --- */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-outer: 40px;
+  --radius: 8px;
+
+  /* --- Typography (Noto Sans) --- */
+  --font-sans: "Noto Sans", ui-sans-serif, system-ui, sans-serif;
+  --text-heading: 22px;
+  --text-heading--line-height: 1.3;
+  --text-subheading: 20px;
+  --text-subheading--line-height: 1.4;
+  --text-body-sm: 14px;
+  --text-body-sm--line-height: 1.5;
+  --text-member: 15px;
+  --text-member--line-height: 1.4;
+
+  /* --- Shadows --- */
+  --shadow-outer: 0 8px 24px rgba(0, 0, 0, 0.15);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* --- Icon --- */
+  --icon-size: 24px;
+}
+
+/* ================================================================
+   玻璃视觉基础（参考 zosma 设置页做法：毛玻璃卡片 + 品牌蓝点缀）
+   设置页/卡片类浮层用 .glass-card；暗色由 html.dark 覆盖。
+   ================================================================ */
+
+@layer components {
+  /* 玻璃卡片：半透明渐变底 + 内顶高光 + 柔和投影（浅色） */
+  .glass-card {
+    border-radius: var(--radius-xl);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    background: linear-gradient(
+      160deg,
+      rgba(1, 124, 243, 0.04),
+      rgba(255, 255, 255, 0.7) 45%,
+      rgba(255, 255, 255, 0.78)
+    );
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.6) inset,
+      0 8px 22px -16px rgba(0, 0, 0, 0.25);
+  }
+
+  /* 状态徽章 pill（连接状态/已保存/版本号等） */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 9999px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    background-color: rgba(1, 124, 243, 0.12);
+    color: #017cf3;
+  }
+  .status-pill .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background-color: currentColor;
+  }
+
+  /* 导航滑动药丸（active 分区背景） */
+  .settings-nav-pill {
+    border-radius: 10px;
+    background-color: rgba(1, 124, 243, 0.12);
+    color: #017cf3;
+  }
+
+  /* 设置页双玻璃面板（参考 zosma panel-raised / panel-sidebar）：
+     半透明渐变底 + 内顶高光 + 多层投影 + 品牌蓝对角点缀 */
+  .settings-panel {
+    border-radius: var(--radius-xl);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    background: linear-gradient(
+      160deg,
+      rgba(1, 124, 243, 0.06),
+      rgba(255, 255, 255, 0.74) 45%,
+      rgba(255, 255, 255, 0.82)
+    );
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.6) inset,
+      0 8px 22px -16px rgba(0, 0, 0, 0.25);
+  }
+  .settings-panel-sidebar {
+    background: linear-gradient(
+      165deg,
+      rgba(1, 124, 243, 0.05),
+      rgba(255, 255, 255, 0.7) 50%,
+      rgba(255, 255, 255, 0.76)
+    );
+  }
+
+  /* 设置页 aurora 背景氛围（三团品牌蓝径向光晕，参考 zosma body::before） */
+  .settings-aurora::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(420px 260px at 12% 8%, rgba(1, 124, 243, 0.1), transparent 65%),
+      radial-gradient(480px 300px at 88% 30%, rgba(1, 124, 243, 0.08), transparent 65%),
+      radial-gradient(520px 340px at 50% 100%, rgba(1, 124, 243, 0.06), transparent 65%);
+  }
+}
+
+/* 暗色下玻璃卡片 / 徽章 / 导航药丸 / 设置面板 */
+html.dark .glass-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(
+    160deg,
+    rgba(1, 124, 243, 0.08),
+    rgba(32, 32, 32, 0.72) 45%,
+    rgba(32, 32, 32, 0.78)
+  );
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 8px 22px -16px rgba(0, 0, 0, 0.5);
+}
+html.dark .status-pill,
+html.dark .settings-nav-pill {
+  background-color: rgba(1, 124, 243, 0.18);
+  color: #60a5fa;
+}
+html.dark .settings-panel {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(
+    160deg,
+    rgba(1, 124, 243, 0.09),
+    rgba(21, 21, 21, 0.76) 45%,
+    rgba(21, 21, 21, 0.82)
+  );
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 8px 22px -16px rgba(0, 0, 0, 0.5);
+}
+html.dark .settings-panel-sidebar {
+  background: linear-gradient(
+    165deg,
+    rgba(1, 124, 243, 0.08),
+    rgba(21, 21, 21, 0.74) 50%,
+    rgba(21, 21, 21, 0.78)
+  );
+}
+
+/* ===== Base Layer ===== */
+
+* {
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #f0f0f0;
+  color: var(--color-foreground);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* tauri 无边框透明窗口：html/body 透明，四角露出桌面 → 界面根 rounded-40 即窗口 40px 圆角 */
+html,
+body {
+  background: transparent !important;
+}
+
+/* ===== Scrollbar（细线 2px，默认隐藏，悬停/滚动时显示，50% 透明度） ===== */
+
+::-webkit-scrollbar {
+  width: 2px;
+  height: 2px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 1px;
+}
+
+/* 悬停显示（任意滚动容器）：鼠标悬停区域或悬停滚动条上显示细线 */
+*:hover::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover,
+/* 左侧栏：滚动时显示（.scroll-active 由 JS 控制） */
+.scroll-thin.scroll-active::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-scrollbar) 50%, transparent);
+}
+
+/* ===== Speaking dots animation ===== */
+
+@keyframes speaking-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+/* ===== ConfirmDialog 脉冲光环（危险操作确认，参考 zosma） ===== */
+
+@keyframes confirm-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+/* ===== Equalizer (voice activity) ===== */
+
+@keyframes equalizer {
+  0%, 100% {
+    height: 4px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+
+/* ===== Fade in (面板切换) ===== */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ===== Slide in (面板切换：淡入 + 右滑入) ===== */
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* 会话内查找命中消息：短暂闪烁高亮（InThreadFind） */
+.hermes-find-flash {
+  animation: find-flash 1.2s ease-out;
+}
+@keyframes find-flash {
+  0% {
+    outline: 2px solid #6366F1;
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+}
+
+/* ================================================================
+   下拉/折叠卡片语义类（引用上方 --color-dropdown-* 令牌）。
+   对应 zosma CustomProviderRow：卡片外壳 + 头部按钮 + 旋转 chevron
+   + borderTop 内容区。换下拉栏 = 改令牌值（或这里），不改组件。
+   交互机制各自保留（登录页 state 按钮 / details / Radix Collapsible）。
+   ================================================================ */
+
+@layer components {
+  /* 外壳：圆角 + 边框 + 白底 */
+  .dropdown-card {
+    overflow: hidden;
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--color-dropdown-border);
+    background-color: var(--color-dropdown-bg);
+  }
+
+  /* 头部按钮：图标 + 标题 + chevron 一行 */
+  .dropdown-card-trigger {
+    display: flex;
+    width: 100%;
+    cursor: pointer;
+    user-select: none;
+    align-items: center;
+    text-align: left;
+    gap: 12px;
+    padding: 12px 14px;
+    color: var(--color-dropdown-title);
+    transition: background-color 150ms ease;
+  }
+  .dropdown-card-trigger:hover {
+    background-color: var(--color-dropdown-hover);
+  }
+
+  /* 紧凑变体：设置行内嵌下拉（TokenSelect / SelectField）的头部按钮，比入口卡矮 */
+  .dropdown-card-trigger-sm {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  /* 头部图标（尺寸/颜色令牌） */
+  .dropdown-card-icon,
+  .dropdown-card-chevron {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    color: var(--color-dropdown-icon);
+  }
+
+  /* chevron：开启状态用 rotate-* 类（rotate: 180deg），这里做平滑过渡 */
+  .dropdown-card-chevron {
+    transition: rotate 200ms ease;
+  }
+
+  /* 内容区：borderTop 分隔 */
+  .dropdown-card-body {
+    border-top: 1px solid var(--color-dropdown-border);
+  }
+
+  /* 设置面板内（OverlayShell 玻璃面）：下拉/折叠卡片背景用与主题滑块（SegmentedPill）相同的浅灰，
+     不用纯白实心块 */
+  .settings-dropdown .dropdown-card {
+    background-color: hsl(var(--muted) / 0.5);
+  }
+
+  /* 一体下拉（设置页 TokenSelect / 连接面板 SelectField 共用）：
+     与 CustomProviderRow 同款卡片 —— .dropdown-card 外壳包住头部按钮
+     + borderTop 分隔的选项区，整个是一个圆角卡片在长高，非分离浮层。
+     展开/收起由组件内 motion 高度动画控制（切换选项不跳动）。 */
+
+  /* 消息正文 @提及 高亮（MarkdownText highlightMentions 由 rehype 生成） */
+  .mention-token {
+    border-radius: 4px;
+    background-color: rgba(99, 102, 241, 0.12);
+    padding: 0 2px;
+    color: #6366f1;
+    font-weight: 500;
+  }
+
+  /* 会话内查找命中高亮（MarkdownText findTerm 由 rehype 在 hast 层生成，跳过 code/pre） */
+  .find-highlight {
+    border-radius: 2px;
+    background-color: rgba(250, 204, 21, 0.35);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+}
+
+/* ================================================================
+   暗色主题（useTheme 在 <html> 上切换 .dark）
+   覆盖硬编码色的主界面（工具栏/侧栏/主面板/输入区/气泡/菜单）。
+   注：组件里大量使用任意值色，这里做主要表面的可读性覆盖，
+   完整设计系统化（CSS 变量重构）留待后续。
+   ================================================================ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* 工具栏图标色（内联 color 用 var 引用，深色下反转成白色系） */
+:root {
+  --tool-icon-active: #303030;
+  --tool-icon-inactive: #464646;
+}
+
+/* 按钮语义色（bg-secondary/bg-accent/bg-primary 等 utilities 引用这些变量）：
+   深色下反转——高亮背景变深、主按钮变浅底深字 */
+html.dark {
+  --tool-icon-active: #e5e7eb;
+  --tool-icon-inactive: #d1d5db;
+  --color-secondary: #2e2e2e;
+  --color-secondary-foreground: #e5e7eb;
+  --color-accent: #2e2e2e;
+  --color-accent-foreground: #e5e7eb;
+  --color-primary: #e5e7eb;
+  --color-primary-foreground: #1a1a1a;
+  --color-background: #151619;
+  --color-foreground: #e5e7eb;
+  --color-border: #3a3a3a;
+  --color-input: #3a3a3a;
+  --color-ring: #e5e7eb;
+  --color-muted: #2e2e2e;
+  --color-muted-foreground: #9ca3af;
+  --color-card: #151619;
+  --color-card-foreground: #e5e7eb;
+  --color-popover: #151619;
+  --color-popover-foreground: #e5e7eb;
+}
+
+/* 下拉/折叠卡片令牌的暗色覆盖（.dropdown-card 系列引用这些变量，自动生效） */
+html.dark {
+  --color-dropdown-border: rgba(255, 255, 255, 0.12);
+  --color-dropdown-bg: #151619;
+  --color-dropdown-hover: rgba(255, 255, 255, 0.06);
+  --color-dropdown-title: #e5e7eb;
+  --color-dropdown-sub: #9ca3af;
+  --color-dropdown-icon: #9ca3af;
+  --color-dropdown-accent: #3b82f6;
+}
+
+html.dark body {
+  background: #151619;
+  color: #e5e7eb;
+}
+
+/* 画布 / 外层 */
+html.dark .bg-\[\#f0f0f0\] {
+  background-color: #151619 !important;
+}
+
+/* 所有白色表面（侧栏/面板/弹窗/菜单/气泡）→ #151619（zosma 对话区黑；左侧工具栏单独 #17191c，见 LeftToolbar） */
+html.dark .bg-white {
+  background-color: #151619 !important;
+}
+
+/* 输入区 E8F0FE（E3E6EC 叠加层深色下保持原色，不覆盖） */
+html.dark .bg-\[\#E8F0FE\] {
+  background-color: #1e3a5f !important;
+}
+
+/* 文字与图标 */
+html.dark .text-\[\#303030\] {
+  color: #e5e7eb !important;
+}
+html.dark .text-\[\#464646\] {
+  color: #d1d5db !important;
+}
+html.dark .text-\[\#303030\]\/70 {
+  color: rgb(229 231 235 / 0.7) !important;
+}
+
+/* 用户气泡（浅蓝 D2DAEC）/ 选中态（E9ECF5）/ 代码底（F6F8FA）/ AI 气泡（FFFFFF） */
+html.dark .bg-\[\#D2DAEC\] {
+  background-color: #334155 !important;
+}
+html.dark .bg-\[\#FFFFFF\] {
+  background-color: #151619 !important;
+}
+html.dark .bg-\[\#E9ECF5\] {
+  background-color: #334155 !important;
+}
+html.dark .bg-\[\#F6F8FA\] {
+  background-color: #1c1e21 !important;
+}
+
+/* 语义色 */
+html.dark .text-muted-foreground,
+html.dark .text-muted-foreground\/60,
+html.dark .text-muted-foreground\/70 {
+  color: #9ca3af !important;
+}
+html.dark .bg-muted {
+  background-color: #374151 !important;
+}
+html.dark .bg-muted\/30,
+html.dark .bg-muted\/50,
+html.dark .bg-muted\/60 {
+  background-color: rgba(55, 65, 81, 0.5) !important;
+}
+
+/* 边框 */
+html.dark .border-border,
+html.dark .border-black\/10 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+html.dark .border-black\/5,
+html.dark .border-black\/\[0\.06\] {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 轻量黑底（输入胶囊/悬停） */
+html.dark .bg-black\/\[0\.03\],
+html.dark .bg-black\/\[0\.04\],
+html.dark .bg-black\/5 {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* 滚动条 */
+html.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+/* 终端透明背景：xterm 默认给视口/屏幕层涂 #000，透明画布下会透出黑块。
+   覆盖为透明，让面板底色（浅色白 / 深色 #151619）从终端画布下方透出 */
+.xterm .xterm-viewport,
+.xterm .xterm-screen {
+  background-color: transparent;
+}
+
+/* ================================================================
+   玻璃弹窗表面（对齐 zosma「Send feedback」弹窗效果）
+   半透明底色 + 背景模糊/提饱和 + 细边框 + 分层阴影 + 顶部内高光。
+   浮层弹窗统一引用（工具菜单/右键菜单/会话切换/状态窗/命令面板/全屏抽屉）。
+   圆角/尺寸仍由各组件自己的类控制，这里只管"玻璃面"。
+   ================================================================ */
+.panel-glass {
+  background-color: rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgb(0 0 0 / 0.08);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.55),
+    0 1px 2px rgb(0 0 0 / 0.06),
+    0 12px 30px -12px rgb(0 0 0 / 0.22),
+    0 24px 60px -28px rgb(0 0 0 / 0.28);
+}
+html.dark .panel-glass {
+  background-color: rgb(30 32 36 / 0.6);
+  border-color: rgb(255 255 255 / 0.1);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.4),
+    0 12px 30px -12px rgb(0 0 0 / 0.55),
+    0 24px 60px -28px rgb(0 0 0 / 0.6);
+}
+
+/* 居中弹窗入场：淡入 + 上浮 + 微缩放（zosma 弹簧 380/32/0.8 的 CSS 近似） */
+@keyframes popup-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.popup-anim {
+  animation: popup-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* 锚点菜单入场：只淡入微缩放，不动位（菜单常带 translate 定位、贴近边缘） */
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+.menu-anim {
+  animation: menu-in 170ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ================================================================
+   dsh系统 对话风格（设置-通用设置-对话风格）：紧凑行式。
+   作用于 MainPanel 消息容器（.chat-style-dsh）：
+   - 行距收紧（space-y-4 → 6px）
+   - 气泡已由 MessageList flat 平铺（无背景/描边），这里补紧凑字距与头像缩小
+   ================================================================ */
+.chat-style-dsh > div {
+  margin-top: 6px !important;
+}
+.chat-style-dsh [style*="width: 40px"] {
+  transform: scale(0.8);
+  transform-origin: left center;
+}
+.chat-style-dsh .text-body-sm {
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* 消息行渲染跳过：屏外行由浏览器跳过布局/绘制（Chromium content-visibility），
+   配合 contain-intrinsic-size 预估高度保持滚动条稳定。对 400+ 条消息的
+   长列表显著降低渲染/布局成本。 */
+.msg-row-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+/* 聊天背景（设置-通用设置-聊天背景=开启）：消息区淡色渐变，深色模式微光 */
+.chat-backdrop-on {
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgb(99 102 241 / 0.05), transparent 55%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.35), rgb(255 255 255 / 0));
+}
+html.dark .chat-backdrop-on {
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgb(99 102 241 / 0.08), transparent 55%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.03), rgb(255 255 255 / 0));
+}

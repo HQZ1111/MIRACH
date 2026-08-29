@@ -1,0 +1,18 @@
+{
+  "name": "hermes-agent-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hermes 简约对话引擎 sidecar：dsh 运行时中继（JSONL stdin/stdout ↔ tauri 后端）",
+  "scripts": {
+    "dev": "node --import tsx src/index.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-sdk-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  }
+}

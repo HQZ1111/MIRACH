@@ -1,0 +1,114 @@
+# 隔离设计调研：Hermes（旧引擎）vs Mirach 现状
+
+> 调研对象：`D:\hermes-agent-main`（Hermes 引擎，Python）的多用户/多环境隔离实现，
+> 对照 Mirach（Tauri + sidecar + dsh 引擎）现状，给出借鉴清单。
+> 详细源码引用见调研过程（hermes_constants.py / profiles.py / gateway/session.py /
+> session_context.py / runtime_cwd.py / cron/jobs.py / memory_tool.py / system_prompt.py）。
+
+## 一、Hermes 的隔离模型（一句话）
+
+**没有用户表/环境表**，而是三层："目录即环境（profile）" + "逻辑路由键（session_key）" + "ContextVar 会话上下文"：
+
+1. **目录即环境**：每个 profile 是一个完整自包含的 HOME（`~/.hermes/profiles/<name>/`），
+   内含 config/.env/SOUL.md/memories/sessions/state.db/skills/cron/plans/workspace——
+   所有状态（凭据/记忆/会话/定时任务）都在它下面，物理隔离。
+2. **session_key 路由**：`agent:<namespace>:<platform>:<chat_type>:[scope]:<chat_id>:<thread_id>[:user_id]`
+   单一事实源函数生成；DM 按发送者隔离、群按人隔离、thread 共享——规则收敛一处。
+3. **ContextVar 运行时绑定**：并发消息任务用 contextvars 绑定会话身份（不用 os.environ），
+   显式处理 asyncio 继承泄漏与子进程 env 桥 strip。
+
+## 二、Hermes 值得借鉴的设计点（17 条精选）
+
+| # | 设计 | Mirach 现状 | 借鉴建议 |
+|---|---|---|---|
+| 1 | profile = 完整 HOME（含记忆/凭据/定时任务） | 会话/成员有 env 分片；记忆/凭据/任务未分 | 环境 = 目录方案（Mirach Home per env）中长期最优 |
+| 2 | session_key 单一事实源函数 | envId::sessionId 映射 ✓ 已收敛 | 保持 |
+| 3 | session_key 只做路由不进文件名；文件名 session_id 单独校验 | 引擎持久化按 cwd 编码 ✓ | 保持 |
+| 4 | ContextVar 会话身份（防并发串号） | JS 单线程事件循环，无此并发问题 | 不适用 |
+| 5 | workspace_key = git_repo_root 优先于 cwd | Mirach cwd 即工作区 | 增强项：git 仓库根优先 |
+| 6 | cwd 解析单点 + 读写锁串行化覆盖 | dsh_set_env 单点 ✓ | 保持 |
+| 7 | **cron 存储强制 per-profile**（注释明言共享根会打破隔离） | cron 全局单表 ❌ | **补齐**：任务表加 envId |
+| 8 | cron job 声明无状态 + 清空会话身份，防结果投错聊天 | 不适用（Mirach cron 前端展示） | 低优先 |
+| 9 | **记忆冻结快照**：会话内只读保 prefix cache | 记忆未接入 | 接入记忆时采用 |
+| 10 | MEMORY.md（项目事实）与 USER.md（用户画像）分文件 | — | 接入记忆时采用 |
+| 11 | 授权 = allowlist + pairing 审批 | 不适用（单机应用） | 不适用 |
+| 12 | IM 身份规范化防拆会话 | 不适用 | — |
+| 13 | **profile 可克隆并发布为发行包**（成员模板分发） | 成员手填 | **高价值**：团队成员模板导入/导出 |
+| 14 | **profile 当 kanban 队员**（按 description 路由子任务） | 成员仅展示 | 中期：成员接引擎任务分派 |
+| 15 | 多路复用网关（单进程多 profile） | 单环境单引擎进程（更简单更稳） | 不必借鉴 |
+| 16 | **整条 system prompt 持久化到会话行**（resume/压缩沿用） | persona per env（重启生效） | 增强：会话级 persona 快照 |
+| 17 | **web 层不存业务状态**（localStorage 只存 UI 偏好） | Mirach 会话/成员在 localStorage ⚠️ | 中期：迁到引擎/文件（换机不丢） |
+
+## 三、Mirach 现状隔离矩阵
+
+| 维度 | Hermes | Mirach 现状 | 差距 |
+|---|---|---|---|
+| 会话 | session_key + state.db | env 分片 localStorage + 引擎 cwd 分组持久化 | ✅ 等效 |
+| 成员 | profile 当队员 | mirach.agents.v1.<envId> 分片（本轮） | ✅ 等效 |
+| 工作区 | sessions.cwd/git_repo_root + ContextVar 单点 | dsh_set_env cwd（~ 展开本轮补） | ✅ 等效 |
+| 记忆 | memories/MEMORY.md + USER.md，冻结快照注入 | 未接入（mcp-memory 未挂载） | ❌ 待做 |
+| 定时任务 | cron/jobs.json **per-profile** | Rust 全局单表 | ❌ 待加 envId |
+| persona | per-profile SOUL.md + 会话行持久化 | set_env.systemPrompt（env 级） | 增强：会话级快照 |
+| 凭据 | per-profile .env/.credentials | 全局 providerConfig | 中期：随环境分片 |
+
+## 四、结论
+
+Mirach 的 env 分片思路与 Hermes 的 profile 隔离**同构**（Hermes 是目录级、Mirach 是
+localStorage key + 引擎 cwd 级）。近期补齐优先级：
+
+1. **定时任务加 envId**（借鉴 #7，防任务跨环境误执行）
+2. **记忆接入 + per-env root**（借鉴 #9/#10，mcp-memory 或 MEMORY.md 模式）
+3. **会话级 persona 快照**（借鉴 #16，resume 稳定）
+4. **成员模板导入/导出**（借鉴 #13，配合 dsh-tavern 角色卡生态）
+5. 长期：业务数据迁出 localStorage（借鉴 #17）
+
+## 五、官方 0.1.1 消息定位器/轨迹/JobPanel 的移植评估（2026-08-30）
+
+### 结论：不是组件移植，是架构级升级
+
+官方 0.1.1 的「消息定位器」实为 ConversationLocationIndex（475 行）——
+Turn/Step 时间线索引 + 事件到 Location 的解析层，与 assembler（797 行）、
+assembly（243 行）、definition/event/view registry 共同构成一套**事件溯源装配体系**
+（依赖 client-runtime 的 projection 座、api-session-controller、contract 类型 11 个文件）。
+
+Mirach 现状：LiveChatMessage 数组 + engineId 映射（扁平模型）。直接「复制组件」不可行——
+需要先移植投影/装配层（估计 2-3 周工作量级），才有定位器/轨迹/JobPanel 的挂载点。
+
+### 分阶段路线
+
+| 阶段 | 内容 | 产出 |
+|---|---|---|
+| 1 | 接引擎事件溯源：Mirach store 增加按 seq 的 SessionEvent 日志（实时事件 + 历史回放统一入口） | 定位器/轨迹/JobPanel 共用的数据底座 |
+| 2 | 移植 ConversationLocationIndex（可直译 475 行，无外部依赖） | Turn/Step 时间线 + 事件定位 |
+| 3 | 轨迹视图按 timeline 渲染（对齐官方 TrajectoryView 的分组/状态标记） | 轨迹 UI 对齐 |
+| 4 | JobPanel（ui-jobs）+ 消息定位器 UI（按 Turn/Step 跳转） | UI 对齐 |
+
+### 环境切换方案深度对比（回应「等效不等于更好」）
+
+Hermes 的「目录即环境（profile）」**在架构上优于** Mirach 的 localStorage 分片 + 引擎 cwd 模型：
+
+| 维度 | Hermes profile | Mirach 现状 | 判定 |
+|---|---|---|---|
+| 数据主权 | 全部状态在 profile 目录，换机/备份/迁移 = 拷目录 | 会话/成员在 localStorage（引擎侧会话在 dsh home） | Hermes 优——业务数据应逐步迁出浏览器存储 |
+| 记忆/凭据/任务 | 随 profile 天然隔离 | 每类各自实现分片（遗漏风险） | Hermes 优——一个边界管所有状态 |
+| 人设 | per-profile SOUL.md + 会话行持久化 | per-env persona（重启生效） | Hermes 优——SOUL.md 模式值得直接采用 |
+| 引擎侧 | 引擎本身读 HERMES_HOME | dsh 引擎读 DSH_SESSION_ROOT/cwd | 中性（dsh 按目录分组已等效） |
+
+**建议的收敛路径**（大版本）：Mirach Home 目录 = `%USERPROFILE%\.mirach\<env>\`，
+把会话/成员/记忆/任务全部落在环境目录（引擎 DSH_SESSION_ROOT 已按 env 分 ✓，
+前端业务数据逐步跟随），localStorage 只留 UI 偏好——即采纳 Hermes 的「目录即环境」。
+
+**但当前优先级判断**：画廊/成员/统计/插件移植等可见功能刚落地，架构迁移建议在
+功能面稳定后单独立项（涉及 sessions/agents/usage/projects 全部 store 的迁移与兼容）。
+
+## 六、官方 0.1.1-rc.2 复制可行性最终验证（2026-08-30）
+
+1. npm 全套 0.1.1-rc.2 bundle 已装（196 包 @deepseek-ai/*）——但**内部包未单独发布**
+   （dsh-api-session-controller/dsh-compact 等 404）：官方 UI 体系无法纯 npm 组装，
+   官方 web 是 bundle 自包含分发。
+2. rc.2 的 web 启动存在回归（已两次复现）：启动自举写 flat 布局会话文件，
+   随后 workspace 校验拒绝同一文件（unsupported flat-file layout）——与
+   DSH_SESSION_ROOT 无关。等官方 rc.3 修复后再走「内嵌官方 web UI」路线。
+3. 当前结论：Mirach 对话区维持自制 UI + 逐功能对齐官方（StatsLine 已完成，
+   轨迹/JobPanel/定位器按 ui-trajectory/ui-jobs 源码对齐——0.1.1 的定位器
+   依赖的新装配层等官方修复后整体评估）。

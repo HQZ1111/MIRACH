@@ -1,0 +1,7 @@
+{
+    "target_commitish":  "master",
+    "body":  "Mirach v0.1.0 - 多 Agent 智能体系统\r\n\r\n多 Agent 协作 · 多工作环境 · 自进化 harness。\r\n\r\n下载方法：把 Mirach-portable.7z.001 ~ .002 两个分卷下载到同一个文件夹，\r\n用 7-Zip（或 Windows 11 资源管理器）右键解压任一分卷即可得到完整目录（约 1.3GB）。\r\n\r\n启动：双击 Mirach.exe（Windows 10/11，一般自带 WebView2）。\r\n首次使用：设置 → 模型配置，填入你自己的 API Base URL 与 API Key\r\n（软件不内置任何密钥，数据只保存在本机）。\r\n\r\n目录里 runtime/ 是便携 Node.js + dsh 引擎 + 桥接服务，勿删。\r\n会话数据保存在 C:\\Users\\\u003c你\u003e\\.hermes\\dsh-sessions\\。\r\n\r\nSHA256：\r\nMirach-portable.7z.001 = 7DCBFCCF48DE9A73AEB069EEC19F1BEF0AA3900F54604ED92AD776AB0D0E22DB\r\nMirach-portable.7z.002 = 77C8D79AD24911BBEDACAD4E67FECD6B824FFFEA5ECD00607E64D4076F33E5B9\r\n",
+    "tag_name":  "v0.1.0",
+    "name":  "Mirach v0.1.0",
+    "prerelease":  false
+}

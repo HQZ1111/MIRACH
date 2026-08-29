@@ -1,0 +1,175 @@
+From 4f26724220eade36a4d30a4b6de7579b3b11a22b Mon Sep 17 00:00:00 2001
+From: Mirach Dev <dev@mirach.local>
+Date: Fri, 28 Aug 2026 10:52:23 +0800
+Subject: [PATCH] =?UTF-8?q?feat(sdk/server):=20userQuestions=20=E6=A1=A5?=
+ =?UTF-8?q?=E6=8E=A5=20+=20session/fork=20+=20=E9=80=9A=E7=94=A8=20remote?=
+ =?UTF-8?q?=20=E5=88=86=E5=8F=91=EF=BC=88Mirach=20=E5=AE=BF=E4=B8=BB?=
+ =?UTF-8?q?=E8=A1=A5=E4=B8=81=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- inject 补 sessions/userQuestions
+- userQuestions provider 桥：agent-owned 会话提问 → question/requested 通知，
+  question/resolve 回传答案，5 分钟超时（对齐官方 apiproxy 桥语义）
+- session/fork：ctx.sessions.fork（最近完成回合边界），childSessionId 由宿主指定
+- default 分支通用 remote 分发：svc.method → ctx[svc][method]（如 messageFeedback.put）
+---
+ packages/sdk/server/src/index.ts  |   2 +-
+ packages/sdk/server/src/server.ts | 105 +++++++++++++++++++++++++++++-
+ 2 files changed, 105 insertions(+), 2 deletions(-)
+
+diff --git a/packages/sdk/server/src/index.ts b/packages/sdk/server/src/index.ts
+index 4cad576..d5e9f19 100644
+--- a/packages/sdk/server/src/index.ts
++++ b/packages/sdk/server/src/index.ts
+@@ -19,7 +19,7 @@ export * from './server.ts'
+ 
+ export const name = 'sdk-jsonrpc-server'
+ // Only the agent factory is required; initialize reads the optional LLM seam with ctx.get().
+-export const inject = ['agents']
++export const inject = ['agents', 'sessions', 'userQuestions']
+ 
+ /** JSON-RPC deployment config plus runtime-only test hooks. */
+ export interface JsonRpcConfig {
+diff --git a/packages/sdk/server/src/server.ts b/packages/sdk/server/src/server.ts
+index 195caa9..56afab3 100644
+--- a/packages/sdk/server/src/server.ts
++++ b/packages/sdk/server/src/server.ts
+@@ -6,6 +6,7 @@
+  */
+ 
+ import type { Context } from '@deepseek-ai/cordis'
++import { randomUUID } from 'node:crypto'
+ import { resolve } from 'node:path'
+ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+ import { createUserMessage } from '@deepseek-ai/dsh-llm'
+@@ -58,6 +59,12 @@ export class HarnessSdkJsonRpcServer {
+   private llmFiber: { dispose(): Promise<void> } | undefined
+   private readonly sessions = new Map<string, SessionRecord>()
+   private readonly sessionCreations = new Map<string, Promise<SessionRecord>>()
++  /** Mirach patch (dsh-question-bridge): in-flight user questions awaiting a resolve. */
++  private readonly pendingQuestions = new Map<string, {
++    resolve: (answer: { answers: { id: string; selected: string[]; custom?: string }[] }) => void
++    reject: (error: Error) => void
++    timer: NodeJS.Timeout
++  }>()
+   private readonly disposers: (() => void)[] = []
+   private shutdownTask: Promise<Record<string, never>> | undefined
+   private shuttingDown = false
+@@ -68,6 +75,51 @@ export class HarnessSdkJsonRpcServer {
+     private readonly options: HarnessSdkJsonRpcServerOptions = {},
+   ) {
+     const serverOptions = this.options
++
++    // Mirach patch (dsh-question-bridge): bridge the engine userQuestions seam to
++    // out-of-process JSON-RPC clients over this stdio transport. Mirrors the
++    // official web-host bridge in @deepseek-ai/dsh-apiproxy: agent-owned session,
++    // rpcId-keyed pending wait, 5-minute timeout. Skipped silently when the
++    // deployment mounts no user-questions service.
++    const userQuestions = (ctx as unknown as Record<string, { registerProvider?: (p: unknown) => () => void } | undefined>)['userQuestions']
++    if (userQuestions?.registerProvider !== undefined) {
++      this.disposers.push(userQuestions.registerProvider({
++        ask: (request: { agent?: { id?: string }; questions: unknown; signal?: AbortSignal }) => {
++          const sessionId = request.agent?.id
++          if (sessionId === undefined) {
++            return Promise.reject(new Error('user interaction requires an agent-owned session'))
++          }
++          return new Promise<never>((resolve, reject) => {
++            const rpcId = `q-${randomUUID()}`
++            const timer = setTimeout(() => {
++              if (this.pendingQuestions.delete(rpcId)) {
++                reject(new Error('user question timed out after five minutes'))
++              }
++            }, 5 * 60_000)
++            this.pendingQuestions.set(rpcId, {
++              resolve: (answer) => {
++                clearTimeout(timer)
++                resolve(answer as never)
++              },
++              reject,
++              timer,
++            })
++            const onAbort = (): void => {
++              if (this.pendingQuestions.delete(rpcId)) {
++                clearTimeout(timer)
++                reject(new Error('ask_user_question was aborted before the user answered'))
++              }
++            }
++            request.signal?.addEventListener('abort', onAbort, { once: true })
++            this.transport.notify('question/requested', {
++              sessionId: String(sessionId),
++              rpcId,
++              questions: request.questions,
++            } as never)
++          })
++        },
++      }))
++    }
+     this.disposers.push(ctx.on('session/event', (session, event) => {
+       const payload: SessionEventNotification = { sessionId: String(session.id), event }
+       this.transport.notify('session.event', payload)
+@@ -195,8 +247,59 @@ export class HarnessSdkJsonRpcServer {
+         return this.prompt(params as unknown as SessionPromptParams)
+       case 'shutdown':
+         return this.shutdown()
+-      default:
++      case 'question/resolve': {
++        // Mirach patch (dsh-question-bridge): a client answers an in-flight ask.
++        const p = (params ?? {}) as { rpcId?: string; answer?: { answers?: { id: string; selected: string[]; custom?: string }[] } }
++        const pending = typeof p.rpcId === 'string' ? this.pendingQuestions.get(p.rpcId) : undefined
++        if (pending === undefined) return { ok: false }
++        clearTimeout(pending.timer)
++        this.pendingQuestions.delete(p.rpcId as string)
++        pending.resolve({ answers: p.answer?.answers ?? [] })
++        return { ok: true }
++      }
++      case 'session/fork': {
++        // Mirach patch: engine-native session fork for out-of-process clients.
++        // Forks at the last completed turn; child id supplied by the caller so
++        // the host can pre-map its own session namespace onto it.
++        const p = (params ?? {}) as { sessionId?: string; childSessionId?: string }
++        if (typeof p.sessionId !== 'string' || p.sessionId.length === 0) {
++          throw new Error('session/fork requires sessionId')
++        }
++        const sessions = this.ctx.get('sessions') as unknown as {
++          fork: (source: unknown, boundary?: number, childSessionId?: unknown) => { id: unknown }
++        } | undefined
++        if (sessions === undefined) throw new Error('sessions service is not mounted')
++        const childId = typeof p.childSessionId === 'string' && p.childSessionId.length > 0
++          ? SessionId(p.childSessionId)
++          : undefined
++        let child: { id: unknown }
++        try {
++          child = sessions.fork(SessionId(p.sessionId), undefined, childId)
++        } catch {
++          // Source from an earlier process: open/resume it (the agent factory
++          // reopens the persisted log), then fork by the now-live store id.
++          await this.getOrCreateSession(p.sessionId)
++          child = sessions.fork(SessionId(p.sessionId), undefined, childId)
++        }
++        return { sessionId: String(child.id) }
++      }
++      default: {
++        // Mirach patch (generic remote dispatch): `svc.method` reaches the engine
++        // service plane for out-of-process clients (e.g. messageFeedback.put).
++        // params ride as a single object argument; an array spreads positionally.
++        const dot = method.indexOf('.')
++        if (dot > 0) {
++          const svcName = method.slice(0, dot)
++          const fnName = method.slice(dot + 1)
++          const svc = (this.ctx as unknown as Record<string, Record<string, unknown> | undefined>)[svcName]
++          const fn = svc?.[fnName]
++          if (typeof fn === 'function') {
++            const result = await (fn as (arg: unknown) => unknown).call(svc, params)
++            return result === undefined ? { ok: true } : (result as unknown)
++          }
++        }
+         throw new Error(`unknown DeepSeek Harness SDK runtime method: ${method}`)
++      }
+     }
+   }
+ 
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,38 @@
+[package]
+name = "mirach"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "mirach_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+# 关掉 Win11 给窗口自带的 ~8px 系统圆角（透明窗口 + 内容 40px 圆角时才不会露出 8px 线框）
+windows = { version = "0.61", features = ["Win32_Graphics_Dwm", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[dependencies]
+tauri = { version = "2", features = ["unstable"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-deep-link = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 简约引擎中继（dsh_relay）：oneshot 回包 + spawn_blocking
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+portable-pty = "0.9"
+ureq = { version = "2", features = ["json"] }
+# sessions.db 直读（bundled 自带 SQLite + FTS5 全文索引）
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = "0.4"
+

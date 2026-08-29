@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/dsh-sdk-client": ["../../packages/sdk/client/src/index.ts"],
+      "@deepseek-ai/dsh-sdk-protocol": ["../../packages/sdk/protocol/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

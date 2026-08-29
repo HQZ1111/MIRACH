@@ -1,0 +1,547 @@
+/* ════════════════════════════════════════════════════════════════
+   Zosma 简约对话档（对话风格 = 简约）专用样式
+   ----------------------------------------------------------------
+   来源：I:\zosma-cowork-main\src\App.css（全套移植，用户指定「直接拿 zosma 代码」）。
+   约定：
+   - 共享令牌（muted/border/foreground/primary/accent/card/popover/
+     destructive 等）一律转换为 my-hermes-rs 主题的 HSL 值，保证 inline
+     hsl(var(--x)) 与 Tailwind 工具类（bg-muted 等，hex 令牌）视觉一致；
+     ring 除外：跟随 zosma 品牌蓝（composer-glass 聚焦光晕要与 zosma 相同）；
+   - chat、elev、tool、diff、status、brand 为 zosma 专属令牌，原样保留；
+   - 深色选择器由 zosma 的 [data-theme="dark"] 转为本应用的 html.dark；
+   - 不覆盖 my-hermes-rs 已存在的 --color-* 共享令牌（避免污染默认档）。
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── 共享令牌原始变量（hsl 空间，供 inline hsl(var(--x)) 使用）── */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 0 0% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 10%;
+  --primary: 0 0% 10%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 0 0% 96%;
+  --muted-foreground: 0 0% 45%;
+  --accent: 0 0% 96%;
+  --accent-foreground: 0 0% 10%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 90%;
+  --input: 0 0% 90%;
+  /* ring = zosma 品牌蓝（composer-glass 聚焦光晕/描边颜色，与 zosma 一致） */
+  --ring: 210 99% 48%;
+  --warning: 45 95% 45%;
+  --radius: 8px;
+  --font-mono: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+}
+
+html.dark {
+  --background: 225 9% 9%;
+  --foreground: 220 13% 91%;
+  --card: 225 9% 9%;
+  --card-foreground: 220 13% 91%;
+  --popover: 225 9% 9%;
+  --popover-foreground: 220 13% 91%;
+  --primary: 220 13% 91%;
+  --primary-foreground: 0 0% 10%;
+  --muted: 0 0% 18%;
+  --muted-foreground: 218 11% 65%;
+  --accent: 0 0% 18%;
+  --accent-foreground: 220 13% 91%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 23%;
+  --input: 0 0% 23%;
+  --ring: 210 100% 60%;
+  --warning: 45 95% 58%;
+}
+
+/* ── Zosma 品牌 + 对话专属令牌（原样移植，浅色）── */
+:root {
+  --brand: 210 99% 48%;
+  --brand-2: 217 100% 59%;
+
+  --elev-bg: 0 0% 100%;
+  --elev-border: 214 22% 86%;
+  --elev-highlight: 0 0% 100%;
+  --elev-shadow: 214 40% 30%;
+  --elev-glass-blur: 14px;
+  --elev-glass-alpha: 0.72;
+
+  --chat-user-bg: 210 22% 95%;
+  --chat-user-fg: 214 32% 10%;
+  --chat-assistant-bg: 0 0% 100%;
+  --chat-assistant-fg: 214 32% 10%;
+  --chat-system-bg: 210 20% 92%;
+  --chat-system-fg: 214 12% 40%;
+  --chat-avatar-user-bg: 210 99% 48%;
+  --chat-avatar-user-fg: 0 0% 100%;
+  --chat-avatar-assistant-bg: 210 18% 86%;
+  --chat-avatar-assistant-fg: 214 32% 12%;
+
+  --status-bg: 210 24% 95%;
+  --status-divider: 214 20% 88%;
+  --status-active-fg: 210 99% 48%;
+
+  --tool-running-bg: 210 99% 48% / 0.12;
+  --tool-running-fg: 210 99% 44%;
+  --tool-running-border: 210 99% 48% / 0.45;
+  --tool-complete-bg: 142 60% 40% / 0.08;
+  --tool-complete-fg: 142 60% 40%;
+  --tool-complete-border: 142 60% 40% / 0.2;
+  --tool-error-bg: 0 72% 52% / 0.08;
+  --tool-error-fg: 0 72% 52%;
+  --tool-error-border: 0 72% 52% / 0.2;
+  --tool-timeline-line: 214 20% 88%;
+
+  --diff-added-bg: 142 60% 40% / 0.08;
+  --diff-added-fg: 142 60% 40%;
+  --diff-removed-bg: 0 72% 52% / 0.08;
+  --diff-removed-fg: 0 72% 52%;
+  --diff-context-fg: 214 12% 40%;
+  --diff-hunk-fg: 210 99% 48%;
+
+  --success-subtle: 142 60% 40% / 0.06;
+  --error-subtle: 0 72% 52% / 0.06;
+}
+
+/* ── 对话专属令牌（深色，zosma [data-theme="dark"] 转 html.dark）── */
+html.dark {
+  --elev-bg: 220 9% 13%;
+  --elev-border: 220 8% 22%;
+  --elev-highlight: 210 30% 80%;
+  --elev-shadow: 220 40% 2%;
+  --elev-glass-blur: 16px;
+  --elev-glass-alpha: 0.6;
+
+  --chat-user-bg: 220 8% 14%;
+  --chat-user-fg: 0 0% 96%;
+  --chat-assistant-bg: 220 10% 9%;
+  --chat-assistant-fg: 0 0% 96%;
+  --chat-system-bg: 220 8% 16%;
+  --chat-system-fg: 220 6% 60%;
+  --chat-avatar-user-bg: 210 100% 56%;
+  --chat-avatar-user-fg: 0 0% 100%;
+  --chat-avatar-assistant-bg: 220 8% 20%;
+  --chat-avatar-assistant-fg: 0 0% 92%;
+
+  --status-bg: 220 9% 10%;
+  --status-divider: 220 8% 18%;
+  --status-active-fg: 210 100% 64%;
+
+  --tool-running-bg: 210 100% 60% / 0.15;
+  --tool-running-fg: 210 100% 68%;
+  --tool-running-border: 210 100% 60% / 0.32;
+  --tool-complete-bg: 142 60% 45% / 0.1;
+  --tool-complete-fg: 142 60% 55%;
+  --tool-complete-border: 142 60% 45% / 0.25;
+  --tool-error-bg: 0 62% 55% / 0.1;
+  --tool-error-fg: 0 62% 60%;
+  --tool-error-border: 0 62% 55% / 0.25;
+  --tool-timeline-line: 220 8% 18%;
+
+  --diff-added-bg: 142 60% 45% / 0.1;
+  --diff-added-fg: 142 60% 55%;
+  --diff-removed-bg: 0 62% 55% / 0.1;
+  --diff-removed-fg: 0 62% 60%;
+  --diff-context-fg: 220 6% 60%;
+  --diff-hunk-fg: 210 100% 68%;
+
+  --success-subtle: 142 60% 45% / 0.08;
+  --error-subtle: 0 62% 55% / 0.08;
+}
+
+/* ── 令牌 → Tailwind 工具类（仅 zosma 专属命名，避免覆盖共享令牌）── */
+@theme {
+  --color-brand: hsl(var(--brand));
+  --color-brand-2: hsl(var(--brand-2));
+
+  --color-elev-bg: hsl(var(--elev-bg));
+  --color-elev-border: hsl(var(--elev-border));
+  --color-elev-highlight: hsl(var(--elev-highlight));
+  --color-elev-shadow: hsl(var(--elev-shadow));
+
+  --color-chat-user-bg: hsl(var(--chat-user-bg));
+  --color-chat-user-fg: hsl(var(--chat-user-fg));
+  --color-chat-assistant-bg: hsl(var(--chat-assistant-bg));
+  --color-chat-assistant-fg: hsl(var(--chat-assistant-fg));
+  --color-chat-system-bg: hsl(var(--chat-system-bg));
+  --color-chat-system-fg: hsl(var(--chat-system-fg));
+  --color-chat-avatar-user-bg: hsl(var(--chat-avatar-user-bg));
+  --color-chat-avatar-user-fg: hsl(var(--chat-avatar-user-fg));
+  --color-chat-avatar-assistant-bg: hsl(var(--chat-avatar-assistant-bg));
+  --color-chat-avatar-assistant-fg: hsl(var(--chat-avatar-assistant-fg));
+
+  --color-status-bg: hsl(var(--status-bg));
+  --color-status-divider: hsl(var(--status-divider));
+  --color-status-active-fg: hsl(var(--status-active-fg));
+
+  --color-tool-running-bg: hsl(var(--tool-running-bg));
+  --color-tool-running-fg: hsl(var(--tool-running-fg));
+  --color-tool-running-border: hsl(var(--tool-running-border));
+  --color-tool-complete-bg: hsl(var(--tool-complete-bg));
+  --color-tool-complete-fg: hsl(var(--tool-complete-fg));
+  --color-tool-complete-border: hsl(var(--tool-complete-border));
+  --color-tool-error-bg: hsl(var(--tool-error-bg));
+  --color-tool-error-fg: hsl(var(--tool-error-fg));
+  --color-tool-error-border: hsl(var(--tool-error-border));
+  --color-tool-timeline-line: hsl(var(--tool-timeline-line));
+
+  --color-diff-added-bg: hsl(var(--diff-added-bg));
+  --color-diff-added-fg: hsl(var(--diff-added-fg));
+  --color-diff-removed-bg: hsl(var(--diff-removed-bg));
+  --color-diff-removed-fg: hsl(var(--diff-removed-fg));
+  --color-diff-context-fg: hsl(var(--diff-context-fg));
+  --color-diff-hunk-fg: hsl(var(--diff-hunk-fg));
+
+  --color-success-subtle: hsl(var(--success-subtle));
+  --color-error-subtle: hsl(var(--error-subtle));
+}
+
+/* ── Composer glass（zosma #268 UI refresh）── */
+.composer-glass {
+  background: linear-gradient(
+    160deg,
+    hsl(var(--brand) / 0.05),
+    hsl(var(--elev-bg) / calc(var(--elev-glass-alpha) - 0.02))
+  );
+  backdrop-filter: blur(var(--elev-glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--elev-glass-blur)) saturate(140%);
+  border: 1px solid hsl(var(--elev-border) / 0.75);
+  box-shadow:
+    0 1px 0 0 hsl(var(--elev-highlight) / 0.5) inset,
+    0 8px 24px -14px hsl(var(--elev-shadow) / 0.35);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.composer-glass:focus-within {
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow:
+    0 1px 0 0 hsl(var(--elev-highlight) / 0.5) inset,
+    0 0 0 3px hsl(var(--ring) / 0.12),
+    0 10px 28px -14px hsl(var(--brand) / 0.4);
+}
+
+/* ── Chat bubbles（zosma #268 UI refresh：磨砂玻璃气泡）── */
+.chat-bubble {
+  border-radius: var(--radius-2xl);
+  border: 1px solid transparent;
+  backdrop-filter: blur(8px) saturate(125%);
+  -webkit-backdrop-filter: blur(8px) saturate(125%);
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.chat-bubble-assistant {
+  background: hsl(var(--elev-bg) / calc(var(--elev-glass-alpha) - 0.04));
+  border-color: hsl(var(--elev-border) / 0.55);
+  box-shadow:
+    0 1px 0 0 hsl(var(--elev-highlight) / 0.4) inset,
+    0 6px 18px -14px hsl(var(--elev-shadow) / 0.32);
+}
+.chat-bubble-user {
+  background: linear-gradient(135deg, hsl(var(--brand) / 0.14) 0%, hsl(var(--brand-2) / 0.09) 100%);
+  border-color: hsl(var(--primary) / 0.22);
+  box-shadow:
+    0 1px 0 0 hsl(var(--elev-highlight) / 0.4) inset,
+    0 6px 18px -14px hsl(var(--brand) / 0.35);
+}
+.brand-gradient {
+  background-image: linear-gradient(135deg, hsl(var(--brand)) 0%, hsl(var(--brand-2)) 100%);
+}
+.brand-gradient-text {
+  background-image: linear-gradient(135deg, hsl(var(--brand)) 0%, hsl(var(--brand-2)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ── Chat 字体覆盖（zosma 原样：系统字体栈）── */
+.chat-font,
+.chat-font * {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ═══════════════════════════════════════════════
+   Chat message markdown — readable typography
+   Tailwind preflight zeroes all element margins, so
+   we re-establish a clean vertical rhythm here.
+   ═══════════════════════════════════════════════ */
+.chat-markdown {
+  font-size: 14px;
+  line-height: 1.72;
+  color: inherit;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ── In-thread find: match highlighting ── */
+.find-highlight {
+  background: hsl(var(--primary) / 0.22);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.find-highlight-active {
+  background: hsl(var(--primary) / 0.85);
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.4);
+}
+
+/* First/last child: no stray outer margin */
+.chat-markdown > *:first-child {
+  margin-top: 0;
+}
+.chat-markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+/* Paragraphs */
+.chat-markdown p {
+  margin: 0 0 0.9em;
+}
+
+/* Headings — clear hierarchy with breathing room above */
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-weight: 650;
+  line-height: 1.3;
+  color: hsl(var(--foreground));
+  margin: 1.6em 0 0.6em;
+  letter-spacing: -0.01em;
+}
+.chat-markdown h1 {
+  font-size: 1.5em;
+}
+.chat-markdown h2 {
+  font-size: 1.28em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid hsl(var(--border) / 0.7);
+}
+.chat-markdown h3 {
+  font-size: 1.12em;
+}
+.chat-markdown h4 {
+  font-size: 1em;
+  color: hsl(var(--foreground) / 0.9);
+}
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Lists */
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.chat-markdown ul {
+  list-style: disc;
+}
+.chat-markdown ol {
+  list-style: decimal;
+}
+.chat-markdown li {
+  margin: 0.35em 0;
+  padding-left: 0.2em;
+}
+.chat-markdown li::marker {
+  color: hsl(var(--muted-foreground));
+}
+.chat-markdown li > ul,
+.chat-markdown li > ol {
+  margin: 0.35em 0;
+}
+/* Tight task lists */
+.chat-markdown li > input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: hsl(var(--primary));
+}
+
+/* Inline emphasis */
+.chat-markdown strong {
+  font-weight: 650;
+  color: hsl(var(--foreground));
+}
+.chat-markdown em {
+  font-style: italic;
+}
+
+/* Links */
+.chat-markdown a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.chat-markdown a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Inline code */
+.chat-markdown code {
+  background: hsl(var(--muted));
+  padding: 0.12em 0.4em;
+  border-radius: var(--radius-sm);
+  font-size: 0.85em;
+  font-family: var(--font-mono);
+  border: 1px solid hsl(var(--border) / 0.6);
+}
+
+/* Code blocks */
+.chat-markdown pre {
+  background: hsl(var(--muted)) !important;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-md);
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0.9em 0;
+  line-height: 1.6;
+}
+.chat-markdown pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  font-size: 0.84em;
+}
+
+/* Blockquotes */
+.chat-markdown blockquote {
+  border-left: 3px solid hsl(var(--primary) / 0.5);
+  padding: 0.1em 0 0.1em 1em;
+  margin: 0.9em 0;
+  color: hsl(var(--muted-foreground));
+}
+.chat-markdown blockquote p {
+  margin: 0.4em 0;
+}
+
+/* Horizontal rule */
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1.5em 0;
+}
+
+/* Tables — bordered, padded, header band, horizontally scrollable */
+.chat-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.9em;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-md);
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.5em 0.8em;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.chat-markdown th {
+  background: hsl(var(--muted) / 0.7);
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+}
+.chat-markdown tbody tr:nth-child(even) {
+  background: hsl(var(--muted) / 0.25);
+}
+
+/* Images */
+.chat-markdown img {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  margin: 0.6em 0;
+}
+
+/* ── Animations ── */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes subtle-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+.animate-subtle-pulse {
+  animation: subtle-pulse 2s ease-in-out infinite;
+}
+.animate-spin-slow {
+  animation: spin-slow 1.5s linear infinite;
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* Shimmer sweep for "loading" activity blocks (issue #173 activity view) */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.animate-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--foreground) / 0.45) 0%,
+    hsl(var(--foreground) / 0.95) 50%,
+    hsl(var(--foreground) / 0.45) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2s linear infinite;
+}
