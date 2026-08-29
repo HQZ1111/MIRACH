@@ -112,3 +112,81 @@ Hermes 的「目录即环境（profile）」**在架构上优于** Mirach 的 lo
 3. 当前结论：Mirach 对话区维持自制 UI + 逐功能对齐官方（StatsLine 已完成，
    轨迹/JobPanel/定位器按 ui-trajectory/ui-jobs 源码对齐——0.1.1 的定位器
    依赖的新装配层等官方修复后整体评估）。
+
+## 七、mirach-envs 插件具体实施方案（2026-08-30）
+
+### 结论
+
+多环境做成 **cordis 插件并入引擎**：隔离由引擎侧强制执行（每环境一个自包含
+目录 = Hermes profile 式），前端只消费插件的 RPC/Web 路由，删除 localStorage
+分片代码。
+
+### 官方连接核心参考（web 版连接方式）
+
+- **host-webserver** = 纯 HTTP/WS 载体（node:http + gzip + 命名路由注册 +
+  WS upgrade 座），**不含业务**；session controller、API gateway 等服务插件
+  通过 `register(route)` / `registerUpgrade(route)` 把 API/WS 挂进同一端口。
+- **client-connection**（浏览器侧）= 带 MRU 代际生命周期与指数退避重连的
+  RPC transport：握手拿 host 事实（home 路径），之后逐请求 RPC（zod 校验），
+  事件经同代际通道推送。
+- Mirach 现状对照：sidecar（stdio JSON-RPC）≈ 无 webserver 的同型 RPC 面；
+  **遗漏参考**：官方连接层含代际重连、请求信任栅（api-request-trust）、
+  browser-auth、回环主机名校验——Mirach 的 Tauri invoke 通道天然免这些，
+  但若未来直连 webserver 需要补 browser-auth 栅。
+
+### mirach-envs 插件结构
+
+```
+mirach-envs/
+├── package.json          # name: mirach-envs; dsh.bundle.patch: ./cordis.patch.yml
+├── cordis.patch.yml      # - id: mirach-envs / - insert: - name: mirach-envs
+└── src/
+    ├── index.ts          # Plugin 导出：envs 服务（list/active/switch/members）
+    ├── service.ts        # EnvsService：环境目录管理 + 激活态重配
+    └── routes.ts         # host-webserver 路由：/api/envs（GET 列表/POST 切换）
+```
+
+### cordis.patch.yml
+
+```yaml
+- id: mirach-envs
+  name: mirach-envs
+  config:
+    root: !!js "process.env.DSH_ENVS_ROOT ?? require('os').homedir() + '/.mirach/environments'"
+- insert:
+    - name: mirach-envs
+```
+
+### 环境目录布局（Hermes profile 式，每环境自包含）
+
+```
+~/.mirach/environments/<envId>/
+├── env.yaml             # 名称/描述/模型选择/成员注册表（人设+工具）
+├── sessions/            # 该环境独立会话持久化（替代 sessionRoot 切换）
+├── members/             # 成员注册表（奎木狼/鲁班/…，含 systemPrompt）
+├── memories/            # MEMORY.md + USER.md（冻结快照注入，借鉴 Hermes）
+├── storage/             # message-feedback 等 storage 后端
+└── jobs.json            # 该环境定时任务（隔离 cron）
+```
+
+### EnvsService 职责（切换 = 重配三处 root）
+
+switch(id) 执行：
+1. session-persistence-jsonl 的 root 重配 → 会话日志/历史切到该环境目录
+2. storage-json 的 root 重配 → 反馈/附件存储隔离
+3. 成员注册表重载 → ask_user_question 反馈与成员 RPC 使用该环境成员
+（live 重配优先走 cordis Fiber 重载；跨插件 root 重配不支持的行用 Fiber
+ restart 仲裁——插件内实现，前端无感知。）
+
+### Mirach 前端对接（替换 localStorage 分片）
+
+- 删除 mirach.sessions.v1.<envId> / mirach.agents.v1.<envId> 分片与
+  setSessionsEnv/setAgentsEnv——改调 /api/envs RPC
+- 会话列表/成员列表/统计来源 = 当前激活环境目录
+- 多窗口天然一致（状态在引擎侧，非各窗口 localStorage）
+
+### 结果
+
+- 隔离引擎侧强制执行（目录边界），前端分片代码全部退役
+- 换机/备份 = 拷贝 ~/.mirach/environments/<envId>/
+- 官方插件生态（记忆/任务/审批等 per-env root 类）由插件统一管理，永不遗漏
