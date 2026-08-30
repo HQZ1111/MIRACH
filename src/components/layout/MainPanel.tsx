@@ -77,7 +77,7 @@ import { useMockStatus } from "@/hooks/useMockStatus";
 import { MOCK } from "@/lib/mock";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { CustomScrollbar } from "@/components/ui/CustomScrollbar";
-import { MessageLocator } from "@/components/chat/MessageLocator";
+import { TurnNavigator, type TurnNavigationItem, type TurnNavigatorT } from "@/components/chat/TurnNavigator";
 import { TrajectoryOverlay } from "@/components/trajectory/TrajectoryOverlay";
 import {
   ArrowDown,
@@ -1002,18 +1002,46 @@ const ChatSection = memo(function ChatSection({
     }, 250);
   }, [jumpReq, msgs]);
 
-  // ---- 消息定位器（MessageLocator）----
+  // ---- 消息定位器（官方 TurnNavigator：右侧回合轨 + 悬停预览 + 点击跳转）----
   const [activeMsg, setActiveMsg] = useState(0);
   const msgRefs = useRef<(HTMLDivElement | null)[]>([]);
-  // 可定位的消息索引（用户消息）——useMemo 避免每 delta 重算
-  const userMsgIndexes = useMemo(
-    () => msgs.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0),
-    [msgs],
-  );
-  const locatorMessages = useMemo(
-    () => userMsgIndexes.map((i) => ({ index: i, text: msgs[i].text.replace(/^用户消息 \d+：/, "") })),
-    [userMsgIndexes, msgs],
-  );
+  // 每条用户消息 = 一个回合锚点（turn 按顺序编号）；回复预览取其后的首条 AI 消息
+  const navItems = useMemo<TurnNavigationItem[]>(() => {
+    const items: TurnNavigationItem[] = [];
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].role !== "user") continue;
+      let response = "";
+      for (let j = i + 1; j < msgs.length; j++) {
+        if (msgs[j].role === "ai") {
+          response = msgs[j].text;
+          break;
+        }
+        if (msgs[j].role === "user") break;
+      }
+      items.push({ turn: items.length + 1, anchorKey: String(i), prompt: msgs[i].text, response });
+    }
+    return items;
+  }, [msgs]);
+  // 当前视口顶部所在回合（scrollspy：activeMsg 之前出现的用户消息计数）
+  const activeTurn = useMemo(() => {
+    let seen = 0;
+    for (let i = 0; i < msgs.length && i <= activeMsg; i++) {
+      if (msgs[i].role === "user") seen += 1;
+    }
+    return seen > 0 ? seen : null;
+  }, [msgs, activeMsg]);
+  // 官方组件要求 props 引用稳定（memo 防流式期间每 delta 重建轨道）
+  const onNavNavigate = useCallback((item: TurnNavigationItem) => {
+    const index = Number(item.anchorKey);
+    setActiveMsg(index);
+    virtuosoRef.current?.scrollToIndex({ index, align: "start" });
+  }, []);
+  // 官方 t() 三键（label/jump/turn）中文实现
+  const navT = useCallback<TurnNavigatorT>((key, vars) => {
+    if (key === "chat.turnNavigation.jump") return `跳转到第 ${vars?.turn ?? 0} 轮`;
+    if (key === "chat.turnNavigation.turn") return `第 ${vars?.turn ?? 0} 轮`;
+    return "消息定位";
+  }, []);
 
   // 不在底部时显示"滚动到底部"按钮
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -1060,11 +1088,6 @@ const ChatSection = memo(function ChatSection({
 
   const scrollToBottom = () => {
     virtuosoRef.current?.scrollToIndex({ index: Math.max(0, msgs.length - 1), align: "end" });
-  };
-
-  const scrollToMsg = (i: number) => {
-    setActiveMsg(i); // 点击立即选中
-    virtuosoRef.current?.scrollToIndex({ index: i, align: "start" });
   };
 
   // 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中计时）：
@@ -1118,6 +1141,9 @@ const ChatSection = memo(function ChatSection({
           <GoalBar />
           <JobsAction />
         </div>
+      {/* 滚动容器包裹层（relative）：官方 TurnNavigator 的绝对定位参照系，
+          与滚动容器同几何（不含 Composer），轨带垂直居中 */}
+      <div className="relative flex min-h-0 flex-1">
       {/* 滚动容器：bodyRef 不再滚动（overflow-hidden），滚动交给 Virtuoso 的
           scroller（自定义滚动条经 scrollerRef 绑定）；限宽容器在内部居中 */}
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-hidden px-5">
@@ -1187,19 +1213,11 @@ const ChatSection = memo(function ChatSection({
           {/* 会话统计条已移至输入框下方（对齐官方 composer.dock 语义） */}
         </div>
         )}
-      </div>
-
-      {/* 消息定位器（9 条横线，间距 4px，左侧） */}
-      {userMsgIndexes.length > 0 && (
-        <div className="absolute left-1.5 top-1/2 z-10 -translate-y-1/2">
-          <MessageLocator
-            messages={locatorMessages}
-            activeIndex={activeMsg}
-            onJump={scrollToMsg}
-            onActiveChange={setActiveMsg}
-          />
         </div>
-      )}
+
+        {/* 消息定位器（官方 TurnNavigator：右侧回合导航轨，悬停预览，点击跳转） */}
+        <TurnNavigator items={navItems} activeTurn={activeTurn} onNavigate={onNavNavigate} t={navT} />
+      </div>
 
       {/* 自定义滚动条（统一组件：细线 + 空心圆）；绑定 Virtuoso scroller */}
       <CustomScrollbar scrollRef={scrollerRef} className="absolute right-1 top-2 bottom-2" />
