@@ -70,12 +70,6 @@ export function PluginsOverlay({
 
   const q = query.trim().toLowerCase();
 
-  const engineFiltered = useMemo(() => {
-    if (!enginePlugins) return null;
-    if (!q) return enginePlugins;
-    return enginePlugins.filter((e) => e.id.toLowerCase().includes(q) || e.name.toLowerCase().includes(q));
-  }, [enginePlugins, q]);
-
   const installed = useMemo(
     () => (q ? plugins.filter((p) => p.label.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q)) : plugins),
     [plugins, q],
