@@ -17,20 +17,28 @@ import { pushRawEvent } from "@/store/session-events";
 export function useStreamingReply(): (sessionId: string, text: string) => Promise<void> {
   return useCallback(async (sessionId: string, text: string) => {
     const api = getApi();
-    // 发送时的活跃会话与环境代数：事件到达时若已切走，丢弃迟到事件（防跨会话/跨环境污染）
+    // 发送时的活跃会话与环境代数：事件到达时若已切走，降级为后台簿记
+    // （busy 释放/定稿复位照常，转录写入跳过防串台）——不再整体丢弃，
+    // 否则切会话后"回复中"永久卡死、错误提示（欠费等）也随之丢失。
     const sidAtSend = $activeSessionId.get();
     const epochAtSend = $envEpoch.get();
     await api.submitPromptStream(
       sessionId,
       text,
       (e) => {
-        if ((sidAtSend && $activeSessionId.get() !== sidAtSend) || $envEpoch.get() !== epochAtSend) return;
-        // 原始 SessionEvent 透传 → 事件日志 store（装配层/定位器底座）
+        const active =
+          (!sidAtSend || $activeSessionId.get() === sidAtSend) && $envEpoch.get() === epochAtSend;
+        // 原始 SessionEvent 透传 → 事件日志 store（装配层/定位器底座）；
+        // raw 底座按活跃会话装载，后台事件不喂（切回时历史重放补齐）
         if (e.type === "raw_session_event") {
-          pushRawEvent(e.event.seq ?? e.seq, e.event.type, e.event.data, e.event.time ?? 0);
+          if (active) pushRawEvent(e.event.seq ?? e.seq, e.event.type, e.event.data, e.event.time ?? 0);
           return;
         }
-        handleMirachEvent(e, { sendText: text, requestSession: sidAtSend ?? sessionId });
+        handleMirachEvent(e, {
+          sendText: text,
+          requestSession: sidAtSend ?? sessionId,
+          background: !active,
+        });
       },
     );
   }, []);

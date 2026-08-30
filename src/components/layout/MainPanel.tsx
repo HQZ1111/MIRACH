@@ -70,7 +70,7 @@ import { ZosmaChat } from "@/components/zosma/ZosmaChat";
 import { speak, stopSpeaking, isSpeaking } from "@/lib/tts";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $lastFailedPrompt, setLastFailedPrompt } from "@/store/retry";
-import { sendMessage, $agentBusy } from "@/store/agent";
+import { sendMessage, $busyMap } from "@/store/agent";
 import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { useMockStatus } from "@/hooks/useMockStatus";
@@ -1034,18 +1034,9 @@ const ChatSection = memo(function ChatSection({
   const toolCalls = useStore($toolCalls);
   // AI 是否正在流式输出（真实模式；mock 恒 false）
   const streaming = useStore($aiStreaming);
-  // 引擎忙碌（发送后未完成）：用于"思考中"等待指示
-  const agentBusy = useStore($agentBusy);
-  // 等待指示计时（工作中 X 秒）
-  const [busySec, setBusySec] = useState(0);
-  useEffect(() => {
-    if (!agentBusy) {
-      setBusySec(0);
-      return;
-    }
-    const t = window.setInterval(() => setBusySec((s) => s + 1), 1000);
-    return () => window.clearInterval(t);
-  }, [agentBusy]);
+  // 引擎忙碌（发送后未完成）：按活跃会话分桶读——A 回复中切到 B，B 不显示等待指示
+  const busyMap = useStore($busyMap);
+  const agentBusy = !!busyMap[activeId ?? ""];
 
   // 滚动处理：轨道显示 / 空心圆位置 / 底部按钮（scrollspy 由 Virtuoso rangeChanged
   // 接管——虚拟化后看不到行 DOM，逐行 offsetTop 扫描失效；range 的首行即当前可见位）
@@ -1075,6 +1066,36 @@ const ChatSection = memo(function ChatSection({
     setActiveMsg(i); // 点击立即选中
     virtuosoRef.current?.scrollToIndex({ index: i, align: "start" });
   };
+
+  // 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中计时）：
+  // 渲染在消息列表末尾（Virtuoso Footer）——即"AI 回复将出现的位置"，
+  // 流式第一步显示等待动画，内容出来后被真实气泡接替。
+  // 判定：① 已发送但 AI 尚无流式输出（末条为 user）；② 流式中末条 AI 气泡还没内容。
+  // 从尾部向前跳过 system 状态行，避免被状态消息打断。
+  let lastNonSystem: { role: string; text?: string } | undefined;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.role !== "system") {
+      lastNonSystem = msgs[i];
+      break;
+    }
+  }
+  const waiting =
+    agentBusy &&
+    (lastNonSystem?.role === "user" || (lastNonSystem?.role === "ai" && !lastNonSystem.text));
+
+  // 列表尾部挂件引用稳定化：busy 秒数计时在 WaitingIndicator 内部自跑，
+  // 不进 MainPanel 渲染路径——MessageList 的 memo 在等待期间不被每秒击穿
+  const listFooter = useMemo(
+    () => (
+      <>
+        {waiting && <WaitingIndicator />}
+        {!agentBusy && !streaming && (
+          <FileChangesRow toolCalls={toolCalls} className="mx-4 mb-1" />
+        )}
+      </>
+    ),
+    [waiting, agentBusy, streaming, toolCalls],
+  );
 
   return (
     // 无外层 padding：滚动容器从对话区顶部开始，顶部不再有固定的 padding 灰带；
@@ -1136,49 +1157,8 @@ const ChatSection = memo(function ChatSection({
             onScroll={handleBodyScroll}
             onRangeChange={handleRangeChange}
             initialIndex={Math.max(0, msgs.length - 1)}
+            footer={listFooter}
           />
-          {/* 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中计时）：
-              ① 已发送但 AI 尚无流式输出；② 流式中但末条 AI 气泡还没有内容（思考刚流出）。
-              判定从尾部向前跳过 system 状态行，避免被状态消息打断 */}
-          {(() => {
-            let last: { role: string; text?: string } | undefined;
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i]?.role !== "system") {
-                last = msgs[i];
-                break;
-              }
-            }
-            const waiting =
-              agentBusy &&
-              (last?.role === "user" || (last?.role === "ai" && !last.text));
-            return waiting ? (
-              <div className="flex items-start gap-2 px-4 py-2">
-                {/* AI 头像 + 在线状态（对齐成员列表样式） */}
-                <div className="relative shrink-0">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#7C5CFF] text-[10px] font-bold text-white">
-                    奎
-                  </div>
-                  <span
-                    className="absolute rounded-full border-2 border-white"
-                    style={{ width: 10, height: 10, bottom: -2, right: -2, backgroundColor: "#10B981" }}
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-member font-medium text-[#303030]">奎木狼</p>
-                  <div className="mt-1 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[#017CF3]" />
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      工作中 {busySec} 秒
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : null;
-          })()}
-          {/* 回合文件更改汇总（产品清单 #4）：回合结束（非流式）且有写/改文件时显示 */}
-          {!agentBusy && !streaming && (
-            <FileChangesRow toolCalls={toolCalls} className="mx-4 mb-1" />
-          )}
           </div>
 
           {/* 发送失败重试条（引擎报错后出现；点重试重新发送上次提示词） */}
@@ -1416,6 +1396,38 @@ function DateDivider({ date }: { date: string }) {
   );
 }
 
+// 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中 X 秒计时）。
+// 挂在 Virtuoso Footer = 对话区"AI 回复将出现的位置"：流式第一步显示等待动画，
+// 内容出来后被真实气泡接替。计时器在组件内部自跑，不牵动父级重渲染。
+const WaitingIndicator = memo(function WaitingIndicator() {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setSec((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return (
+    <div className="flex items-start gap-2 px-4 py-2">
+      {/* AI 头像 + 在线状态（对齐成员列表样式） */}
+      <div className="relative shrink-0">
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#7C5CFF] text-[10px] font-bold text-white">
+          奎
+        </div>
+        <span
+          className="absolute rounded-full border-2 border-white"
+          style={{ width: 10, height: 10, bottom: -2, right: -2, backgroundColor: "#10B981" }}
+        />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-member font-medium text-[#303030]">奎木狼</p>
+        <div className="mt-1 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#017CF3]" />
+          <span className="text-xs tabular-nums text-muted-foreground">工作中 {sec} 秒</span>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const MessageList = memo(function MessageList({
   msgs,
   firstAiIdx,
@@ -1430,6 +1442,7 @@ const MessageList = memo(function MessageList({
   onScroll,
   onRangeChange,
   initialIndex = 0,
+  footer,
 }: {
   msgs: AnyMsg[];
   firstAiIdx: number;
@@ -1451,6 +1464,9 @@ const MessageList = memo(function MessageList({
   onRangeChange: (range: { startIndex: number; endIndex: number }) => void;
   /** 初始定位索引（切会话 remount 时指向最新消息，模拟原"打开即见最新"） */
   initialIndex?: number;
+  /** 列表尾部挂件（等待指示/文件更改汇总）：Virtuoso Footer，
+   *  跟随消息流渲染在"AI 回复将出现的位置"，不再被 overflow 裁剪 */
+  footer?: React.ReactNode;
 }) {
   const { t } = useI18n();
   // 最后一条 AI 消息（流式指示挂它上面）
@@ -1494,6 +1510,15 @@ const MessageList = memo(function MessageList({
         onScroll={onScroll}
         overscan={800}
         style={{ height: "100%" }}
+        components={
+          footer
+            ? {
+                Footer: () => (
+                  <div className="msg-row-cv pb-4">{footer}</div>
+                ),
+              }
+            : undefined
+        }
         itemContent={(i, m) => {
         // 日期分隔线：首条或跨天插入（今天/昨天/M月D日）
         const date = msgDate(m);

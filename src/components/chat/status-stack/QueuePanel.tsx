@@ -10,7 +10,7 @@ import { useState, useRef, type ReactNode } from "react";
 import { useStore } from "@nanostores/react";
 import { Layers3, Pencil, CornerDownLeft, Trash2, PlayCircle } from "lucide-react";
 import { $queueState, removeQueued, updateQueuedText, promoteQueued, resumeQueuedPrompts } from "@/store/queue";
-import { setAgentBusy } from "@/store/agent";
+import { clearAgentBusy } from "@/store/agent";
 import { StatusSection } from "./StatusSection";
 import { StatusRow } from "./StatusRow";
 
@@ -67,7 +67,7 @@ function QueueRow({ item }: { item: { id: string; text: string; displayText?: st
 
   const handleSendNow = () => {
     promoteQueued(item.id);
-    setAgentBusy(false); // 中断当前 turn，auto-drain 会接管
+    clearAgentBusy(); // 中断当前 turn（清空忙碌桶），auto-drain 会接管
   };
 
   // 编辑态：行内输入框

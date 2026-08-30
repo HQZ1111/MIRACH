@@ -17,7 +17,7 @@ export interface KernelBridge {
   /** 鍥炲悎杈圭晫锛坱urn/end 鍚庤皟鐢紝閲嶇疆姝ラ鐘舵€侊級銆?*/
   resetTurn: () => void;
   /** 璁板綍鏈鍙戦€佸師鏂囷紙message.error 鐨勯噸璇曟潯鐢級銆?*/
-  setSendText: (t: string) => void;
+  setSendText: (t: string, sid?: string) => void;
 }
 
 /**
@@ -31,9 +31,18 @@ export function createDshBridge(): KernelBridge {
   let errorSent = false;
   let pendingEngineId = "";
   let sendText = "";
+  /** 发起回合的 mirach 会话 id（kernelSend 时绑定）：事件簿记（busy/完成/错误）
+   *  键在它上；用户切走会话后事件降级后台簿记，防"回复中"卡死与转录串台。 */
+  let boundSid = "";
 
   const onEvent = (e: MirachEvent): void => {
-    handleMirachEvent(e, { sendText, requestSession: sid() });
+    const sidNow = sid();
+    const active = !boundSid || sidNow === boundSid;
+    handleMirachEvent(e, {
+      sendText,
+      requestSession: boundSid || sidNow,
+      background: !active,
+    });
   };
 
   const adapter = createDshAdapter({
@@ -216,6 +225,9 @@ export function createDshBridge(): KernelBridge {
       errorSent = false;
       pendingEngineId = "";
     },
-    setSendText: (t: string) => { sendText = t; },
+    setSendText: (t: string, sid?: string) => {
+      sendText = t;
+      if (sid) boundSid = sid;
+    },
   };
 }

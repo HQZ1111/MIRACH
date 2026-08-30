@@ -8,7 +8,7 @@
  *
  * - 主按钮状态机（参考 hermes-agent-main 桌面版）：
  *   空输入 → 语音对话 (AudioLines) / 有文字 → 发送 (ArrowUp)
- *   busy+有文字 → 排队 (Layers3) / busy 或语音对话中 → 停止 (Square)
+ *   busy+有文字 → 发送（连续发送，引擎串行消化）/ busy → 停止 (Square)
  * - 左下：+ 添加菜单（添加附件/文件夹/粘贴图片/附加 URL/提示词片段/使用提示）、
  *   模式切换（变更前确认/自动编辑/计划模式/完全访问）
  * - 右下：语音听写（模拟转写）、主按钮
@@ -27,7 +27,7 @@ import { $activeSessionId } from "@/store/session";
 import { appendSessionUserMessage } from "@/store/session-chat";
 import { $sessions } from "@/store/sessions";
 import { useStreamingReply } from "@/hooks/useStreamingReply";
-import { $agentBusy, setAgentBusy, setSendHandler, sendMessage } from "@/store/agent";
+import { $busyMap, setAgentBusy, setSendHandler, sendMessage } from "@/store/agent";
 import { $providerConfig, activeModelIdOf, setActiveModel, setActiveEffort, effectiveEffortOf } from "@/store/providerConfig";
 import { $usage } from "@/store/usage";
 import { $assemblyProjections } from "@/dsh-assembly/store";
@@ -48,7 +48,6 @@ import {
   EarOff,
   FileText,
   FolderOpen,
-  Layers3,
   Link2,
   ListTodo,
   Loader2,
@@ -327,7 +326,10 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
   // 输入文本由 ref 持有（textarea 非受控）：输入不触发 React 重渲染——
   // Composer 是重组件，受控 textarea 每 keypress 全量重渲染是打字卡顿的来源
   const textRef = useRef("");
-  const busy = useStore($agentBusy);
+  // 忙碌按会话分桶（store/agent）：读"活跃会话"的忙——A 会话回复中，B 会话不受影响
+  const busyMap = useStore($busyMap);
+  const activeSid = useStore($activeSessionId);
+  const busy = !!busyMap[activeSid ?? ""];
   // 真实模式 AI 是否流式中（驱动 placeholder/转向意图）：
   // busy 但未流式 = 已发送等首包（此时允许继续发送）；流式中主按钮=停止
   const streaming = useStore($aiStreaming);
@@ -342,9 +344,10 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
       if (standalone) return; // 独立模式：写入交给外部 onSend
       if (MOCK) {
         // mock：用户消息追加到当前会话 + 模拟 2.5s busy
-        appendSessionUserMessage($activeSessionId.get(), msg);
-        setAgentBusy(true);
-        window.setTimeout(() => setAgentBusy(false), 2500);
+        const sid = $activeSessionId.get();
+        appendSessionUserMessage(sid, msg);
+        setAgentBusy(true, sid);
+        window.setTimeout(() => setAgentBusy(false, sid), 2500);
       } else {
         // 真实：写入用户消息 → 经 Channel 流式提交（附件拼进提示词）
         appendUserMessage(msg);
@@ -857,17 +860,18 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     if (standalone) return; // 独立模式：写入交给外部 onSend，不碰主对话 store
     if (MOCK) {
       // mock：用户消息追加到当前会话 + 模拟 2.5s busy
-      appendSessionUserMessage($activeSessionId.get(), trimmed);
-      setAgentBusy(true);
-      window.setTimeout(() => setAgentBusy(false), 2500);
+      const sid = $activeSessionId.get();
+      appendSessionUserMessage(sid, trimmed);
+      setAgentBusy(true, sid);
+      window.setTimeout(() => setAgentBusy(false, sid), 2500);
     } else if (import.meta.env.VITE_KERNEL === "1") {
       // B 阶段 3a：官方内核发送（session.prompt 入队；回复经事件镜像渲染）。
       // 内核未就绪时自动回退 sidecar 管道——消息永不因内核状态丢失。
       appendUserMessage(trimmed);
-      setAgentBusy(true); // 发送即等待：思考指示立即出现
+      setAgentBusy(true, $activeSessionId.get() ?? undefined); // 发送即等待：思考指示立即出现
       void kernelSend(prompt).catch((e: unknown) => {
         console.warn("[composer] kernel send failed — falling back to sidecar pipe:", e);
-        setAgentBusy(false);
+        setAgentBusy(false, $activeSessionId.get() ?? undefined);
         appendSystemMessage(`ℹ️ 内核链未就绪（${String(e).slice(0, 400)}），本条已走 sidecar 管道发送`);
         void streamReply(SESSION_ID, prompt).catch((e2: unknown) =>
           appendSystemMessage(`⚠️ 提交失败：${String(e2)}`),
@@ -876,7 +880,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     } else {
       // 真实：写入用户消息 → 经 Channel 流式提交（附件拼进提示词）
       appendUserMessage(trimmed);
-      setAgentBusy(true); // 发送即等待：思考指示立即出现
+      setAgentBusy(true, $activeSessionId.get() ?? undefined); // 发送即等待：思考指示立即出现
       void streamReply(SESSION_ID, prompt).catch((e: unknown) =>
         appendSystemMessage(`⚠️ 提交失败：${String(e)}`),
       );
@@ -886,7 +890,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
   const handleStop = () => {
     // 保留已流出的半成品（finalize 仅复位状态，不替换文本），复位流式/busy
     finalizeAiMessage($currentAiId.get());
-    setAgentBusy(false);
+    setAgentBusy(false, $activeSessionId.get() ?? undefined);
     // 内核模式：中断当前回合（session.cancel）
     if (import.meta.env.VITE_KERNEL === "1") void kernelStop();
     // 有排队消息时停车，防止 auto-drain 立即发送
@@ -957,15 +961,12 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
   let primaryLabel: string;
   let onPrimary: () => void;
   if (busy && hasText) {
-    primaryIcon = <Layers3 className="h-3.5 w-3.5" strokeWidth={2.5} />;
-    primaryLabel = "排队中";
-    onPrimary = () => {
-      enqueue(textRef.current.trim());
-      setTextSync("");
-      setAttachments([]);
-    };
-  } else if (busy && streaming) {
-    // 仅真正流式中显示停止；已发送等首包（busy && !streaming）时保持可发送
+    // 连续发送（用户需求 #6）：AI 未回完时继续发，乐观上屏，引擎侧串行消化
+    primaryIcon = <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />;
+    primaryLabel = "发送";
+    onPrimary = handleSend;
+  } else if (busy) {
+    // 已发送未回完（等首包/思考中/流式中）：停止图标随时可中断
     primaryIcon = <Square className="h-2.5 w-2.5" fill="currentColor" strokeWidth={2.5} />;
     primaryLabel = "停止";
     onPrimary = handleStop;
@@ -1221,8 +1222,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               const trimmed = textRef.current.trim();
-              // 繁忙时 Enter 行为（设置-通用设置）：steer=插话发送（真实模式流式中转向）；
-              // queue=排队发送；不忙时直接发送
+              // 繁忙时 Enter：steer=插话转向（设置-通用设置可选）；
+              // 默认直接连续发送（#6：乐观上屏，引擎侧串行消化，不再强制排队）
               if (busy || (!MOCK && streaming)) {
                 if (trimmed) {
                   if (enterBehavior === "steer" && !MOCK && streaming) {
@@ -1230,12 +1231,11 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                       .steer(trimmed)
                       .then(() => appendSystemMessage(`⚡ 已发送转向：${trimmed}`))
                       .catch((err: unknown) => appendSystemMessage(`转向失败：${String(err)}`));
+                    setTextSync("");
+                    setAttachments([]);
                   } else {
-                    // busy 时 Enter 直接入队（与主按钮"排队中"一致）
-                    enqueue(trimmed);
+                    handleSend();
                   }
-                  setTextSync("");
-                  setAttachments([]);
                 }
               } else {
                 handleSend();
@@ -1247,7 +1247,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
             !MOCK && streaming
               ? "AI 回复中… 输入转向指令，Enter 发送"
               : busy
-                ? "回复中…（Enter 排队）"
+                ? "AI 回复中… 可继续输入，Enter 连续发送"
                 : "输入消息... (Enter 发送, Shift+Enter 换行)"
           }
           className="w-full resize-none bg-transparent text-body-sm leading-normal text-[#303030] placeholder:text-muted-foreground focus:outline-none"

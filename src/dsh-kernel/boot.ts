@@ -18,6 +18,7 @@ import "@deepseek-ai/dsh-api-session-controller/client";
 import { Context } from "@deepseek-ai/cordis";
 import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
+import { $activeSessionId } from "@/store/session";
 import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { logInfo } from "./kernel-log";
@@ -219,7 +220,7 @@ export async function kernelSend(text: string): Promise<void> {
 
   const binding = sessions.binding(activeCoreSessionId);
   if (!binding) throw new Error("kernel: binding missing");
-  bridge.setSendText(text);
+  bridge.setSendText(text, $activeSessionId.get() ?? undefined);
   await binding.session.prompt(text, "queue");
 }
 

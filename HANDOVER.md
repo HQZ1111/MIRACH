@@ -513,6 +513,24 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
 
 # 产品层需求清单（2026-08-31 用户提出；2/5/6 + 阶段3a 已做，3/4/7 待做）
 
+> **08-31 会话体验二次修正（用户实测反馈）**：
+> ① **busy 按会话分桶**（store/agent $busyMap）：A 会话回复中切到 B 会话立即可发送，
+>    不再全局"回复中"卡死；$agentBusy = computed(任一忙)，auto-drain 语义不变。
+> ② **切会话后事件降级后台簿记**（useStreamingReply + chat-events background 标志）：
+>    原来整流丢弃 → busy 永久卡死 + 欠费等错误提示丢失；现在转录写入跳过（防串台），
+>    busy 释放/定稿复位/重试条照常。内核桥同步（dsh-bridge boundSid，kernelSend 绑定）。
+> ③ **发送按钮状态机重排**：busy+有文字=发送（连续发送 #6 落地，不再排队图标）；
+>    busy+无文字=停止（发送后即出现停止图标，等首包/思考中/流式中全程可中断）。
+>    Enter 繁忙时默认直接连续发送（steer 设置仍可转向；Ctrl+Enter 仍入队）。
+> ④ **等待指示移入 Virtuoso Footer**（MessageList footer prop + WaitingIndicator）：
+>    原来 Important 列表外的块被 overflow-hidden 裁剪（用户看"放在输入框背面"）；
+>    现在渲染在对话区消息流末尾 = AI 回复将出现的位置，流式第一步显示、内容出来接替。
+>    FileChangesRow 同入 Footer（原来同样被裁剪看不见）。计时器内置于指示器，
+>    MessageList memo 不被每秒击穿。
+> ⑤ 已知残留（内核单会话绑定，阶段 3a 限制）：内核管道 B 会话排队后 A 的回合收尾
+>    事件会短暂清掉 B 的 busy（B 的 turn 事件到达后恢复）；每个 mirach 会话绑定
+>    独立核心会话后在阶段 3b 解决。
+
 > **内核链就绪问题已修（08-31 深夜）**：① 403 根因 = 信任栅栏要求 Origin===Host，
 > vite 代理已重写 Origin（HTTP+WS）；② typert bundle 注册不稳定 → 改为直接实例化
 > TypertRegistry 主类（boot.ts，不走 bundle）；③ 内核链提前就绪 = sync_provider_config

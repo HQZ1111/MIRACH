@@ -12,13 +12,33 @@
  * 保证「计划模式」真正联动（参考引擎 /yolo 审批语义）。
  */
 
-import { atom } from "nanostores";
+import { atom, computed } from "nanostores";
 
-/** Agent 是否正在处理（忙） */
-export const $agentBusy = atom<boolean>(false);
+/**
+ * Agent 忙碌桶：按会话 id 分桶（key "" = 无会话上下文的全局桶）。
+ * busy 是"会话的属性"而非应用全局属性——A 会话回复中，切到 B 会话
+ * 应立即可发送（B 未发消息 = 不忙），输入框/等待指示都按活跃会话读桶。
+ */
+export const $busyMap = atom<Record<string, true>>({});
 
-export function setAgentBusy(busy: boolean) {
-  $agentBusy.set(busy);
+/** 任一会话忙（队列 auto-drain 等全局语义观察用） */
+export const $agentBusy = computed($busyMap, (m) => Object.keys(m).length > 0);
+
+/** 设置某会话忙碌状态；sid 省略 = 全局桶（mock/无会话上下文场景） */
+export function setAgentBusy(busy: boolean, sid?: string): void {
+  const key = sid ?? "";
+  const prev = $busyMap.get();
+  const has = Object.prototype.hasOwnProperty.call(prev, key);
+  if (busy === has) return; // 无变化不发布（避免 computed 抖动）
+  const next = { ...prev };
+  if (busy) next[key] = true;
+  else delete next[key];
+  $busyMap.set(next);
+}
+
+/** 清空全部忙碌桶（队列"立即发送/断开当前 turn"等全局中断语义用） */
+export function clearAgentBusy(): void {
+  $busyMap.set({});
 }
 
 // ----------------------------------------------------------------

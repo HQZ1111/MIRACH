@@ -10,6 +10,7 @@
 import { useEffect } from "react";
 import { useStore } from "@nanostores/react";
 import { $agentBusy, setAgentBusy, sendMessage } from "@/store/agent";
+import { $activeSessionId } from "@/store/session";
 import { $queueState, drainFirst } from "@/store/queue";
 
 const AUTO_DRAIN_DELAY_MS = 300;
@@ -29,9 +30,11 @@ export function useQueueAutoDrain() {
       if (!item) return;
       // 发送前先置忙：堵住「drain 已弹出但引擎 busy 未置位」的并发窗口
       // （真实模式 busy 要等 message.start 事件，引擎响应 >300ms 时若不等会连发多条）。
-      setAgentBusy(true);
+      // 忙桶键 = 排空目标会话（当前活跃会话）
+      const sid = $activeSessionId.get() ?? undefined;
+      setAgentBusy(true, sid);
       const ok = sendMessage(item.text);
-      if (!ok) setAgentBusy(false); // 无发送处理器：回滚忙标记，避免队列卡死
+      if (!ok) setAgentBusy(false, sid); // 无发送处理器：回滚忙标记，避免队列卡死
     }, AUTO_DRAIN_DELAY_MS);
 
     return () => window.clearTimeout(timer);

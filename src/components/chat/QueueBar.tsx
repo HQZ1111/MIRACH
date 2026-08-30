@@ -16,7 +16,7 @@ import {
   promoteQueued,
   resumeQueuedPrompts,
 } from "@/store/queue";
-import { setAgentBusy } from "@/store/agent";
+import { clearAgentBusy } from "@/store/agent";
 
 /** 单条排队消息：内容 + 操作（编辑 / 立即发送 / 取消排队） */
 function QueuedChip({ item }: { item: { id: string; text: string; displayText?: string } }) {
@@ -82,7 +82,7 @@ function QueuedChip({ item }: { item: { id: string; text: string; displayText?: 
       <button
         onClick={() => {
           promoteQueued(item.id);
-          setAgentBusy(false); // 中断当前 turn，auto-drain 立即接管发送
+          clearAgentBusy(); // 中断当前 turn（清空忙碌桶），auto-drain 立即接管发送
         }}
         title="立即发送"
         className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
