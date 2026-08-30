@@ -326,3 +326,266 @@ npm run tauri dev
 | `src/components/layout/MainPanel.tsx` | 主面板（对话区/画廊/统计/工具行） |
 | `agent-sidecar/package.json` | sidecar 依赖（workspace:* 链接官方包） |
 | `docs/research-isolation.md` | 隔离设计调研（Hermes vs Mirach） |
+
+---
+
+# B 阶段 1 完成：核心双面（2026-08-30 深夜）
+
+> 定案（同日）：Tauri 不变、mirach UI 不变；核心仍是 dsh；桌面/浏览器/手机三端
+> 互通、同时登录。架构 = 官方 profile 机制把 stdio JSON-RPC（sdk 面）与 HTTP/WS
+> （web 面）合进同一个引擎进程，B 评估的三条硬事实（网关多客户端/每客户端游标/
+> PWA 清单）均已在本机实测。
+
+## 已完成
+
+1. **G 盘 checkout（0.1.2-alpha.1）构建链修复**——此前"tsdown 本机无法运行"的真因
+   是鸡生蛋：根 `tsdown.config.ts` import 的 typert 插件产物
+   （`packages/typert/generator/lib/types/tsdown-plugin.js`）本身要靠构建产生。
+   修复 = `scripts/bootstrap-typert-plugin.mjs`（ts.transpileModule 剥类型 +
+   .ts 说明符改写 .js，一次性落盘该产物）。之后 `build:lib:host` 与
+   `build:lib:client` 全量构建均通过（exit 0），G 盘 host+client 两面 lib 齐备。
+2. **mirach profile**（`~/.mirach/profiles/mirach/`）：
+   - `package.json`：bundles = `[dsh-base, dsh-sdk-app, dsh-web-app]`（stdio+HTTP 双面）、
+     patchReload live；
+   - `cordis.patch.yml`：llm-pi-ai providers（env DSH_LLM_PROVIDERS 注入）、
+     llm-deepseek effort（env DSH_EFFORT）、permission 自定义预设
+     `mirach-auto`（workspace-write + approval never；approval 单独改 never
+     会"组合匹配不到预设"报错——必须显式 defaultPreset）、insert
+     time-context/schedule/社区插件、webserver host/port（env
+     MIRACH_WEB_HOST/MIRACH_WEB_PORT）、web-runtime openBrowser:false。
+   - 社区插件解析：ESM 不认 NODE_PATH——在
+     `~/.mirach/dsh-plugins/node_modules/` 下补 junction（@deepseek-ai 全闭包
+     ← apps/cli + bundle/base 的 node_modules、zod ← packages/llm/llm、
+     cordis ← vendor/cordis）。
+3. **sidecar profile 模式**（env `MIRACH_PROFILE=1`，默认关=老链路不变）：
+   - `runtime.ts`：entry → `apps/cli/src/bin.ts`；`writeRuntimeConfig` 跳过生成；
+   - `dsh.ts`：launch args = `bin.ts --profile mirach`，env 增 DSH_HOME
+     （=~/.mirach，profiles/sessions/storages 同住）、MIRACH_WEB_PORT、DSH_EFFORT；
+   - **验收 PASS**（`agent-sidecar/verify-stage1.mjs`）：stdio 面握手 UP +
+     web 面 HTTP 401（鉴权闸门）。浏览器 `http://127.0.0.1:3212/?token=<URL行>`
+     出官方 UI（正式前端 dist 已构建）。
+
+## 已知项 / 阶段 2 待做
+
+- 会话持久化位置在 profile 模式下变为 `~/.mirach/sessions`（dshHomePath），
+  旧 `~/.mirach/dsh-sessions` 历史迁移待做；`get_history` 读旧位置，回放空。
+- 阶段 2（读侧过桥）：mirach 前端加 workspace 依赖（cordis/connection/
+  gateway client/session-controller client），dsh-kernel boot + ctx.sessions
+  → nanostores 镜像层，UI 组件零改动；dev 期 vite 代理 /api → 127.0.0.1:3212。
+- 阶段 3（写侧换轨 + 三端）：`session.prompt`（回声协议）、sidecar 对话职责
+  退役、手机 PWA + LAN 信任（--trusted-host 语义在 web-startup）。
+
+## 阶段 2 激活配方（考古已完成，2026-08-30 深夜；下会话照此执行）
+
+官方客户端内核 = 四个 cordis apply,按序激活（均已读签名）：
+
+1. `@deepseek-ai/dsh-typert-registry/client` — `inject: []`，install TypertRegistry（客户端反射根；
+   packages/typert/registry/src/client/index.ts）
+2. `@deepseek-ai/dsh-client-connection/client` — 无必需服务；读 `location.origin` +
+   可选 `window.__DSH_TRANSPORT__`；提供 ctx.connection + generation + 'connection/reset'
+3. `@deepseek-ai/dsh-api-gateway/client` — `inject = ['typert','connection']`；
+   ClientRemoteService 提供 ctx.remote 与 `remote.<ns>`（packages/api/gateway/src/client/index.ts:117）
+4. `@deepseek-ai/dsh-api-session-controller/client` — `inject = ['connection','typert','remote',
+   'remote.commands','remote.session','remote.subagents']`；apply 建 ClientSessions + control 流 +
+   `$on('api-session/*')`（packages/api/session-controller/src/client/index.ts:92）
+
+**唯一开放问题**：`remote.commands/session/subagents` 三个命名空间面的提供者。
+浏览器名册（G: web-app patch 152-290 行）里无独立行 → 由 `api-remotes`（双面）或
+`client-runtime` 的 client half `$mount` 生成描述符（见 session-controller/src/client/remotes.ts
+"生成的命名空间面"）。执行时先 rg `remote.session` 的 set/mount 点确认，再决定
+apply 顺序。内核激活不必经 modules bundle 系统——直接四个 apply 即可
+（vite 从 lib/ 构建产物打包，全部包有 lib）。
+
+镜像层设计（UI 零改动）：kernel 的 SessionEventLikeEntry 形状 == sidecar
+raw_session_event 的 event 形状 → **复用 sidecar adapter**（agent-sidecar/src/adapter.ts，
+392 行，唯一 node 依赖 = protocol.js 的 logDebug → 拷贝进 src/dsh-kernel/ 换
+前端 logger）喂 $chat；projections 走 ctx.sessions 的 projection store →
+$assembly*/$usage。dev 期 vite proxy `/api → http://127.0.0.1:3212`（同源化），
+发布期 dist 锚点指向 mirach dist（frontend-static 配置项）。开关 VITE_KERNEL=1。
+
+## 阶段 2 状态：代码完成 + 编译验收通过（2026-08-30 深夜）
+
+- **依赖已接**：mirach package.json 增 7 个 workspace:^ 依赖（cordis/connection/
+  gateway/api-remotes/session-controller/typert-registry/client-store），pnpm install 通过。
+- **vite**：`/api`（含 WS）代理 → `MIRACH_CORE_URL ?? 127.0.0.1:3212`；
+  adapter 的 protocol.js 经 alias 重定向到 `src/dsh-kernel/protocol-shim.ts`。
+- **内核 + 镜像**：`src/dsh-kernel/boot.ts` + `module-loader-shim.ts`。
+- **验收门**：tsc 干净 + `vite build` 成功（内核 graph 完整打包）。
+- **回滚**：所有改动 = 新文件（src/dsh-kernel/*）+ 三处小改（package.json 依赖、
+  vite.config 代理/alias、main.tsx 动态 import）+ pnpm-lock。git checkout 这三处
+  + 删 src/dsh-kernel 即完全回滚；默认路径（VITE_KERNEL 未设）行为不变。
+
+## 阶段 2 e2e 完成记录（2026-08-30 深夜）
+
+实机 e2e 已跑到：`MIRACH_PROFILE=1`+`VITE_KERNEL=1` 的 tauri dev 起来了
+（vite 1420 + 核心 3212 双面都 LISTENING），dev 实例的 VITE_KERNEL 确认进了
+bundle（抓 /src/main.tsx 转换产物验证），登录页无 overlay（内核 import 已解析）。
+DevTools console 抓到首个运行时错误并已修复：
+
+- **发现 1（已修）**：`@deepseek-ai/dsh-api-remotes/client` 是 modules 系统
+  bundle 格式（首行 `window.__ModuleLoader__.load({id,factory})`），直接 import
+  即抛 `Cannot read properties of undefined (reading 'load')`。
+  **修复 = `src/dsh-kernel/module-loader-shim.ts`**：提供 mini `__ModuleLoader__`
+  （收集工厂），boot.ts 顶部先 import shim 再静态 import 各 bundle，
+  `bundleRequire(id)` 实例化（平台外部依赖 react/cordis/store 从 vite 静态导入
+  映射；跨 bundle 引用经 factories 递归），五个插件逐个 `ctx.plugin(mod)`。
+- **发现 2（当前卡点）**：mini-loader 上线后标题标记未出现——boot 仍未完成或
+  dev 页面未重载。续诊（按序）：
+  1. 聚焦 mirach dev 窗口按 F12 开 DevTools（或 `http://localhost:1420` 在浏览器
+     直接开更稳），Console 找 `[dsh-kernel]` 行：
+     - `kernel booted: sessions=N` = **通了**；
+     - `unresolved module require: X` = 把 X 加进 module-loader-shim 的
+       PLATFORM 表（已知候选：`@deepseek-ai/dsh-typert-protocol`、
+       `@deepseek-ai/dsh-attachment`、`@deepseek-ai/dsh-client-ui-slots`、
+       `@deepseek-ai/dsh-client-ui-primitives`、`react-dom/client`）；
+     - `KERNEL BOOT FAIL`（title）= 查堆栈里的 apply。
+  2. 通了之后：StatsLine 应显示全格式统计（第 N 轮·M 步 | LLM·工具 | 首字·tok/s |
+     缓存命中 | 输入/输出）——本会话已在 dev 实例实测该格式端到端渲染
+     （数据来自 sidecar 管道；内核镜像与之双馈同 seq 合流）。
+  3. 临时验收信号：bootKernelMirror 会设 `document.title`（KERNEL OK sessions=N /
+     KERNEL BOOT FAIL）——Tauri 窗口标题默认不随 document.title 变，用 DevTools
+     console 或任务栏预览观察；稳定后移除。
+- 附带实证：dev 实例的装配层端到端已工作（真实会话 StatsLine：第 2 轮·6 步 |
+  LLM 1m0s · 工具 5m0s | 首字 1.7s · 89.4 tok/s | 缓存命中 77% | 输入 33.1K ·
+  输出 4.4K）。
+- **遗留小项**：profile 模式下 sidecar 启动会打一条无害错误
+  "cordis config not found ... examples/jsonrpc-agent/cordis.yml"（resolveRuntimePaths
+  的存在性检查在 profile 模式应跳过 config 项——探测循环已改但可再收敛）。
+
+## 阶段 2 e2e ✅ PASS（实机）+ 阶段 3 精确步骤
+
+e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 mini-loader 全部
+激活，内核连上核心（vite 代理同源）、鉴权、拿到会话列表。三端互通架构成立：
+一个核心进程，sidecar stdio 客户端 + UI 官方内核客户端并行。同实例实测装配层
+端到端渲染（StatsLine 全格式：第 2 轮·6 步 | LLM 1m0s · 工具 5m0s | 首字 1.7s ·
+89.4 tok/s | 缓存命中 77% | 输入 33.1K · 输出 4.4K，数据来自 sidecar 管道；
+内核镜像同 seq 双馈合流不冲突）。
+
+阶段 3 剩两步（照做）：
+1. **prompt 换轨**（VITE_KERNEL 开关内）：
+   a. 把 useStreamingReply 内联的 onEvent switch 抽到 `src/store/chat-events.ts`
+      （handleMirachEvent），sidecar 与内核两管道共用（顺带收敛 O-2）；
+   b. 内核发送位：`sessions.open(核心会话id)` → `session.prompt(content,'queue')`
+      （回声 beginSubmission + durable 事件按 rpcId retire，见
+      session-controller/src/client/sessions/session.ts）；内核模式首次发送先
+      `sessions.create()` 建核心侧会话；
+   c. 内核镜像层把事件窗口条目过 adapter（vite alias 已接
+      agent-sidecar/src/adapter.ts）喂同一 handler → $chat 渲染。
+2. **手机端**：核心 `--host 0.0.0.0 --trusted-host <LAN-IP>`（web-startup 现成
+   旗标，profile patch 可改 webserver host）；手机浏览器/PWA（apps/web 已有
+   manifest）访问 `http://<LAN-IP>:<port>`；配对鉴权（hermes pairing.py 思路）远期。
+3. **收尾**：移除 bootKernelMirror 的临时角标/title 调试信号；处理会话持久化
+   位置差异（profile 模式 ~/.mirach/sessions vs 旧 ~/.mirach/dsh-sessions 的
+   get_history 迁移）。
+
+---
+
+## 阶段 3b 手机端（配置已备，按此启用）
+
+1. 启动环境加 MIRACH_WEB_HOST=0.0.0.0（profile patch 的 webserver host 表达式已读此 env）；
+2. LAN 信任自动派生：webRuntime 采样活动绑定的 LAN IP 字面量（resolveLanTrust），手机访问 http://LAN-IP:port 即过栅栏；特殊域名才需 --trusted-host；
+3. 手机浏览器打开即用（apps/web PWA manifest 已有）；内核链在手机端同样生效（同一核心同一 /api）；配对鉴权（hermes pairing 思路）为远期增强；
+4. 安全边界：仅限可信局域网；公网需隧道+HTTPS（未做，勿直接暴露）。
+
+## 环境插件（2026-08-31 完成）
+
+文件：
+- src/plugins/icon-library.tsx — 图标库（40 项 lucide 精选 + registerIcon 开放扩展）
+- src/plugins/plugin-environments.tsx — 环境插件主体（sidebarNav 贡献）
+- src/components/settings/IconPicker.tsx — 图标选择弹窗
+- src/components/settings/EnvSettingsSection.tsx — 设置页环境分区
+- src/store/environments.ts — 扩展 icon/visible/builtIn + actions
+- src/components/layout/LeftToolbar.tsx — 环境区改为读 store(visible 过滤)
+- src/components/layout/AppLayout.tsx — mirach:switch-view 监听(隐藏→切回主环境)
+- src/components/layout/MainPanel.tsx — 隐藏环境正激活自动切回主环境 effect
+
+数据：EnvProfile {id,name,cwd,icon,visible,builtIn}；main 锁定(builtIn=true，
+store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
+拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
+
+# 产品层需求清单（2026-08-31 用户提出；2/5/6 + 阶段3a 已做，3/4/7 待做）
+
+> **内核链就绪问题已修（08-31 深夜）**：① 403 根因 = 信任栅栏要求 Origin===Host，
+> vite 代理已重写 Origin（HTTP+WS）；② typert bundle 注册不稳定 → 改为直接实例化
+> TypertRegistry 主类（boot.ts，不走 bundle）；③ 内核链提前就绪 = sync_provider_config
+> 在 MIRACH_PROFILE=1 时顺带 ensureRuntime（profile warmup，sidecar index.ts）；
+> ④ 发送瞬间 setAgentBusy(true)（思考指示即时出现，不等 message.start）；
+> ⑤ 等待指示升级为 AI 消息样式（头像+名字+思考气泡+工作中 X 秒计时，MainPanel）；
+> ⑥ 成员列表时间/状态钉在行最右（Info flex-1 + Right pr-3）。以上均 tsc 通过。
+> **验证**：dev10 实测 runtime ready + 3212 LISTENING 随启动即有；发消息应不再出现
+> ℹ️ 内核链未就绪。若再现，新括号内容发我。
+
+0. ✅ **阶段 3a prompt 换轨已落码**（VITE_KERNEL=1 时启用）：
+   - `src/store/chat-events.ts` = 统一事件处理器（自 useStreamingReply 抽出；
+     sidecar 与内核两管道共用，收敛 O-2）；
+   - `src/dsh-kernel/pi-bridge.ts` = 内核 dsh 事件 → adapter → MirachEvent →
+     handleMirachEvent（user/message 跳过防双气泡；usage/todos/subagents 同步）；
+   - `src/dsh-kernel/boot.ts` 增 `kernelSend(text)`（sessions.create/open →
+     `session.prompt(text,'queue')`，桥接水位防历史重放）与 `kernelStop()`；
+   - Composer：VITE_KERNEL=1 时发送走 kernelSend、停止走 kernelStop；
+     busy 但未流式时主按钮保持"发送"（不再被停止顶掉）。
+   - **待运行时验证**：VITE_KERNEL=1 下发一条消息，回复应经内核事件链渲染。
+1. ✅ **切换会话丢历史（已修）**：profile 模式下引擎持久化在
+   `~/.mirach/sessions`（dshHomePath），sidecar get_history/list_sessions 却读旧
+   `~/.mirach/dsh-sessions` → 回放为空。修复 = resolveRuntimePaths 在 profile
+   模式下 sessionRoot 对齐到 `~/.mirach/sessions` + 一次性迁移旧 session-map.json。
+   **需重启 dev 生效**。旧历史日志（dsh-sessions）如需保留访问，手动把
+   `<cwd编码>/<sessionId>` 目录搬到新 root（结构相同）。
+2. ✅ **StatsLine 移到输入框下方**：MainPanel 主渲染的对话区改为 relative 容器，
+   StatsLine 绝对定位 bottom-0 居中（h-5 内、pointer-events-none），不挤输入框。
+3. ✅ **统计扩展（已落码）**：工作总时长(durationMs)+思考用时(thinkingMs)已加进 sessionStats 折叠与 StatsLine 显示;：加"工作总时长"（会话首末事件墙钟跨度）与"思考用时"
+   （每步 reasoning 首 chunk → 首个非 reasoning chunk 的跨度合计）。改
+   src/dsh-assembly/projections.ts 的 sessionStats 折叠（自有两份拷贝之一）+
+   StatsLine 显示组。
+4. ⏳ **文件更改汇总组件**：回合结束时显示"改了 N 个文件（+X/-Y）"，可展开
+   列出所有更改文件（文件名/类型/路径），点击可审查（GitReviewPanel）与打开
+   （FileViewerPanel）。数据源：$toolCalls 里 write/edit 类工具按 file_path
+   聚合（src/lib/tool-summary.ts 已有雏形）+ git status/diff。
+5. ✅ **思考中动画**：ChatSection 消息列表尾部——agentBusy && !streaming &&
+   末条为 user 时渲染三点跳动 + "正在思考…"（MainPanel MessageList 之后）。
+6. ✅ **连续发送不排队**：Composer handleSend 不再被 busy 阻塞；主按钮仅在
+   busy && streaming 时变"停止"（busy && !streaming = 已发等首包，保持发送）；
+   用户气泡乐观上屏，sidecar 队列串行消化。
+7. ⏳ **团队列表布局**：成员状态与时间未右对齐（右侧栏成员卡），修正排版
+   ——需要先截图确认现状再改（MemberChatPanel/LeftSidebar 团队卡）。
+8. ✅ **KERNEL 调试角标已移除**（boot.ts 的 showKernelBadge/标题标记全清）。
+
+---
+
+# 零件库落地与阶段 3 方案（2026-08-30，来源：D:\hermes-agent-main 参考件）
+
+> 定案：Tauri 不变、mirach UI 不变；核心仍是 dsh。Hermes Agent（Nous Research）只作
+> 架构参考书和零件库——它是"B 族自托管核心 + 多接入面（TUI/web/Electron/聊天平台/
+> ACP/MCP）"的已验证开源先例。B 三阶段方案与架构论证见会话记录；关键事实：
+> dsh 网关原生多客户端（remoteEventClients Map）、每客户端 journal 游标、web PWA 清单、
+> frontend-static 的 dist 锚点是插件配置项（可指向 mirach 产物）。
+
+## 已落地（本次）
+
+1. **Turn lease**（`agent-sidecar/src/turn-lease.ts`，对应 hermes `gateway/turn_lease.py` #64934）：
+   按【解析后 dsh session id】串行回合——路由键(前端会话 id)与转录所有者多对一，
+   只按路由键串行不足以保护同一份持久日志。代际令牌 + 身份校验释放（stale 释放被忽略）
+   + 争用超时 fail-open（宁可退化不可楔死）+ registry 有界。已接线 `runIn`
+   （碰撞重试双 runIn / 未来成员会话并行 / B 桥接层共用此原语）。四条安全属性冒烟 ALL PASS。
+   现状进程内全局串行使争用不可达（租约=不变式 enforcement）；跨进程保护仍由引擎
+   持久日志身份守卫（id collision → 换新 id）承担。
+2. **Restart loop guard**（`src-tauri/src/dsh_relay.rs` setup_sidecar，对照 hermes
+   restart_loop_guard）：600s 窗口内崩溃 ≥5 次 → 进入响亮失败态（emit
+   `dsh_sidecar_suspended`，冷却拉长到 300s），健康长跑（ready 且存活 >60s）清零窗口
+   恢复快自愈。修复两处旧缺陷：spawn 成功即重置退避（秒退型崩溃退化成 ~1s 无限循环）、
+   崩溃永不封顶（用户只见"连接中"无终态）。前端可选 listen `dsh_sidecar_suspended`
+   显示横幅（resumed:false=进入抑制 / resumed:true=恢复）。
+
+## 阶段 3（手机端 / B 后期）待用零件（hermes 对照清单）
+
+- **鉴权**：官方 token→cookie 为基本盘；手机首次接入用 hermes `pairing.py` 思路做
+  短码配对（桌面显示一次性配对码 → 手机输入交换设备令牌），避免手拷长 token。
+- **投递可靠性**：`delivery_ledger.py` + `rich_sent_store`——跨平台投递按账本重试；
+  与 B 的 journal 游标互补（游标管会话流一致性，账本管平台投递）。
+- **跨平台连续性**：`mirror.py`——转录所有权唯一（session id），多端只是同一日志的
+  视图；任何端不得自持会话状态。
+- **并发**：turn lease 在 B 桥接层复用（教训原样适用：守卫必须键在"解析后的会话 id"
+  上，路由键会多对一）；同时发消息 = 排队 + 先答先赢。
+- **常驻化**：`scale_to_zero.py` 思路——核心空闲休眠、按需唤醒，支撑低成本 VPS 部署
+  （远期出公网还需隧道/反代 + HTTPS，官方不管这层）。
+- **可选**：`shutdown_forensics`（崩溃取证落盘）对照 sidecar 的 stderr 转发增强。

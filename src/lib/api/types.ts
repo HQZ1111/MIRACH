@@ -157,8 +157,8 @@ export type MirachEvent =
         }[];
       }
   | {
-      /** dsh 原始 SessionEvent 透传（seq/type/data 原样）：装配层/定位器的事件底座 */
+      /** dsh 原始 SessionEvent 透传（seq/type/time/data 原样）：装配层/定位器的事件底座 */
       type: "raw_session_event";
       seq: number;
-      event: { type: string; data: unknown };
+      event: { type: string; data: unknown; seq?: number; time?: number };
     };

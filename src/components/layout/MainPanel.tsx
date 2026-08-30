@@ -44,10 +44,11 @@ import { setPreviewUrl } from "@/store/preview";
 import { $pendingQuestions, setPendingQuestions, dropExpiredQuestions } from "@/store/user-questions";
 import { $activeSessionId, setActiveSession } from "@/store/session";
 import { $sessions, markSessionContent, setSessionsEnv, createSession } from "@/store/sessions";
+import { pushRawEvents, resetRawEvents } from "@/store/session-events";
 import { $projects, $selectedProjectId, createProject, selectProject } from "@/store/projects";
 import { CircularGallery } from "@/components/ui/circular-gallery-2";
 import { StatsLine } from "@/components/chat/StatsLine";
-import { $usage } from "@/store/usage";
+import { FileChangesRow } from "@/components/chat/FileChangesRow";
 import { $sessionChat, getSessionChat, appendSessionAiMessage } from "@/store/session-chat";
 import { openChatHistory, $jumpRequest, $showSessionTabs, toggleSessionTabs, $trajectoryRequest } from "@/store/chat-history";
 import {
@@ -61,7 +62,7 @@ import {
 import { getApi } from "@/lib/api";
 import { invoke } from "@tauri-apps/api/core";
 import { $providerConfig } from "@/store/providerConfig";
-import { envById, envIdForView, $envVersion } from "@/store/environments";
+import { envById, envIdForView, $envVersion, $environments } from "@/store/environments";
 import { CHAT_WIDTH_PX } from "@/lib/chat-width";
 import { $chatBackdrop, $chatStyle, $chatWidth, $defaultAgent } from "@/store/ui-settings";
 import { $agents, setAgentsEnv, DEFAULT_TEAM_ID } from "@/store/agents";
@@ -69,7 +70,7 @@ import { ZosmaChat } from "@/components/zosma/ZosmaChat";
 import { speak, stopSpeaking, isSpeaking } from "@/lib/tts";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $lastFailedPrompt, setLastFailedPrompt } from "@/store/retry";
-import { sendMessage } from "@/store/agent";
+import { sendMessage, $agentBusy } from "@/store/agent";
 import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { useMockStatus } from "@/hooks/useMockStatus";
@@ -108,6 +109,7 @@ import {
   Target,
   Pencil,
   Check,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { MagnifyingGlass, CaretDown } from "@phosphor-icons/react";
@@ -968,8 +970,7 @@ const ChatSection = memo(function ChatSection({
   const lastFailedPrompt = useStore($lastFailedPrompt);
   const activeTitle = sessions.find((s) => s.id === activeId)?.title ?? "新会话";
   const msgs = MOCK ? (chatMap.get(activeId) ?? getSessionChat(activeId, activeTitle)) : live;
-  // 统计条（dsh StatsLine 移植）：真实 token 计量（token-meter 同源）
-  const usageRec = useStore($usage);
+  // 统计条已移至输入框下方（数据来自装配层投影 $assemblyProjections，见 StatsLine）
 
   // 聊天记录工具菜单（记录 + 会话标签页显隐）
   const [toolOpen, setToolOpen] = useState(false);
@@ -1033,6 +1034,18 @@ const ChatSection = memo(function ChatSection({
   const toolCalls = useStore($toolCalls);
   // AI 是否正在流式输出（真实模式；mock 恒 false）
   const streaming = useStore($aiStreaming);
+  // 引擎忙碌（发送后未完成）：用于"思考中"等待指示
+  const agentBusy = useStore($agentBusy);
+  // 等待指示计时（工作中 X 秒）
+  const [busySec, setBusySec] = useState(0);
+  useEffect(() => {
+    if (!agentBusy) {
+      setBusySec(0);
+      return;
+    }
+    const t = window.setInterval(() => setBusySec((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [agentBusy]);
 
   // 滚动处理：轨道显示 / 空心圆位置 / 底部按钮（scrollspy 由 Virtuoso rangeChanged
   // 接管——虚拟化后看不到行 DOM，逐行 offsetTop 扫描失效；range 的首行即当前可见位）
@@ -1124,6 +1137,48 @@ const ChatSection = memo(function ChatSection({
             onRangeChange={handleRangeChange}
             initialIndex={Math.max(0, msgs.length - 1)}
           />
+          {/* 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中计时）：
+              ① 已发送但 AI 尚无流式输出；② 流式中但末条 AI 气泡还没有内容（思考刚流出）。
+              判定从尾部向前跳过 system 状态行，避免被状态消息打断 */}
+          {(() => {
+            let last: { role: string; text?: string } | undefined;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i]?.role !== "system") {
+                last = msgs[i];
+                break;
+              }
+            }
+            const waiting =
+              agentBusy &&
+              (last?.role === "user" || (last?.role === "ai" && !last.text));
+            return waiting ? (
+              <div className="flex items-start gap-2 px-4 py-2">
+                {/* AI 头像 + 在线状态（对齐成员列表样式） */}
+                <div className="relative shrink-0">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#7C5CFF] text-[10px] font-bold text-white">
+                    奎
+                  </div>
+                  <span
+                    className="absolute rounded-full border-2 border-white"
+                    style={{ width: 10, height: 10, bottom: -2, right: -2, backgroundColor: "#10B981" }}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-member font-medium text-[#303030]">奎木狼</p>
+                  <div className="mt-1 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[#017CF3]" />
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      工作中 {busySec} 秒
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : null;
+          })()}
+          {/* 回合文件更改汇总（产品清单 #4）：回合结束（非流式）且有写/改文件时显示 */}
+          {!agentBusy && !streaming && (
+            <FileChangesRow toolCalls={toolCalls} className="mx-4 mb-1" />
+          )}
           </div>
 
           {/* 发送失败重试条（引擎报错后出现；点重试重新发送上次提示词） */}
@@ -1149,8 +1204,7 @@ const ChatSection = memo(function ChatSection({
             </div>
           )}
 
-          {/* 会话统计条（移植 dsh StatsLine：轮/步 + 真实 token 计量 + 缓存命中） */}
-          <StatsLine msgs={msgs} usage={usageRec} className="pb-1" />
+          {/* 会话统计条已移至输入框下方（对齐官方 composer.dock 语义） */}
         </div>
         )}
       </div>
@@ -1738,12 +1792,25 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
   const selectedProjectId = useStore($selectedProjectId);
   const selectedProject = useStore($projects).find((p) => p.id === selectedProjectId) ?? null;
   // 画廊选中的带自定义工作区项目 → 专属引擎环境（cwd 隔离，和 dsh 一样）；
-  // 无 cwd 项目或未选择 → 跟随视图默认环境
-  const projectEnv =
-    selectedProject?.cwd
-      ? { id: `project-${selectedProject.id}`, name: selectedProject.name, cwd: selectedProject.cwd }
-      : null;
+  // 无 cwd 项目或未选择 → 跟随视图默认环境。
+  // useMemo：projectEnv 是切换 effect 的依赖——任何渲染都新建对象会让流水线
+  // （set_env→load_session→reset→history）在每次无关重渲染时整跑一遍
+  const projectEnv = useMemo(
+    () =>
+      selectedProject?.cwd
+        ? { id: `project-${selectedProject.id}`, name: selectedProject.name, cwd: selectedProject.cwd }
+        : null,
+    [selectedProject?.id, selectedProject?.cwd, selectedProject?.name],
+  );
   const envId = envIdForView(activeView);
+  // 环境插件可见性联动：当前激活环境被隐藏 → 派发切换事件回主环境
+  const envListForVisibility = useStore($environments);
+  useEffect(() => {
+    const env = envListForVisibility.find((e) => e.id === envId);
+    if (env && env.visible === false) {
+      window.dispatchEvent(new CustomEvent("mirach:switch-view", { detail: "mirach" }));
+    }
+  }, [envId, envListForVisibility]);
   useEffect(() => {
     if (MOCK) return;
     let alive = true;
@@ -1776,13 +1843,18 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
         /* ignore */
       }
       if (!alive || historySeq !== historyReqSeq.current) return;
+      // 切会话/切环境：原始事件日志 + 装配引擎（时间线/四投影）一并复位，
+      // 再由 get_history 的历史事件重建（官方投影=会话级累计，跨会话必须清零）
+      resetRawEvents();
       try {
-        const r = await invoke<{ messages?: Parameters<typeof loadLiveHistory>[0] }>(
-          "dsh_get_history",
-          { sessionId: activeId },
-        );
+        const r = await invoke<{
+          messages?: Parameters<typeof loadLiveHistory>[0];
+          events?: { seq: number; type: string; data: unknown; time?: number }[];
+        }>("dsh_get_history", { sessionId: activeId });
         if (!alive || historySeq !== historyReqSeq.current) return;
         const msgs = r?.messages ?? [];
+        // 历史原始事件先于消息落装配引擎（整批 O(n) 去重，与实时流重叠安全）
+        pushRawEvents(r?.events ?? []);
         // 整组替换即含清空（空历史=清空，杜绝上一会话残留）；空判断只为内容标记
         loadLiveHistory(msgs);
         if (msgs.length > 0) markSessionContent(activeId);
@@ -1855,15 +1927,23 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
             {chatStyle === "minimal" ? (
               <ZosmaChat sessionId={activeId} sessionTitle={activeTitle} />
             ) : (
-              <>
+              <div className="relative flex min-h-0 flex-1 flex-col">
                 <ChatSection detailsExpanded={detailsExpanded} onToggleDetails={toggleDetails} />
                 <Composer
                   terminalOpen={terminalOpen}
                   onToggleTerminal={toggleTerminal}
                 />
+                {/* 会话统计条：输入框底部以下 20px 内、宽度跟随输入框限宽居中
+                    （对齐官方 composer.dock；pointer-events-none 不挡交互；
+                    对话区变窄时 StatsLine 自带省略号 + 悬停全文） */}
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-5 items-center justify-center overflow-hidden px-5">
+                  <div className="w-full min-w-0" style={{ maxWidth: "var(--chat-composer-max-width, 852px)" }}>
+                    <StatsLine msgs={[]} />
+                  </div>
+                </div>
                 <ResizeHandle onDrag={dragTerminal} />
                 {terminalOpen && <TerminalPanel height={terminalH} onClose={() => setTerminalOpen(false)} />}
-              </>
+              </div>
             )}
           </>
         )}

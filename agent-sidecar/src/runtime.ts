@@ -15,7 +15,7 @@
  * anthropic/openai/自定义端点无需改动 harness 的静态文件即可生效。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log, logError } from "./protocol.js";
 
@@ -60,6 +60,8 @@ export interface RuntimePaths {
   systemPrompt: string;
   /** 环境变量中已存在的 DEEPSEEK_API_KEY（无则不设，运行时按 MISSING_CREDENTIAL 优雅失败）。 */
   apiKey: string | null;
+  /** profile 模式（官方 profile 双面形态；老 entry+生成 yml 模式为 false）。 */
+  profileMode: boolean;
 }
 
 export function resolveRuntimePaths(): RuntimePaths {
@@ -69,20 +71,48 @@ export function resolveRuntimePaths(): RuntimePaths {
     ?? HARNESS_ROOT_CANDIDATES.find((p) => existsSync(p))
     ?? HARNESS_ROOT_CANDIDATES[0];
   const nodeBin = NODE_BIN_CANDIDATES.find((p) => existsSync(p)) ?? NODE_BIN_CANDIDATES[0];
-  const entry =
-    process.env.DSH_RUNTIME_ENTRY ??
-    join(harnessRoot, "packages", "examples", "jsonrpc-demo", "lib", "bin.js");
+  // profile 模式（MIRACH_PROFILE=1）：B 阶段 1 的核心双面形态——
+  // 官方 profile（$DSH_HOME/profiles/mirach，bundles = base + sdk-app + web-app）
+  // 同时提供 stdio JSON-RPC（sdk 面）与 HTTP/WS（web 面），插件经 profile
+  // node_modules 解析；不再走模板+生成 yml 的老链路。
+  const profileMode = process.env.MIRACH_PROFILE === "1";
+  const entry = profileMode
+    ? join(harnessRoot, "apps", "cli", "src", "bin.ts")
+    : process.env.DSH_RUNTIME_ENTRY
+      ?? join(harnessRoot, "packages", "examples", "jsonrpc-demo", "lib", "bin.js");
   const config =
     process.env.DSH_CORDIS_CONFIG ??
     join(harnessRoot, "examples", "jsonrpc-agent", "cordis.yml");
   const cwd = process.env.DSH_CWD ?? process.env.USERPROFILE ?? harnessRoot;
+  // profile 模式：运行时持久化走 dshHomePath('sessions') = DSH_HOME/sessions
+  // （base bundle session-persistence-jsonl 行）。sidecar 的历史读取/会话列举
+  // 必须指向同一位置，否则切换会话后回放为空。
   const sessionRoot =
     process.env.DSH_SESSION_ROOT ??
-    join(process.env.USERPROFILE ?? harnessRoot, ".mirach", "dsh-sessions");
+    (profileMode
+      ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? harnessRoot, ".mirach"), "sessions")
+      : join(process.env.USERPROFILE ?? harnessRoot, ".mirach", "dsh-sessions"));
+  // 一次性迁移：profile 模式首次运行时把旧位置的 session-map.json 带过来，
+  // 保住既有前端会话 ↔ dsh 会话映射（历史日志位置差异另行处理）。
+  if (profileMode) {
+    try {
+      const legacyRoot = join(process.env.USERPROFILE ?? harnessRoot, ".mirach", "dsh-sessions");
+      const newMap = join(sessionRoot, "session-map.json");
+      const legacyMap = join(legacyRoot, "session-map.json");
+      if (existsSync(legacyMap) && !existsSync(newMap)) {
+        mkdirSync(sessionRoot, { recursive: true });
+        writeFileSync(newMap, readFileSync(legacyMap, "utf8"), "utf8");
+        log("migrated session map to profile sessionRoot");
+      }
+    } catch {
+      /* 迁移失败不阻塞 */
+    }
+  }
 
   for (const [label, p] of [
     ["runtime entry", entry],
-    ["cordis config", config],
+    // profile 模式：配置由 profile 目录提供，不走 cordis.yml 模板
+    ...(profileMode ? [] : ([["cordis config", config]] as const)),
     ["harness root", harnessRoot],
   ] as const) {
     if (!existsSync(p)) {
@@ -101,6 +131,7 @@ export function resolveRuntimePaths(): RuntimePaths {
     sessionRoot,
     systemPrompt: process.env.DSH_SYSTEM_PROMPT ?? "You are a coding agent.",
     apiKey: process.env.DEEPSEEK_API_KEY ?? null,
+    profileMode,
   };
 }
 
@@ -115,6 +146,11 @@ export function resolveRuntimePaths(): RuntimePaths {
  * 返回生成文件路径（sessionRoot/cordis.generated.yml）；写失败回退模板。
  */
 export function writeRuntimeConfig(paths: RuntimePaths, effort = "max"): string {
+  // profile 模式：配置由 profile 的 cordis.patch.yml 提供（env 驱动），
+  // 不再生成 yml；llm-pi-ai providers / effort 经 DSH_LLM_PROVIDERS / DSH_EFFORT。
+  if (paths.profileMode) {
+    return join(paths.sessionRoot, GENERATED_CONFIG_NAME);
+  }
   const target = join(paths.sessionRoot, GENERATED_CONFIG_NAME);
   try {
     const template = readFileSync(paths.config, "utf8");

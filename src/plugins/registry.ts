@@ -28,6 +28,20 @@ export interface PluginViewPage {
   render: () => ReactNode;
 }
 
+/** 左栏导航按钮（环境插件贡献：图标 + 名称 + 点击） */
+export interface PluginSidebarNavItem {
+  id: string;
+  iconId: string;
+  label: string;
+}
+
+/** 左栏导航贡献：插件向左栏注入按钮组（如环境列表） */
+export interface PluginSidebarNav {
+  /** 实时返回按钮组（随 store 状态变化） */
+  items: () => PluginSidebarNavItem[];
+  onSelect: (id: string) => void;
+}
+
 export interface Plugin {
   id: string;
   name: string;
@@ -36,6 +50,8 @@ export interface Plugin {
   toolMenu?: PluginMenuAction[];
   /** 独立页面路由贡献（插件扩展路由） */
   viewPage?: PluginViewPage;
+  /** 左栏导航贡献（环境插件等） */
+  sidebarNav?: PluginSidebarNav;
 }
 
 const registry: Plugin[] = [];
@@ -51,6 +67,11 @@ export function getPlugins(): Plugin[] {
 
 export function getToolMenuActions(): PluginMenuAction[] {
   return registry.flatMap((p) => p.toolMenu ?? []);
+}
+
+/** 所有左栏导航贡献（环境插件等） */
+export function getSidebarNavs(): PluginSidebarNav[] {
+  return registry.filter((p) => p.sidebarNav).map((p) => p.sidebarNav!);
 }
 
 /** 按路由 id 查插件独立页面（ViewPages 默认分支解析用） */

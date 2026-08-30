@@ -7,6 +7,7 @@ import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
+import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
 import { useI18n, type Lang } from "@/lib/i18n";
 import { useTheme } from "@/hooks/useTheme";
 import { useAppConfig } from "@/hooks/useAppConfig";
@@ -57,6 +58,7 @@ import {
   Upload,
   Users,
   type LucideIcon,
+  Layers,
 } from "lucide-react";
 
 interface SettingsSection {
@@ -76,6 +78,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "keybinds", icon: Keyboard },
   { id: "usage", icon: ChartBar },
   { id: "about", icon: Info },
+  { id: "envs", icon: Layers },
 ];
 
 // ---- 表单控件 ----
@@ -2261,6 +2264,7 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       case "git": return <GitContent />;
       case "keybinds": return <KeybindsContent />;
       case "usage": return <UsageContent />;
+      case "envs": return <EnvSettingsSection />;
       case "about": return <AboutContent />;
       default: return null;
     }

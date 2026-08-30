@@ -25,15 +25,13 @@
  * - 背景色：#EDEEF0
  */
 
+import { useStore } from "@nanostores/react";
+import { $environments } from "@/store/environments";
+import { renderEnvIcon } from "@/plugins/icon-library";
 import { cn } from "@/lib/utils";
 import { LEFT_TOOLBAR_WIDTH } from "@/lib/layout";
 import { Button } from "@/components/ui/button";
 import {
-  Chat,
-  Code,
-  Briefcase,
-  ChartLineUp,
-  Pen,
   Star,
   Clock,
   Gear,
@@ -44,6 +42,8 @@ import {
 } from "@phosphor-icons/react";
 
 // ===== Tools =====
+// 环境按钮组（chat/code/work/finance/write）已插件化：从环境 store（visible
+// 过滤）+ 图标库渲染，见下方 envItems；本表只剩非环境固定项。
 
 interface ToolItem {
   id: string;
@@ -51,12 +51,7 @@ interface ToolItem {
   label: string;
 }
 
-const topTools: ToolItem[] = [
-  { id: "chat", icon: Chat, label: "聊天" },
-  { id: "code", icon: Code, label: "代码" },
-  { id: "work", icon: Briefcase, label: "工作" },
-  { id: "finance", icon: ChartLineUp, label: "金融" },
-  { id: "write", icon: Pen, label: "写作" },
+const fixedTools: ToolItem[] = [
   { id: "bookmarks", icon: Star, label: "收藏" },
   { id: "cron", icon: Clock, label: "定时任务" },
 ];
@@ -79,12 +74,20 @@ interface LeftToolbarProps {
   sidebarVisible?: boolean;
 }
 
+function envItemsOf(envs: { id: string; icon?: string; name: string; visible?: boolean }[]): { id: string; iconId: string; label: string }[] {
+  return envs
+    .filter((e) => e.visible !== false && e.id !== "main")
+    .map((e) => ({ id: e.id, iconId: e.icon ?? "lucide:bot", label: e.name }));
+}
+
 export function LeftToolbar({
   className,
   activeView,
   onViewChange,
   sidebarVisible = true,
 }: LeftToolbarProps) {
+  const envs = useStore($environments);
+  const envItems = envItemsOf(envs);
   return (
     <nav
       // 浅色：侧栏可见 #EDEEF0 / 收起 #FFFFFF；深色：固定 #17191c（zosma 侧栏色，dark: 变体优先于普通类）
@@ -109,10 +112,22 @@ export function LeftToolbar({
         </button>
       </div>
 
-      {/* ===== Middle: main tools，占据剩余高度（图标靠上），随卡片高度伸缩 ===== */}
+      {/* ===== Middle: 主环境按钮 + 环境按钮组（visible 过滤，随环境数据变化） ===== */}
       <div className="flex min-h-0 flex-1 flex-col items-center gap-1 py-2">
         <div className="flex flex-col items-center gap-1 flex-1 justify-start pt-1">
-          {topTools.map((item) => (
+          {envItems.map((item) => (
+            <Button
+              key={item.id}
+              variant={activeView === item.id ? "secondary" : "ghost"}
+              size="icon"
+              className="h-10 w-10"
+              title={item.label}
+              onClick={() => onViewChange(item.id)}
+            >
+              {renderEnvIcon(item.iconId, "h-5 w-5 text-[color:var(--tool-icon-inactive)]")}
+            </Button>
+          ))}
+          {fixedTools.map((item) => (
             <Button
               key={item.id}
               variant={activeView === item.id ? "secondary" : "ghost"}

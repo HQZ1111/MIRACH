@@ -66,6 +66,9 @@ const SkillsOverlay = lazy(() =>
 const CronOverlay = lazy(() =>
   import("@/components/overlays/CronOverlay").then((m) => ({ default: m.CronOverlay })),
 );
+const JobsOverlay = lazy(() =>
+  import("@/components/overlays/JobsOverlay").then((m) => ({ default: m.JobsOverlay })),
+);
 const ArtifactsOverlay = lazy(() =>
   import("@/components/overlays/ArtifactsOverlay").then((m) => ({ default: m.ArtifactsOverlay })),
 );
@@ -101,7 +104,8 @@ type ViewId =
 // 左工具栏图标 → 原型功能 Overlay（设置/消息平台/命令中心/技能与工具/排程/档案/代理）
 type OverlayView =
   | "settings" | "messaging" | "commands" | "skills" | "cron" | "artifacts"
-  | "profiles" | "agents" | "webhooks" | "plugins" | "knowledge" | "kanban";
+  | "profiles" | "agents" | "webhooks" | "plugins" | "knowledge" | "kanban"
+  | "jobs";
 
 const OVERLAY_BY_VIEW: Partial<Record<string, OverlayView>> = {
   settings: "settings",
@@ -422,6 +426,15 @@ export function AppLayout() {
     window.addEventListener("mirach:open-settings", onOpenSettings);
     return () => window.removeEventListener("mirach:open-settings", onOpenSettings);
   }, []);
+  // 环境插件：隐藏环境正激活 → 切回主环境（MainPanel 派发）
+  useEffect(() => {
+    const onSwitchView = () => {
+      setOverlayView(null);
+      setActiveView("mirach");
+    };
+    window.addEventListener("mirach:switch-view", onSwitchView);
+    return () => window.removeEventListener("mirach:switch-view", onSwitchView);
+  }, []);
   const openCC = useCallback((tab: string) => {
     setCcTab(tab);
     setOverlayView("commands");
@@ -467,6 +480,7 @@ export function AppLayout() {
     add("jump.skills", "技能与工具", "跳转", () => setOverlayView("skills"), { keywords: "skills tools mcp 工具" });
     add("jump.messaging", "消息平台", "跳转", () => setOverlayView("messaging"), { keywords: "messaging telegram 消息" });
     add("jump.cron", "排程任务", "跳转", () => setOverlayView("cron"), { keywords: "cron 定时" });
+    add("jump.jobs", "引擎任务", "跳转", () => setOverlayView("jobs"), { keywords: "jobs 后台 任务 引擎" });
     add("jump.artifacts", "产物", "跳转", () => setOverlayView("artifacts"), { keywords: "artifacts 文件 图片" });
     add("jump.terminal", "终端", "跳转", () => openPanel("terminal"), { keywords: "terminal pty powershell" });
     add("jump.profiles", "档案", "跳转", () => setOverlayView("profiles"), { keywords: "profiles agent 配置" });
@@ -740,6 +754,9 @@ export function AppLayout() {
           <OverlayShell title={t("cron.title")} onClose={() => setOverlayView(null)}>
             <CronOverlay />
           </OverlayShell>
+        )}
+        {overlayView === "jobs" && (
+          <JobsOverlay onClose={() => setOverlayView(null)} />
         )}
         {overlayView === "artifacts" && (
           <ArtifactsOverlay onClose={() => setOverlayView(null)} />

@@ -1035,8 +1035,9 @@ export function LeftSidebar({
                   />
                 </div>
 
-                {/* Info（名字 ≤ 左侧栏 50%，预览 ≤ 60%；宽度由内容决定，时间/状态跟随左移） */}
-                <div className="min-w-0">
+                {/* Info（名字/摘要限宽截断；flex-1 撑满剩余空间，
+                    时间/状态固定钉在行最右侧，不随内容宽度移动） */}
+                <div className="min-w-0 flex-1">
                   <p title={conv.name} className="text-member text-[#303030] truncate max-w-[140px]">{conv.name}</p>
                   <p title={conv.preview} className="text-body-sm text-muted-foreground truncate mt-0.5 max-w-[168px]">
                     {conv.preview}
@@ -1044,7 +1045,7 @@ export function LeftSidebar({
                 </div>
 
                 {/* Right: time + status */}
-                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <div className="flex flex-col items-end gap-1.5 shrink-0 pr-3">
                   <span className="text-[11px] text-muted-foreground leading-none">
                     {conv.time}
                   </span>

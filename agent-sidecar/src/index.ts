@@ -26,12 +26,13 @@ import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
 
 import { createDshAdapter } from "./adapter.js";
 import { ensureRuntime, shutdownRuntime, sessionFor, catalog, findModel, routeFor, syncProviderConfig, setEffort, setWorkspace, setSystemPrompt, workspace, DEFAULT_MODEL, PROVIDER_ROUTE, type ActiveModel, type DshRuntimeHandle } from "./dsh.js";
-import { readSessionHistory } from "./history.js";
+import { readSessionHistory, readSessionRawEvents } from "./history.js";
 import { log, logDebug, logError, logWarn, send } from "./protocol.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
+import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
 
@@ -179,8 +180,12 @@ async function runOne(msg: QueuedMessage): Promise<void> {
     });
   }
 
-  // 在指定 dsh session 里跑当前消息；返回 false 表示需要换新会话重试（会话 id 冲突）
-  const runIn = async (sid: string): Promise<boolean> => {
+  // 在指定 dsh session 里跑当前消息；返回 false 表示需要换新会话重试（会话 id 冲突）。
+  // Turn lease（Hermes #64934 语义）：按解析后的 dsh 会话 id 串行回合——
+  // 进程内当前有全局串行队列兜底，但碰撞重试的双 runIn、未来成员会话并行、
+  // B 桥接层多客户端接入都靠这层 id 级互斥；争用超时 fail-open 防楔死。
+  const runIn = async (sid: string): Promise<boolean> =>
+    withTurnLease(sid, `${LEASE_BOOT_ID}:${msg.cmdId}`, async () => {
     const rt = await ensureRuntime(activeModel);
     attachNotificationBridge(rt);
     const session = sessionFor(rt, sid);
@@ -220,9 +225,12 @@ async function runOne(msg: QueuedMessage): Promise<void> {
           return;
         }
         if (n.method === "session.event" && params.event) {
-          // 原始 SessionEvent 透传（seq/type/data 原样）：官方装配层
-          // （ConversationLocationIndex 等）的事件底座；历史回放同源
-          send({ type: "event", event: { type: "raw_session_event", seq: n.seq, event: params.event } });
+          // 原始 SessionEvent 透传（seq/type/time/data 原样）：官方装配层
+          // （ConversationLocationIndex 等）的事件底座；历史回放同源。
+          // seq 取事件自身的 seq——通知信封（HarnessNotification）没有 seq
+          // 字段，此前 n.seq 运行时恒为 undefined，前端按 seq 去重形同虚设
+          const rawEvent = params.event as { seq?: number };
+          send({ type: "event", event: { type: "raw_session_event", seq: rawEvent.seq ?? -1, event: params.event } });
           adapter.handle(params.event);
         }
       },
@@ -234,7 +242,7 @@ async function runOne(msg: QueuedMessage): Promise<void> {
       emitRun({ type: "done" });
     }
     return !collided;
-  };
+  });
 
   try {
     const ok = await runIn(sessionId);
@@ -528,12 +536,15 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       const frontendId = cmd.sessionId;
       const dshId = frontendId ? sessionMap.get(envSessionKey(frontendId)) : undefined;
       if (!dshId) {
-        send({ type: "result", id, data: { messages: [] } });
+        send({ type: "result", id, data: { messages: [], events: [] } });
         return;
       }
       const sessionRoot = resolveRuntimePaths().sessionRoot;
       const messages = readSessionHistory(sessionRoot, dshId);
-      send({ type: "result", id, data: { messages } });
+      // 原始事件序列（含打包 chunk 行解包）：前端官方装配层/投影的历史底座，
+      // 与实时 raw_session_event 同形同 seq 空间，前端按 seq 去重合并
+      const events = readSessionRawEvents(sessionRoot, dshId);
+      send({ type: "result", id, data: { messages, events } });
       return;
     }
     case "rpc": {

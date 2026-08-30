@@ -23,6 +23,12 @@ const isQuickEntry =
 const isLogin =
   new URLSearchParams(window.location.search).get("win") === "login";
 
+// B 阶段 2：官方客户端内核（VITE_KERNEL=1）——与 sidecar 管道并行的镜像面，
+// 事件同 seq 空间天然去重；失败只告警，sidecar 管道继续兜底（见 src/dsh-kernel）
+if (import.meta.env.VITE_KERNEL === "1" && !isOverlay && !isQuickEntry) {
+  void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => console.warn(String(e)));
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   isOverlay ? (
     <OverlayApp />

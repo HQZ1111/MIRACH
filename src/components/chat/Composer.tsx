@@ -22,6 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { MOCK } from "@/lib/mock";
 import { getApi, type ModelOption } from "@/lib/api";
 import { appendSystemMessage, appendUserMessage, SESSION_ID, $autoSpeak, $currentAiId, $aiStreaming, finalizeAiMessage } from "@/store/chat";
+import { kernelSend, kernelStop } from "@/dsh-kernel/boot";
 import { $activeSessionId } from "@/store/session";
 import { appendSessionUserMessage } from "@/store/session-chat";
 import { $sessions } from "@/store/sessions";
@@ -29,6 +30,7 @@ import { useStreamingReply } from "@/hooks/useStreamingReply";
 import { $agentBusy, setAgentBusy, setSendHandler, sendMessage } from "@/store/agent";
 import { $providerConfig, activeModelIdOf, setActiveModel, setActiveEffort, effectiveEffortOf } from "@/store/providerConfig";
 import { $usage } from "@/store/usage";
+import { $assemblyProjections } from "@/dsh-assembly/store";
 import { $enterBehavior } from "@/store/ui-settings";
 import { enqueue, parkQueuedPrompts, drainFirst, $queueState } from "@/store/queue";
 import { QueueBar } from "./QueueBar";
@@ -159,6 +161,13 @@ const EFFORT_TO_INDEX = (v: string | undefined): number => {
   const i = (DSHE_EFFORT as readonly string[]).indexOf(v);
   return i >= 0 ? i : 4;
 };
+
+/** 上下文组成三段（官方 contextBreakdown；颜色对齐官方 ContextMeter 图例） */
+const CONTEXT_PARTS = [
+  { key: "systemTokens" as const, label: "系统提示", color: "#6366F1" },
+  { key: "toolsTokens" as const, label: "工具定义", color: "#F59E0B" },
+  { key: "messageTokens" as const, label: "对话内容", color: "#10B981" },
+];
 
 // ================================================================
 // 模型上下文信息（模拟 gateway model.info 返回）
@@ -319,7 +328,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
   // Composer 是重组件，受控 textarea 每 keypress 全量重渲染是打字卡顿的来源
   const textRef = useRef("");
   const busy = useStore($agentBusy);
-  // 真实模式 AI 是否流式中（驱动 placeholder/转向意图）
+  // 真实模式 AI 是否流式中（驱动 placeholder/转向意图）：
+  // busy 但未流式 = 已发送等首包（此时允许继续发送）；流式中主按钮=停止
   const streaming = useStore($aiStreaming);
   const sessionsAll = useStore($sessions);
   // 繁忙时 Enter 键行为（设置-通用设置）：queue=排队发送 / steer=插话发送
@@ -658,15 +668,22 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
   const modeCfg = MODES.find((m) => m.id === mode)!;
   const ModeIcon = modeCfg.icon;
 
-  // 上下文用量：真实来源 = $usage（dsh token-meter 的 usage 事件累计）。
-  // 已用 ≈ 累计输入 + 缓存读 + 推理输出（喂给模型的量）；总量 = 模型目录 contextWindow，
-  // 目录缺失时不显示百分比。此前是写死 96% 的假进度条。
+  // 上下文占用：优先官方 contextPressure 投影（dsh-assembly 折叠 = 最新请求
+  // prompt 侧占用 + surface 增量重估 + request/context 路由容量，能响应压缩）；
+  // 无投影（mock/尚无 usage 事件）回落 $usage 累计 + 模型目录容量。
+  // $usage 累计值随请求次数单调增长，不等于当前占用，长会话必虚高——投影才是官方语义。
   const usageRec = useStore($usage);
+  const assembly = useStore($assemblyProjections);
+  const pressure = assembly.contextPressure;
   const info = modelInfo(model);
-  const ctxTotal = parseTokens(info.context);
-  const ctxUsed = usageRec.inputTokens + usageRec.cacheReadTokens;
-  const hasUsage = usageRec.calls > 0 && ctxUsed > 0;
-  const ctxPct = hasUsage && ctxTotal > 0 ? Math.max(1, Math.min(100, Math.round((ctxUsed / ctxTotal) * 100))) : 0;
+  const catalogTotal = parseTokens(info.context);
+  const occupancyUsed = pressure ? (pressure.projectedTokens ?? pressure.pressureTokens) : undefined;
+  const projected = occupancyUsed !== undefined;
+  const breakdown = projected ? assembly.contextBreakdown : undefined;
+  const ctxUsed = projected ? occupancyUsed : usageRec.inputTokens + usageRec.cacheReadTokens;
+  const ctxTotal = pressure?.contextWindow ?? (projected ? 0 : catalogTotal);
+  const hasUsage = projected ? ctxUsed > 0 : usageRec.calls > 0 && ctxUsed > 0;
+  const ctxPct = hasUsage && ctxTotal ? Math.max(1, Math.min(100, Math.round((ctxUsed / ctxTotal) * 100))) : 0;
   const usageSegments = [
     { label: "输入", value: usageRec.inputTokens, color: "#6366F1" },
     { label: "缓存读", value: usageRec.cacheReadTokens, color: "#10B981" },
@@ -826,11 +843,14 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     // 短文本走默认粘贴行为
   };
 
-  // ---- 发送：清空输入 + mock 模拟 2.5s busy；真实模式经 Relay 提交引擎 ----
+  // ---- 发送：清空输入 + mock 模拟 2.5s busy；真实模式经 Relay 提交引擎。
+  // busy 不再阻塞发送（用户需求 #6）：AI 未回包时连续发送，用户气泡立即
+  // 乐观上屏，sidecar 队列串行消化；流式中主按钮仍是停止。 ----
   const handleSend = () => {
-    if (!hasText || busy) return;
+    if (!hasText) return;
     trigger("submit", "composer-send");
     const trimmed = textRef.current.trim();
+      const prompt = buildPrompt(trimmed);
     onSend?.(trimmed);
     setTextSync("");
     setAttachments([]);
@@ -840,10 +860,24 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
       appendSessionUserMessage($activeSessionId.get(), trimmed);
       setAgentBusy(true);
       window.setTimeout(() => setAgentBusy(false), 2500);
+    } else if (import.meta.env.VITE_KERNEL === "1") {
+      // B 阶段 3a：官方内核发送（session.prompt 入队；回复经事件镜像渲染）。
+      // 内核未就绪时自动回退 sidecar 管道——消息永不因内核状态丢失。
+      appendUserMessage(trimmed);
+      setAgentBusy(true); // 发送即等待：思考指示立即出现
+      void kernelSend(prompt).catch((e: unknown) => {
+        console.warn("[composer] kernel send failed — falling back to sidecar pipe:", e);
+        setAgentBusy(false);
+        appendSystemMessage(`ℹ️ 内核链未就绪（${String(e).slice(0, 400)}），本条已走 sidecar 管道发送`);
+        void streamReply(SESSION_ID, prompt).catch((e2: unknown) =>
+          appendSystemMessage(`⚠️ 提交失败：${String(e2)}`),
+        );
+      });
     } else {
       // 真实：写入用户消息 → 经 Channel 流式提交（附件拼进提示词）
       appendUserMessage(trimmed);
-      void streamReply(SESSION_ID, buildPrompt(trimmed)).catch((e: unknown) =>
+      setAgentBusy(true); // 发送即等待：思考指示立即出现
+      void streamReply(SESSION_ID, prompt).catch((e: unknown) =>
         appendSystemMessage(`⚠️ 提交失败：${String(e)}`),
       );
     }
@@ -853,6 +887,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     // 保留已流出的半成品（finalize 仅复位状态，不替换文本），复位流式/busy
     finalizeAiMessage($currentAiId.get());
     setAgentBusy(false);
+    // 内核模式：中断当前回合（session.cancel）
+    if (import.meta.env.VITE_KERNEL === "1") void kernelStop();
     // 有排队消息时停车，防止 auto-drain 立即发送
     if ($queueState.get().items.length > 0) parkQueuedPrompts();
     // 注：引擎侧中止（acp_stop）无现成调用，前端先收尾；后续补 Rust 命令
@@ -928,7 +964,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
       setTextSync("");
       setAttachments([]);
     };
-  } else if (busy) {
+  } else if (busy && streaming) {
+    // 仅真正流式中显示停止；已发送等首包（busy && !streaming）时保持可发送
     primaryIcon = <Square className="h-2.5 w-2.5" fill="currentColor" strokeWidth={2.5} />;
     primaryLabel = "停止";
     onPrimary = handleStop;
@@ -1391,7 +1428,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                 </p>
                 {/* 用量：真实 token-meter 累计 / 模型目录容量 */}
                 <div className="mt-2 flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">用量（本会话累计）</span>
+                  <span className="text-muted-foreground">{projected ? "上下文占用（下次请求预估）" : "用量（本会话累计）"}</span>
                   <span className="font-medium text-[#303030]">
                     {hasUsage
                       ? ctxTotal > 0
@@ -1437,6 +1474,21 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                     </p>
                   )}
                 </div>
+                {/* 上下文组成（官方 contextBreakdown 投影：启发式三段，仅投影模式下显示） */}
+                {projected && breakdown && (
+                  <div className="mt-2.5 space-y-1 border-t border-black/5 pt-2">
+                    <p className="text-[10px] font-medium text-muted-foreground">上下文组成（近似）</p>
+                    {CONTEXT_PARTS.map((part) => (
+                      <div key={part.key} className="flex items-center justify-between text-xs">
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: part.color }} />
+                          {part.label}
+                        </span>
+                        <span className="text-[#303030]">{compactTokens(breakdown[part.key])}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* 缓存命中率 / 价格（置底） */}
                 <div className="mt-2.5 space-y-1.5 pt-2">
                   <div className="flex items-center justify-between text-xs">

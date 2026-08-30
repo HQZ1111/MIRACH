@@ -1,18 +1,21 @@
-﻿/**
- * Hermes agent-sidecar 鈥?dsh 浼氳瘽鍘嗗彶璇诲彇
+/**
+ * Mirach agent-sidecar — dsh 会话历史读取
  *
- * dsh 浼氳瘽鎸佷箙鍖栧湪 DSH_SESSION_ROOT/<cwd缂栫爜>/<sessionId>/ 涓嬶細
- *   session.jsonl.zstd锛堝甯?zstd锛氳繍琛屾椂姣忔鍐欏叆涓€涓嫭绔嬪抚锛夋垨 session.jsonl锛堟槑鏂囷級銆?
- * 鏈ā鍧楁妸鏃ュ織瑙ｆ瀽鎴愬墠绔彲鍥炴斁鐨?{role, text, thinking} 鍒楄〃锛?
- *   - user/message  鈫?鐢ㄦ埛娑堟伅
- *   - assistant/message 鈫?鍔╂墜娑堟伅锛坈ontent 閲?reasoning 涓?text 鍒嗙锛?
- * 骞傜瓑锛氭棩蹇楅噷鍙兘閲嶅鐨?enqueue 鍥炴墽锛坅gent/inbox/spliced锛変笉鍙備笌锛屽彧鍙?surfaceOp 钀藉湴浜嬩欢銆?
+ * dsh 会话持久化在 DSH_SESSION_ROOT/<cwd编码>/<sessionId>/ 下：
+ *   session.jsonl.zstd（多帧 zstd：运行时每次写入一个独立帧）或 session.jsonl（明文）。
+ * 本模块把日志解析成前端可回放的 {role, text, thinking} 列表：
+ *   - user/message    → 用户消息
+ *   - assistant/message → 助手消息（content 里 reasoning 与 text 分离）
+ * 并提供 readSessionRawEvents：原始事件序列（含打包 chunk 行解包），
+ * 供官方装配层/投影在前端重建统计。
+ * 幂等：日志里可能重复的 enqueue 回执（agent/inbox/spliced）不参与，只取 surfaceOp 落地事件。
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { log, logDebug, logWarn } from "./protocol.js";
+import { decodeStorageRecord } from "./chunk-rows.js";
 
 export interface HistoryToolCall {
   id: string;
@@ -31,16 +34,15 @@ export interface HistoryMessage {
   role: "user" | "assistant" | "system";
   text: string;
   thinking?: string;
-  /** assistant/message content 閲岀殑 tool-call 鍧楋紙dsh 椋庢牸宸ュ叿琛屽洖鏀撅級 */
+  /** assistant/message content 里的 tool-call 块（dsh 风格工具行回放） */
   toolCalls?: HistoryToolCall[];
-  /** compaction/summary 浜嬩欢锛坉sh 椋庢牸鍘嬬缉鏍囪鍥炴斁锛?*/
+  /** compaction/summary 事件（dsh 风格压缩标记回放） */
   compaction?: HistoryCompaction;
 }
 
-/** 鏌ユ壘鎸囧畾 dsh session id 鐨勬寔涔呭寲鐩綍锛堝厛绮剧‘鍖归厤鐩綍鍚嶏紝鍐嶉€掑綊鎵?session.jsonl*锛夈€?*/
+/** 查找指定 dsh session id 的持久化目录（先精确匹配目录名，再递归找 session.jsonl*）。 */
 function sessionDir(sessionRoot: string, dshId: string): string | null {
   if (!existsSync(sessionRoot)) return null;
-  // 鐩存帴鐩綍鍖归厤锛堟甯歌矾寰勶級
   const walk = (dir: string, depth: number): string | null => {
     let found: string | null = null;
     try {
@@ -48,7 +50,7 @@ function sessionDir(sessionRoot: string, dshId: string): string | null {
         if (found) break;
         if (name.isDirectory()) {
           if (name.name === dshId) {
-            // 纭閲岄潰鏈変細璇濇棩蹇楁枃浠?
+            // 确认里面有会话日志文件
             const logFile = join(dir, name.name, "session.jsonl.zstd");
             const plain = join(dir, name.name, "session.jsonl");
             if (existsSync(logFile) || existsSync(plain)) return join(dir, name.name);
@@ -58,19 +60,19 @@ function sessionDir(sessionRoot: string, dshId: string): string | null {
         }
       }
     } catch {
-      /* 鏉冮檺/IO 閿欒蹇界暐 */
+      /* 权限/IO 错误忽略 */
     }
     return found;
   };
   return walk(sessionRoot, 0);
 }
 
-/** 瑙ｅ帇浼氳瘽鏃ュ織锛堝甯?zstd 鎴栨槑鏂?JSONL锛夈€?*/
+/** 解压会话日志（多帧 zstd 或明文 JSONL）。 */
 function readSessionText(dir: string): string {
   const zstdPath = join(dir, "session.jsonl.zstd");
   if (existsSync(zstdPath)) {
     const buf = readFileSync(zstdPath);
-    // 澶氬抚 zstd锛氭寜 magic 28 B5 2F FD 鍒囧抚閫愪釜瑙ｅ帇
+    // 多帧 zstd：按 magic 28 B5 2F FD 切帧逐个解压
     const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
     const frames: number[] = [];
     let pos = 0;
@@ -90,8 +92,8 @@ function readSessionText(dir: string): string {
       }
     }
     if (all) return all;
-    // 鍏滃簳锛氬崟甯ф祦寮忚В鍘?
-    logWarn("multi-frame decode empty for %s 鈥?trying stream decode", dir);
+    // 兜底：单帧流式解压
+    logWarn("multi-frame decode empty for %s — trying stream decode", dir);
     return readStreamingZstd(buf);
   }
   const plain = join(dir, "session.jsonl");
@@ -104,9 +106,9 @@ function readStreamingZstd(buf: Buffer): string {
     const dec = z.createZstdDecompress();
     const chunks: Buffer[] = [];
     dec.on("data", (c: Buffer) => chunks.push(c));
-    // 鍚屾璺戝畬娴侊紙灏忔枃浠讹級
+    // 同步跑完流（小文件）
     dec.end(buf);
-    // createZstdDecompress 鏄紓姝ユ祦锛涜繖閲岀敤鍚屾瑙ｅ帇鍏滃簳
+    // createZstdDecompress 是异步流；这里用同步解压兜底
     return z.zstdDecompressSync(buf).toString("utf8");
   } catch {
     return "";
@@ -114,19 +116,19 @@ function readStreamingZstd(buf: Buffer): string {
 }
 
 /**
- * 瑙ｆ瀽浼氳瘽鏃ュ織 鈫?娑堟伅鍒楄〃锛堟寜浜嬩欢椤哄簭锛夈€?
- * user/message锛坰urfaceOp=append锛夆啋 鐢ㄦ埛娑堟伅锛沘ssistant/message 鈫?鍔╂墜娑堟伅锛?
- * 涓?*鍚屼竴 turn 鍐呯殑澶氭潯 assistant/message 鍚堝苟涓轰竴鏉?*锛堝紩鎿庤惤鐩樻椂姣忎釜宸ュ叿鍥炲悎
- * 涓€鏉?AM锛歜ash 涓€姝ヤ竴鏉°€佹渶缁堟枃鏈竴鏉♀€斺€旇嫢涓嶅姞鍚堝苟锛屽洖鏀惧氨鏄?姣忎釜宸ュ叿涓€鏉?
- * 鐙珛娑堟伅"锛屼笌瀹炴椂娴佸紡鏄剧ず锛堝伐鍏锋寕鍚屼竴鏉?AI 娑堟伅锛変笉涓€鑷达級銆?
- * content 閲?reasoning/text/tool-call 鍒嗗潡锛沜ompaction/summary 鈫?鍘嬬缉鏍囪銆?
+ * 解析会话日志 → 消息列表（按事件顺序）。
+ * user/message（surfaceOp=append）→ 用户消息；assistant/message → 助手消息；
+ * 同一 turn 内的多条 assistant/message 合并为一条（引擎落盘时每个工具回合
+ * 一条 AM：bash 一步一条、最终文本一条——若不合并，回放就是"每个工具一条
+ * 独立消息"，与实时流式显示（工具挂同一条 AI 消息）不一致）。
+ * content 里 reasoning/text/tool-call 分块；compaction/summary → 压缩标记。
  */
 export function parseSessionLog(text: string): HistoryMessage[] {
   const messages: HistoryMessage[] = [];
   // 工具调用 fallback id：独立递增（合并缓冲下 messages.length 不变，
   // 用它做序号会让同消息多个工具 id 重复 → store 按 id 合并成一条）
   let tcCounter = 0;
-  // 鎸?turn 鍚堝苟鐨勫緟杈撳嚭 buffer锛堜竴涓?AI 鍥炲悎 = 鑻ュ共 AM锛涘悎骞跺悗杈撳嚭涓€鏉★級
+  // 按 turn 合并的待输出 buffer（一个 AI 回合 = 若干 AM；合并后输出一条）
   let turnAcc: { turn: number; text: string; thinking: string; toolCalls: HistoryToolCall[] } | null = null;
   const flushTurn = () => {
     if (!turnAcc) return;
@@ -136,7 +138,7 @@ export function parseSessionLog(text: string): HistoryMessage[] {
       ...(turnAcc.thinking ? { thinking: turnAcc.thinking } : {}),
       ...(turnAcc.toolCalls.length > 0 ? { toolCalls: turnAcc.toolCalls } : {}),
     };
-    // 绾伐鍏峰洖鍚堬紙鏃犳鏂囷級涔熻緭鍑猴紙鍓嶇浠?DshToolRow 娓叉煋宸ュ叿琛岋級
+    // 纯工具回合（无正文）也输出（前端只 DshToolRow 渲染工具行）
     if (turnAcc.text || turnAcc.thinking || turnAcc.toolCalls.length > 0) messages.push(merged);
     turnAcc = null;
   };
@@ -168,6 +170,7 @@ export function parseSessionLog(text: string): HistoryMessage[] {
       // time-context 每步时间采样注入（写给模型感知时间流逝）不属于用户对话，回放时过滤
       const isTimeContext = /^Time sampled while preparing turn \d+, step \d+:/m.test(text);
       if (isReplace) continue;
+      if (text.startsWith("Current runtime context.")) continue; // 引擎 runtime-context 快照，回放过滤
       if (isTimeContext) continue;
       // 只有真实用户消息才终结进行中的 AI 回合（time-context/replace 等注入
       // 也是 user/message 事件，若在此前 flush 会把同回合的多条 AM 拆散）
@@ -193,14 +196,14 @@ export function parseSessionLog(text: string): HistoryMessage[] {
         });
       const turn = typeof d.turn === "number" ? d.turn : -1;
       if (turn >= 0) {
-        // 鍚屼竴鍥炲悎锛氬苟鍏ョ紦鍐诧紱鎹㈠洖鍚堬細鍏堣惤鐩?
+        // 同一回合：并入缓冲；换回合：先落地
         if (turnAcc && turnAcc.turn !== turn) flushTurn();
         if (!turnAcc) turnAcc = { turn, text: "", thinking: "", toolCalls: [] };
         turnAcc.text += text;
         turnAcc.thinking += thinking;
         turnAcc.toolCalls.push(...toolCalls);
       } else if (text || thinking || toolCalls.length > 0) {
-        // 鏃?turn 瀛楁锛堝吋瀹规棫鏃ュ織锛夛細鍘熸牱杈撳嚭
+        // 无 turn 字段（兼容旧日志）：原样输出
         messages.push({
           role: "assistant",
           text,
@@ -221,7 +224,7 @@ export function parseSessionLog(text: string): HistoryMessage[] {
   return messages;
 }
 
-/** 璇诲彇鎸囧畾 dsh session 鐨勫巻鍙叉秷鎭紙鎵句笉鍒?鏃犲唴瀹硅繑鍥炵┖鏁扮粍锛夈€?*/
+/** 读取指定 dsh 会话的历史消息（找不到/无内容返回空数组）。 */
 export function readSessionHistory(sessionRoot: string, dshId: string): HistoryMessage[] {
   const dir = sessionDir(sessionRoot, dshId);
   if (!dir) {
@@ -231,6 +234,50 @@ export function readSessionHistory(sessionRoot: string, dshId: string): HistoryM
   const text = readSessionText(dir);
   if (!text) return [];
   const messages = parseSessionLog(text);
-  log("history: %s 鈫?%d messages", dshId, messages.length);
+  log("history: %s → %d messages", dshId, messages.length);
   return messages;
+}
+
+/** 历史原始事件（get_history 附带；官方装配层/投影的事件底座）。 */
+export interface RawHistoryEvent {
+  seq: number;
+  time: number;
+  type: string;
+  data: unknown;
+  /** surfaceOp/sourceEventSeqs 等信封字段原样保留（投影 surface 判定需要） */
+  [key: string]: unknown;
+}
+
+/** 历史事件上限：超出截断最旧段（超大日志的负载保护；投影按累计语义不受缺前缀影响，仅时间线窗口变短） */
+const MAX_HISTORY_EVENTS = 20000;
+
+/**
+ * 读取指定 dsh 会话的原始事件序列（含打包 chunk 行解包，seq/time 精确）。
+ * 与 readSessionHistory 同源同日志；坏行逐行 try/catch 跳过——历史回放
+ * 宁可短一行不可整段失败。
+ */
+export function readSessionRawEvents(sessionRoot: string, dshId: string): RawHistoryEvent[] {
+  const dir = sessionDir(sessionRoot, dshId);
+  if (!dir) return [];
+  const text = readSessionText(dir);
+  if (!text) return [];
+  const events: RawHistoryEvent[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    try {
+      for (const ev of decodeStorageRecord(parsed)) {
+        events.push(ev as RawHistoryEvent);
+      }
+    } catch (err) {
+      logDebug("history raw line decode failed: %s", err instanceof Error ? err.message : String(err));
+    }
+  }
+  if (events.length > MAX_HISTORY_EVENTS) return events.slice(-MAX_HISTORY_EVENTS);
+  return events;
 }

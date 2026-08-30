@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command as StdCommand, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
@@ -23,6 +23,9 @@ use tauri::{Emitter, Manager, State};
 pub struct DshRelayState {
     pub stdin: Mutex<Option<ChildStdin>>,
     pub ready: Arc<AtomicBool>,
+    /// 最近一次 ready 信封的 UNIX 秒（restart loop guard 判定"健康长跑"用；
+    /// 每轮 spawn 前清零，只反映当前进程）
+    pub last_ready_epoch: Arc<AtomicU64>,
     /// 当前 sidecar 进程 id（app 退出时杀进程树用）
     pub pid: Mutex<Option<u32>>,
 }
@@ -145,12 +148,21 @@ pub fn spawn_sidecar() -> Result<(Child, ChildStdout, ChildStdin), String> {
     Ok((child, stdout, stdin))
 }
 
+/// UNIX 秒（restart loop guard 的时间戳）。
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// stdout 读循环：ready/event/done/result/error 信封分派。
 pub fn read_stdout(
     out: ChildStdout,
     pp: Arc<Mutex<HashMap<String, PendingPrompt>>>,
     pr: Arc<Mutex<HashMap<String, PendingRequest>>>,
     rd: Arc<AtomicBool>,
+    lr: Arc<AtomicU64>,
     app: tauri::AppHandle,
 ) {
     std::thread::spawn(move || {
@@ -173,6 +185,7 @@ pub fn read_stdout(
             match m.get("type").and_then(|v| v.as_str()).unwrap_or("") {
                 "ready" => {
                     rd.store(true, Ordering::Release);
+                    lr.store(unix_secs(), Ordering::Release);
                     let _ = app.emit("dsh_ready", m);
                 }
                 "event" => {
@@ -466,40 +479,93 @@ pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
     let pp = st.pending_prompts.clone();
     let pr = st.pending_requests.clone();
     let rd = st.sidecar.ready.clone();
+    let lr = st.sidecar.last_ready_epoch.clone();
     app.manage(st);
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
-        // 崩溃自愈退避：连续失败按 2^n 秒增长、封顶 30s（spawn 失败或秒退都会
-        // 走到这里；正常长跑的 respawn 计数不重要——down 掉就该尽快恢复）
+        // 崩溃自愈退避：连续失败按 2^n 秒增长、封顶 30s。
+        // Restart loop guard（对照 Hermes restart_loop_guard 语义）：固定窗口内
+        // 崩溃达阈值 → 进入"响亮失败态"——停止快 respawn、拉长冷却并显著告警，
+        // 防止确定性崩溃（坏配置/坏产物/端口占用）变成秒级无限循环。
+        // 健康长跑（ready 且存活超 HEALTHY_SECS）清零窗口并恢复正常自愈节奏。
+        // 旧实现的两处缺陷一并修复：spawn 成功即重置退避（秒退型崩溃退化成
+        // ~1s 循环）改为健康长跑才重置；崩溃永不封顶改为有界 + 可见。
+        const WINDOW_SECS: u64 = 600;
+        const THRESHOLD: usize = 5;
+        const SUSPEND_COOLDOWN_SECS: u64 = 300;
+        const HEALTHY_SECS: u64 = 60;
         let mut backoff_secs: u64 = 1;
+        let mut crash_times: Vec<u64> = Vec::new();
+        let mut suspended = false;
         loop {
+            // 本轮进程的 ready 时刻从零计：上一进程的旧值不许污染健康判定
+            lr.store(0, Ordering::Release);
             match spawn_sidecar() {
                 Ok((mut c, o, i)) => {
                     let s: State<DshAppState> = h.state();
                     *s.sidecar.stdin.lock().unwrap() = Some(i);
                     *s.sidecar.pid.lock().unwrap() = Some(c.id());
-                    backoff_secs = 1; // 成功 spawn 重置退避
                     rd.store(false, Ordering::Release); // 等 ready 信封再置位
                     let pid = c.id();
-                    let h2 = h.clone();
-                    read_stdout(o, pp.clone(), pr.clone(), rd.clone(), h.clone());
+                    read_stdout(o, pp.clone(), pr.clone(), rd.clone(), lr.clone(), h.clone());
                     match c.wait() {
                         Ok(status) => eprintln!("[dsh_relay] sidecar pid={pid} EXITED: {status:?} — respawning"),
                         Err(e) => eprintln!("[dsh_relay] sidecar pid={pid} wait error: {e} — respawning"),
                     }
                     *h.state::<DshAppState>().sidecar.pid.lock().unwrap() = None;
-                    let _ = h2.emit("dsh_lost", ());
+                    let _ = h.emit("dsh_lost", ());
                     // sidecar 死亡后无法回包：清掉所有 pending，避免前端永久等待
                     fail_pending_sidecar(&h.state::<DshAppState>(), "sidecar exited");
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                    backoff_secs = (backoff_secs * 2).min(30);
                 }
                 Err(e) => {
-                    eprintln!("[dsh_relay] sidecar spawn failed: {e} — retry in {backoff_secs}s");
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                    backoff_secs = (backoff_secs * 2).min(30);
+                    eprintln!("[dsh_relay] sidecar spawn failed: {e}");
                 }
             }
+            // —— restart loop guard 记账（spawn 失败 / 秒退 / 长跑后崩溃统一处理）——
+            let now = unix_secs();
+            let ready_at = lr.load(Ordering::Acquire);
+            if ready_at > 0 && now.saturating_sub(ready_at) > HEALTHY_SECS {
+                // 健康长跑后的崩溃 = 偶发：清零窗口、恢复快自愈节奏
+                crash_times.clear();
+                backoff_secs = 1;
+                if suspended {
+                    suspended = false;
+                    eprintln!("[dsh_relay] restart loop guard: stable run detected — normal respawn restored");
+                    let _ = h.emit(
+                        "dsh_sidecar_suspended",
+                        serde_json::json!({"resumed": true}),
+                    );
+                }
+            }
+            crash_times.retain(|t| now.saturating_sub(*t) < WINDOW_SECS);
+            crash_times.push(now);
+            let count = crash_times.len();
+            let delay = if count >= THRESHOLD {
+                if !suspended {
+                    suspended = true;
+                    eprintln!(
+                        "[dsh_relay] restart loop guard: {count} crashes within {WINDOW_SECS}s — suspending fast respawn (cooldown {SUSPEND_COOLDOWN_SECS}s)"
+                    );
+                    let _ = h.emit(
+                        "dsh_sidecar_suspended",
+                        serde_json::json!({
+                            "resumed": false,
+                            "crashes": count,
+                            "windowSecs": WINDOW_SECS,
+                            "cooldownSecs": SUSPEND_COOLDOWN_SECS
+                        }),
+                    );
+                }
+                SUSPEND_COOLDOWN_SECS
+            } else if suspended {
+                // 已在抑制态但尚未出现健康长跑：维持冷却节奏
+                SUSPEND_COOLDOWN_SECS
+            } else {
+                let d = backoff_secs;
+                backoff_secs = (backoff_secs * 2).min(30);
+                d
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
     });
 }

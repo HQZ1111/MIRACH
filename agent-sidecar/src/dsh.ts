@@ -320,21 +320,39 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
       await runtime.dispose().catch(() => {});
       runtime = null;
     }
-    // 动态 cordis.yml：模板 + llm-pi-ai 条目 + 推理强度；运行时经 DSH_CORDIS_CONFIG 指向生成文件
+    // 动态 cordis.yml：模板 + llm-pi-ai 条目 + 推理强度；运行时经 DSH_CORDIS_CONFIG 指向生成文件。
+    // profile 模式（MIRACH_PROFILE=1）跳过生成：配置由 profile cordis.patch.yml 提供（env 驱动）。
     const configPath = writeRuntimeConfig(paths, effortNow);
-    log("launching dsh runtime: node=%s env=%s cwd=%s", paths.nodeBin, ws.envId, cwdNow);
+    log("launching dsh runtime: node=%s env=%s cwd=%s profile=%s", paths.nodeBin, ws.envId, cwdNow, paths.profileMode);
     logDebug("entry=%s config=%s sessionRoot=%s", paths.entry, configPath, paths.sessionRoot);
+
+    // profile 模式启动参数：官方 launcher 合成 base + sdk-app + web-app 三层
+    // （stdio JSON-RPC + HTTP/WS 双面）；profile 内 node_modules 负责插件解析。
+    const launchArgs = paths.profileMode
+      ? ["--import", "tsx", paths.entry, "--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
+      : ["--import", "tsx", paths.entry, configPath];
 
     const harness = new DeepSeekHarness({
       launch: {
         command: paths.nodeBin,
-        args: ["--import", "tsx", paths.entry, configPath],
+        args: launchArgs,
         cwd: paths.harnessRoot,
         env: {
           ...runtimeEnv(paths, model),
           // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）
           ...(ws.cwd ? { DSH_CWD: ws.cwd } : {}),
-          DSH_CORDIS_CONFIG: configPath,
+          // 老 entry+生成 yml 模式专用；profile 模式忽略（配置在 profile patch）
+          ...(paths.profileMode ? {} : { DSH_CORDIS_CONFIG: configPath }),
+          // profile 模式专用：Harness home 指向 mirach 数据目录（profiles/
+          // sessions/storages 都住这），web 面端口由 profile patch 的
+          // MIRACH_WEB_PORT 表达式读取
+          ...(paths.profileMode
+            ? {
+                DSH_HOME: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
+                MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
+                DSH_EFFORT: effortNow,
+              }
+            : {}),
         },
       },
       cwd: cwdNow,
