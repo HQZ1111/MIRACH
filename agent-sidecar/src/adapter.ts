@@ -141,8 +141,8 @@ export function createDshAdapter(opts: DshAdapterOptions) {
         break;
       }
       case "usage": {
-        // token 计量（token-meter）：转发给前端做使用统计
-        const u = chunk.usage as { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; reasoningTokens?: number } | undefined;
+        // token 计量（token-meter）：转发给前端做使用统计（全字段透传，含 cacheWrite/投影输入）
+        const u = chunk.usage as { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number } | undefined;
         if (u) {
           pi({ type: "usage", usage: u });
         }

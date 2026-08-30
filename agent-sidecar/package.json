@@ -8,7 +8,7 @@
     "dev": "node --import tsx src/index.ts"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-sdk-client": "workspace:*"
+    "@deepseek-ai/dsh-sdk-client": "0.1.0-rc.8"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

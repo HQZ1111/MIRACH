@@ -220,6 +220,9 @@ async function runOne(msg: QueuedMessage): Promise<void> {
           return;
         }
         if (n.method === "session.event" && params.event) {
+          // 原始 SessionEvent 透传（seq/type/data 原样）：官方装配层
+          // （ConversationLocationIndex 等）的事件底座；历史回放同源
+          send({ type: "event", event: { type: "raw_session_event", seq: n.seq, event: params.event } });
           adapter.handle(params.event);
         }
       },

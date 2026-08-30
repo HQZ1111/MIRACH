@@ -36,6 +36,7 @@ import { addArtifacts } from "@/store/artifacts";
 import { detectArtifacts } from "@/lib/artifact-detect";
 import { speak } from "@/lib/tts";
 import { pushConsole } from "@/store/console";
+import { pushRawEvent } from "@/store/session-events";
 
 /** 引擎工具名 → ToolCall.category（未知归 other） */
 function toolCategory(name: string): "edit" | "explore" | "run" | "delegate" | "other" {
@@ -63,6 +64,11 @@ export function useStreamingReply(): (sessionId: string, text: string) => Promis
       text,
       (e) => {
       if ((sidAtSend && $activeSessionId.get() !== sidAtSend) || $envEpoch.get() !== epochAtSend) return; // 会话/环境已切换：丢弃本流事件
+      // 原始 SessionEvent 透传 → 事件日志 store（装配层/定位器底座）
+      if (e.type === "raw_session_event") {
+        pushRawEvent(e.seq, e.event.type, e.event.data);
+        return;
+      }
       if (e.type === "message.start") {
         startAiMessage(e.messageId);
         lastStatus = ""; // 新消息开始：重置状态降噪缓存，避免跨消息误吞

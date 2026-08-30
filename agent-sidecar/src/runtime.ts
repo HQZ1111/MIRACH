@@ -290,14 +290,10 @@ export function writeRuntimeConfig(paths: RuntimePaths, effort = "max"): string 
       "    path: ':memory:'",
       "    openAt: never",
       "",
-      // pwsh 工具（Windows 原生 shell）+ 持久 bash（shell 状态跨调用保持）
+      // pwsh 工具（Windows 原生 shell）
       "# tool-pwsh: Windows PowerShell 工具",
       "- id: tool-pwsh",
       "  name: '@deepseek-ai/dsh-tool-pwsh'",
-      "",
-      "# tool-bash-persistent: 持久 bash（shell 状态跨调用保持）",
-      "- id: tool-bash-persistent",
-      "  name: '@deepseek-ai/dsh-tool-bash-persistent'",
       "",
       // ---- 社区插件（npm: dsh-workgroup / dsh-realtime-voice；经
       //      DSH_PLUGIN_NODE_PATH/内置 dsh-plugins 目录解析）----

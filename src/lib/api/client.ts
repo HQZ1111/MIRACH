@@ -76,6 +76,8 @@ export interface MirachClient {
   getAuthStatus(): Promise<AuthStatus | null>;
   /** 消息反馈上报（dsh messageFeedback.put；messageId 用引擎 assistant 消息 id） */
   sendMessageFeedback(messageId: string, rating: "positive" | "negative"): Promise<boolean>;
+  /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
+  listEnginePlugins(): Promise<{ id: string; name: string }[]>;
   /** 订阅服务端事件流；返回取消订阅函数 */
   subscribe(onEvent: (e: MirachEvent) => void): () => void;
 }
@@ -87,6 +89,10 @@ export interface MirachClient {
 class MockClient implements MirachClient {
   readonly mode = "mock" as const;
   private listeners = new Set<(e: MirachEvent) => void>();
+
+  async listEnginePlugins(): Promise<{ id: string; name: string }[]> {
+    return [];
+  }
 
   async ping(): Promise<boolean> {
     return true;
@@ -642,6 +648,19 @@ class RealClient implements MirachClient {
           label: String(o.name ?? o.id ?? ""),
         };
       });
+    } catch {
+      return [];
+    }
+  }
+
+  /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
+  async listEnginePlugins(): Promise<{ id: string; name: string }[]> {
+    try {
+      const raw = await invoke<unknown>("relay_rpc", { method: "config.pluginEntries", params: null });
+      const entries = ((raw as { result?: { entries?: unknown[] } } | null)?.result?.entries ?? []) as { id: string; name: string }[];
+      return entries
+        .filter((e) => e && typeof e.id === "string")
+        .map((e) => ({ id: String(e.id), name: String(e.name ?? "") }));
     } catch {
       return [];
     }

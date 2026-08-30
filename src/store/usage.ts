@@ -13,10 +13,11 @@ export interface UsageRecord {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheWriteTokens: number;
   reasoningTokens: number;
   /** 引擎调用次数（每轮 usage 事件 = 一次 LLM 调用） */
   calls: number;
-  /** 最近一轮的输入 tokens ≈ 当前上下文占用（压缩/超限判断参考） */
+  /** 最近一轮的上下文压力输入（input+cacheRead+cacheWrite）≈ 当前上下文占用 */
   lastInputTokens: number;
 }
 
@@ -31,6 +32,7 @@ function load(): UsageRecord {
         inputTokens: typeof u.inputTokens === "number" ? u.inputTokens : 0,
         outputTokens: typeof u.outputTokens === "number" ? u.outputTokens : 0,
         cacheReadTokens: typeof u.cacheReadTokens === "number" ? u.cacheReadTokens : 0,
+        cacheWriteTokens: typeof u.cacheWriteTokens === "number" ? u.cacheWriteTokens : 0,
         reasoningTokens: typeof u.reasoningTokens === "number" ? u.reasoningTokens : 0,
         calls: typeof u.calls === "number" ? u.calls : 0,
         lastInputTokens: typeof u.lastInputTokens === "number" ? u.lastInputTokens : 0,
@@ -39,7 +41,7 @@ function load(): UsageRecord {
   } catch {
     /* 损坏数据清零 */
   }
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, calls: 0, lastInputTokens: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, calls: 0, lastInputTokens: 0 };
 }
 
 function persist(u: UsageRecord): void {
@@ -59,9 +61,10 @@ export function recordUsage(u: Partial<UsageRecord>): void {
     inputTokens: cur.inputTokens + (u.inputTokens ?? 0),
     outputTokens: cur.outputTokens + (u.outputTokens ?? 0),
     cacheReadTokens: cur.cacheReadTokens + (u.cacheReadTokens ?? 0),
+    cacheWriteTokens: cur.cacheWriteTokens + (u.cacheWriteTokens ?? 0),
     reasoningTokens: cur.reasoningTokens + (u.reasoningTokens ?? 0),
     calls: cur.calls + 1,
-    lastInputTokens: u.inputTokens ?? cur.lastInputTokens,
+    lastInputTokens: (u.inputTokens ?? 0) + (u.cacheReadTokens ?? 0) + (u.cacheWriteTokens ?? 0) || cur.lastInputTokens,
   };
   $usage.set(next);
   persist(next);
@@ -69,7 +72,7 @@ export function recordUsage(u: Partial<UsageRecord>): void {
 
 /** 重置（手动清空统计，持久层同步清除） */
 export function resetUsage(): void {
-  const empty = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, calls: 0, lastInputTokens: 0 };
+  const empty = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, calls: 0, lastInputTokens: 0 };
   $usage.set(empty);
   try {
     localStorage.removeItem(USAGE_KEY);
