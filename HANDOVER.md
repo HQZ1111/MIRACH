@@ -218,3 +218,111 @@ npm run tauri dev
 - 旧 G:\\mirach 目录已归档停用（其 git 历史保留在本地 .git；远程已 force 对齐新基线）
 - **双远程**：origin=Gitee HANQINGZHOU/mirach、github=git@github.com:HQZ1111/MIRACH.git（SSH）
 - 若有其他窗口/会话在旧目录工作，请全部关闭，避免再次分叉
+
+---
+
+# 交接文档（最终版）：新会话继续指南
+
+## 项目位置
+
+- **唯一工作目录**：`G:\deepseek-harness-master\apps\mirach`
+- 这是官方 dsh 0.1.2-alpha.1 workspace（`G:\deepseek-harness-master`）内的一个 app
+- 双远程：origin = Gitee `HANQINGZHOU/mirach`、github = `git@github.com:HQZ1111/MIRACH.git`
+- 数据目录：`%USERPROFILE%\.mirach\`（会话/插件/存储，原 .hermes 已随迁）
+
+## 三种对话风格
+
+| 风格 | chatStyle 值 | 渲染方式 | 状态 |
+|---|---|---|---|
+| dsh | `"dsh"` | 紧凑行式 + ReasoningRow + DshToolRow + CompactionRow | ✅ 可用 |
+| default | `""`（默认） | 气泡式（白底描边）| ✅ 可用 |
+| minimal | `"minimal"` | 简约（ZosmaChat） | ✅ 可用 |
+
+## 已完成的功能清单
+
+### 后端（agent-sidecar）
+- sidecar 已挂载官方 dsh-base 全树约 60 个插件（沙箱/审批/搜索/目标/查询/自动命名/pwsh/编辑器/溢出/超时/附件/反馈/提问/工作流/子代理全系）
+- 社区插件已安装：dsh-workgroup（工作组协作）、dsh-realtime-voice（全双工语音）、dsh-multi-model-provider（多模型路由）——位置 `%USERPROFILE%\.mirach\dsh-plugins\`
+- 原始 SessionEvent 透传链路：sidecar 把 `session.event`（含 seq）原样发给前端（`raw_session_event` 事件）
+- 数据目录：`%USERPROFILE%\.mirach\`（dsh-sessions/dsh-plugins/cron 等）
+- PATH 展开：`~/` 前缀由 sidecar 展开（`~/.mirach/chat` 等）
+- 工具：bash/pwsh/持久 bash/文件/搜索/编辑器/todo/goal/ralph/skill/ask_user/web_search/subagent 全系/fork/workflow
+
+### 前端（React 19）
+- StatsLine（真实 token 计量 + 缓存命中 + `|` 分组格式）
+- DshToolRow（工具行，可展开 IN/OUT）
+- ReasoningRow（思考过程展开）
+- CompactionRow（压缩标记）
+- 项目画廊（WebGL 弧形，项目名在文件夹上，拖拽旋转，点击选中固定）
+- 登录页（MIRACH/HARNESS 品牌字 + 密码/跳过 + 窗口三圆点 + 整页拖动）
+- 设置关于（Mirach Harness / 奎木狼全能个人助理 / v0.1.0）
+- 插件管理三标签（已安装/目录/引擎插件清单）
+- 成员列表（奎木狼+规划师+工程师+调试员+审查员+研究员+评论家+写手，8 人）
+- 环境隔离（会话/成员/perssona 按环境分片，chat 环境专属工作区 `~/.mirach/chat`）
+
+### 基础设施
+- 便携包：dist-portable\Mirach-portable.zip（268MB 单文件，解压即用）
+- Gitee Release v0.1.0 已上传（144MB 双卷 7z）
+- GitHub Release 附件：待上传（用户网页操作或 token）
+- cordis.yml 生成已对齐官方 dsh-base 全树
+
+## 下一个会话需要做的工作
+
+### P0：对话区换官方装配层
+
+三种 UI 风格共享同一数据层，只是渲染外壳不同：
+
+1. 前端引入 `@deepseek-ai/dsh-client-runtime` + `@deepseek-ai/dsh-client-ui-conversation`
+2. sidecar 已透传原始 SessionEvent（`raw_session_event` 事件含 seq/type/data）→ 前端 `session-events.ts` store 按 seq 排序存储
+3. 用官方 ConversationLocationIndex（475 行，可从 `G:\deepseek-harness-master\packages\client\ui-conversation\src\client\conversation\location-index.ts` 直接复制）构建 Turn/Step timeline
+4. 三种风格的对话区都从 timeline 读取数据渲染（dsh 风格 = DshToolRow 行式；default = 气泡；minimal = ZosmaChat）
+5. 官方装配层的 projection（tokenUsage/sessionStats/contextPressure）替代手写统计
+
+### P1：ContextMeter（上下文占用环）
+- 数据：`usage.lastInputTokens`（含 cacheRead/cacheWrite）÷ contextWindow（1M）
+- UI：圆环显示占用百分比，压缩后自动缩小
+- 位置：Composer 输入框旁边
+
+### P2：轨迹视图对齐官方 ui-trajectory
+- 从 SessionEvent timeline 构建：Turn 分组 → Step 列表 → 事件详情展开
+- 每个 Step 显示：耗时、token 用量、工具调用结果
+
+### P3：JobPanel（引擎级任务面板）
+- 数据源：`dsh-tool-jobs` / `jobs-local`（引擎 jobs-local 插件已挂载）
+- UI：任务列表 + 状态 + 启停 + 日志
+
+### P4：成员对话接引擎
+- 当前成员对话是 mock（RightSidebar TempMsg）
+- 每成员一个独立 dsh 会话，persona 从 agents store 的 systemPrompt 注入（set_env.systemPrompt）
+- workgroup 插件提供跨成员消息（workgroup_create/send）
+
+### P5：完善项
+- 定时任务加 envId 隔离（当前 Rust 全局单表）
+- 会话级 persona 快照持久化（sessions 表加 system_prompt 列）
+- 成员模板导入/导出（+ dsh-tavern 角色卡 V2/V3 JSON 导入）
+- ContextMeter（上下文占用环）
+
+## 关键决策记录
+
+1. **对话区三种 UI 保持**：dsh（紧凑行式）/default（气泡）/minimal（简约），数据层统一
+2. **沙箱部署语义**：workspace-write + approval never（直接执行，不出工作区）
+3. **品牌**：Mirach（奎木狼），不用 Desktop/Agent 字样
+4. **环境即目录**：每环境独立工作区 + 会话持久化 + 成员（Hermes profile 模式）
+5. **插件管理**：引擎插件经 dsh-plugins 目录 + NODE_PATH，社区插件 npm 安装即可
+
+## 关键文件速查
+
+| 文件 | 用途 |
+|---|---|
+| `agent-sidecar/src/index.ts` | sidecar 命令循环（JSON-RPC 面向 Tauri） |
+| `agent-sidecar/src/dsh.ts` | 引擎运行时生命周期/环境隔离 |
+| `agent-sidecar/src/adapter.ts` | 引擎事件→前端事件适配 |
+| `agent-sidecar/src/history.ts` | 会话日志解析（按 turn 合并回放） |
+| `agent-sidecar/src/runtime.ts` | 运行时路径解析/cordis.yml 生成 |
+| `src/store/chat.ts` | 消息 store（delta 合帧缓冲/工具挂载） |
+| `src/store/agents.ts` | 团队成员（8 人种子 + 环境分片） |
+| `src/store/environments.ts` | 环境定义与切换 |
+| `src/store/session-events.ts` | 原始 SessionEvent 日志 |
+| `src/components/layout/MainPanel.tsx` | 主面板（对话区/画廊/统计/工具行） |
+| `agent-sidecar/package.json` | sidecar 依赖（workspace:* 链接官方包） |
+| `docs/research-isolation.md` | 隔离设计调研（Hermes vs Mirach） |
