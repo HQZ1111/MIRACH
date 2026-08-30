@@ -23,7 +23,7 @@ export interface EnvProfile {
   name: string;
   /** 工作区绝对路径；空串 = 跟随系统默认 */
   cwd: string;
-  /** 图标库 id（如 "lucide:code"）；缺省按 id 映射默认图标 */
+  /** 图标库 id（如 "ph:code"，面性图标库）；旧 "ph:code" 数据按裸名兼容解析 */
   icon?: string;
   /** 左栏是否展示；主环境恒 true */
   visible?: boolean;
@@ -45,17 +45,17 @@ export function envIdForView(view: string): string {
  * 种子缺失的环境在 load() 时自动补齐。
  */
 const VIEW_ENV_SEEDS: EnvProfile[] = [
-  { id: "main", name: "主环境", cwd: "", icon: "lucide:bot", visible: true, builtIn: true },
+  { id: "main", name: "主环境", cwd: "", icon: "ph:bot", visible: true, builtIn: true },
   // 聊天环境专属工作区（~ 展开为用户主目录）：与主环境的文件操作隔离
-  { id: "chat", name: "聊天", cwd: "~/Mirach/chat", icon: "lucide:chat", visible: true },
-  { id: "code", name: "代码", cwd: "G:\\Workspaces\\code", icon: "lucide:code", visible: true },
-  { id: "work", name: "工作", cwd: "G:\\Workspaces\\work", icon: "lucide:briefcase", visible: true },
-  { id: "finance", name: "金融写作", cwd: "G:\\Workspaces\\finance-writing", icon: "lucide:chart", visible: true },
-  { id: "write", name: "写作", cwd: "G:\\Workspaces\\writing", icon: "lucide:pen", visible: true },
+  { id: "chat", name: "聊天", cwd: "~/Mirach/chat", icon: "ph:chat", visible: true },
+  { id: "code", name: "代码", cwd: "G:\\Workspaces\\code", icon: "ph:code", visible: true },
+  { id: "work", name: "工作", cwd: "G:\\Workspaces\\work", icon: "ph:briefcase", visible: true },
+  { id: "finance", name: "金融写作", cwd: "G:\\Workspaces\\finance-writing", icon: "ph:chart", visible: true },
+  { id: "write", name: "写作", cwd: "G:\\Workspaces\\writing", icon: "ph:pen", visible: true },
 ];
 
 function defaultEnvs(): EnvProfile[] {
-  if (MOCK) return [{ id: "main", name: "主环境", cwd: "", icon: "lucide:bot", visible: true, builtIn: true }];
+  if (MOCK) return [{ id: "main", name: "主环境", cwd: "", icon: "ph:bot", visible: true, builtIn: true }];
   return VIEW_ENV_SEEDS.map((e) => ({ ...e }));
 }
 
@@ -64,7 +64,7 @@ function migrate(e: EnvProfile): EnvProfile {
   const seed = VIEW_ENV_SEEDS.find((s) => s.id === e.id);
   return {
     ...e,
-    icon: e.icon ?? seed?.icon ?? "lucide:bot",
+    icon: e.icon ?? seed?.icon ?? "ph:bot",
     visible: e.visible ?? true,
     builtIn: e.id === "main",
   };
@@ -121,7 +121,7 @@ function enforceMain(list: EnvProfile[]): EnvProfile[] {
     id: "main",
     name: "主环境",
     cwd: main?.cwd ?? "",
-    icon: "lucide:bot",
+    icon: "ph:bot",
     visible: true,
     builtIn: true,
   };
@@ -135,7 +135,7 @@ export function saveEnvironments(list: EnvProfile[]): void {
   const clean = list.filter((e) => e && e.id && e.id.trim() && !seen.has(e.id));
   for (const e of clean) seen.add(e.id);
   if (!clean.some((e) => e.id === "main")) {
-    clean.unshift({ id: "main", name: "主环境", cwd: "", icon: "lucide:bot", visible: true, builtIn: true });
+    clean.unshift({ id: "main", name: "主环境", cwd: "", icon: "ph:bot", visible: true, builtIn: true });
   }
   const enforced = enforceMain(clean);
   $environments.set(enforced);
@@ -146,7 +146,7 @@ export function saveEnvironments(list: EnvProfile[]): void {
 /** 按环境 id 取配置（未登记的环境回退主环境——只共享工作区，不做映射隔离声明）。 */
 export function envById(id: string): EnvProfile {
   const list = $environments.get();
-  return list.find((e) => e.id === id) ?? { id, name: id, cwd: "", icon: "lucide:bot", visible: true, builtIn: false };
+  return list.find((e) => e.id === id) ?? { id, name: id, cwd: "", icon: "ph:bot", visible: true, builtIn: false };
 }
 
 // ---- 插件/设置页 actions（main 全部拒改） ----
@@ -158,7 +158,7 @@ export function addEnvironment(profile: { name: string; cwd: string; icon?: stri
     id,
     name: profile.name.trim() || "新环境",
     cwd: profile.cwd ?? "",
-    icon: profile.icon ?? "lucide:bot",
+    icon: profile.icon ?? "ph:bot",
     visible: profile.visible ?? true,
     builtIn: false,
   };

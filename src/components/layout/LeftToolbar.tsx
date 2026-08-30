@@ -124,7 +124,10 @@ export function LeftToolbar({
               title={item.label}
               onClick={() => onViewChange(item.id)}
             >
-              {renderEnvIcon(item.iconId, "h-5 w-5 text-[color:var(--tool-icon-inactive)]")}
+              {renderEnvIcon(item.iconId, {
+                size: 24,
+                color: activeView === item.id ? "var(--tool-icon-active)" : "var(--tool-icon-inactive)",
+              })}
             </Button>
           ))}
           {fixedTools.map((item) => (

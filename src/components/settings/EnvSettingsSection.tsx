@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 import { useStore } from "@nanostores/react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { renderEnvIcon, getIconItem } from "@/plugins/icon-library";
 import { IconPicker } from "@/components/settings/IconPicker";
@@ -24,14 +25,14 @@ import { Plus, Trash2, Lock, Pencil, Check, X } from "lucide-react";
 type Draft = { name: string; cwd: string; icon: string };
 
 function toDraft(e: EnvProfile): Draft {
-  return { name: e.name, cwd: e.cwd, icon: e.icon ?? "lucide:bot" };
+  return { name: e.name, cwd: e.cwd, icon: e.icon ?? "ph:bot" };
 }
 
 export function EnvSettingsSection() {
   const envs = useStore($environments);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Draft>({ name: "", cwd: "", icon: "lucide:bot" });
+  const [draft, setDraft] = useState<Draft>({ name: "", cwd: "", icon: "ph:bot" });
   const [adding, setAdding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -72,7 +73,7 @@ export function EnvSettingsSection() {
                       locked ? "cursor-default opacity-80" : "hover:border-[#6366F1]",
                     )}
                   >
-                    {renderEnvIcon(e.icon, "h-4.5 w-4.5")}
+                    {renderEnvIcon(e.icon, { className: "h-4.5 w-4.5" })}
                   </button>
                   {pickerFor === e.id && (
                     <div className="absolute left-0 top-10 z-50 w-[280px]">
@@ -88,23 +89,21 @@ export function EnvSettingsSection() {
                   )}
                 </div>
 
-                {/* 名称/工作区（编辑态） */}
-                {isEditing ? (
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <input
-                      value={draft.name}
-                      onChange={(ev) => setDraft((v) => ({ ...v, name: ev.target.value }))}
-                      placeholder="环境名称"
-                      className="w-full rounded-md border border-border px-2 py-1 text-xs outline-none focus:border-[#6366F1]"
-                    />
-                    <input
-                      value={draft.cwd}
-                      onChange={(ev) => setDraft((v) => ({ ...v, cwd: ev.target.value }))}
-                      placeholder="工作区路径（如 G:\\Workspaces\\code，可留空）"
-                      className="w-full rounded-md border border-border px-2 py-1 font-mono text-xs outline-none focus:border-[#6366F1]"
-                    />
-                  </div>
-                ) : (
+              {/* 名称/工作区（编辑态） */}
+              {isEditing ? (
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <input
+                    value={draft.name}
+                    onChange={(ev) => setDraft((v) => ({ ...v, name: ev.target.value }))}
+                    placeholder="环境名称"
+                    className="w-full rounded-md border border-border px-2 py-1 text-xs outline-none focus:border-[#6366F1]"
+                  />
+                  <WorkspaceField
+                    value={draft.cwd}
+                    onChange={(cwd) => setDraft((v) => ({ ...v, cwd }))}
+                  />
+                </div>
+              ) : (
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-[#303030]">{e.name}</p>
                     <p className="truncate font-mono text-[10px] text-muted-foreground" title={e.cwd}>
@@ -249,7 +248,7 @@ function AddEnvForm({
 }) {
   const [name, setName] = useState("");
   const [cwd, setCwd] = useState("");
-  const [icon, setIcon] = useState("lucide:bot");
+  const [icon, setIcon] = useState("ph:bot");
   const [picking, setPicking] = useState(false);
   const Icon = getIconItem(icon).Icon;
 
@@ -261,7 +260,7 @@ function AddEnvForm({
           title="选择图标"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-black/10 bg-muted hover:border-[#6366F1]"
         >
-          <Icon className="h-4.5 w-4.5 text-[#303030]" />
+          <Icon className="h-4.5 w-4.5 text-[#303030]" weight="fill" />
         </button>
         <input
           autoFocus
@@ -271,12 +270,9 @@ function AddEnvForm({
           className="min-w-0 flex-1 rounded-md border border-border px-2 py-1 text-xs outline-none focus:border-[#6366F1]"
         />
       </div>
-      <input
-        value={cwd}
-        onChange={(e) => setCwd(e.target.value)}
-        placeholder="工作区路径（可留空 = 跟随系统默认）"
-        className="mt-1.5 w-full rounded-md border border-border px-2 py-1 font-mono text-xs outline-none focus:border-[#6366F1]"
-      />
+      <div className="mt-1.5">
+        <WorkspaceField value={cwd} onChange={setCwd} />
+      </div>
       {picking && (
         <div className="relative mt-2 h-56">
           <IconPicker value={icon} onSelect={(id) => { setIcon(id); setPicking(false); }} onClose={() => setPicking(false)} />
@@ -293,6 +289,86 @@ function AddEnvForm({
           添加
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * WorkspaceField — 工作区选择（默认 / 自定义）
+ *
+ * 默认 = 跟随系统默认工作区（cwd 空串）；自定义 = 原生文件夹选择对话框
+ * （Tauri dialog 插件，文件管理器式点选，不手输路径）。
+ */
+function WorkspaceField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const isCustom = value.trim() !== "";
+
+  const pick = async (): Promise<void> => {
+    setErr("");
+    setBusy(true);
+    try {
+      const picked = await open({ directory: true, multiple: false, title: "选择工作区文件夹" });
+      if (typeof picked === "string" && picked) onChange(picked);
+    } catch {
+      setErr("无法打开系统文件夹选择器（请重启应用后重试）");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex shrink-0 overflow-hidden rounded-md border border-border text-[11px]">
+          <button
+            type="button"
+            onClick={() => {
+              setErr("");
+              if (isCustom) onChange("");
+            }}
+            className={cn(
+              "px-2 py-1",
+              !isCustom ? "bg-[#017CF3] text-white" : "bg-white text-[#464646] hover:bg-muted",
+            )}
+          >
+            默认
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!isCustom) void pick();
+            }}
+            className={cn(
+              "px-2 py-1",
+              isCustom ? "bg-[#017CF3] text-white" : "bg-white text-[#464646] hover:bg-muted",
+            )}
+          >
+            自定义
+          </button>
+        </div>
+        {isCustom ? (
+          <>
+            <span
+              className="min-w-0 flex-1 truncate rounded-md border border-border bg-muted/50 px-2 py-1 font-mono text-[11px] text-[#303030]"
+              title={value}
+            >
+              {value}
+            </span>
+            <button
+              type="button"
+              onClick={() => void pick()}
+              disabled={busy}
+              className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted disabled:opacity-50"
+            >
+              {busy ? "打开…" : "重新选择"}
+            </button>
+          </>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">跟随系统默认工作区</span>
+        )}
+      </div>
+      {err && <p className="text-[10px] text-[#EF4444]">{err}</p>}
     </div>
   );
 }

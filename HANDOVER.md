@@ -490,7 +490,7 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 ## 环境插件（2026-08-31 完成）
 
 文件：
-- src/plugins/icon-library.tsx — 图标库（40 项 lucide 精选 + registerIcon 开放扩展）
+- src/plugins/icon-library.tsx — 图标库（40 项 Phosphor 面性精选 + registerIcon 开放扩展；旧 lucide: id 按裸名兼容解析，无需迁移）
 - src/plugins/plugin-environments.tsx — 环境插件主体（sidebarNav 贡献）
 - src/components/settings/IconPicker.tsx — 图标选择弹窗
 - src/components/settings/EnvSettingsSection.tsx — 设置页环境分区
@@ -502,6 +502,14 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 数据：EnvProfile {id,name,cwd,icon,visible,builtIn}；main 锁定(builtIn=true，
 store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
 拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
+
+08-31 补充（用户反馈修正）：
+- 图标全量换 Phosphor weight="fill"（面性）——曾误用 lucide 线性，左工具栏环境按钮
+  风格跑偏；现与左工具栏固定项一致（size 24 + var(--tool-icon-*) 色）。
+- 工作区改「默认 / 自定义」双档：默认=跟随系统（cwd 空串）；自定义走
+  tauri-plugin-dialog 原生文件夹选择对话框（文件管理器式点选，不手输路径）。
+  Rust 侧三处已接：Cargo.toml 依赖、lib.rs 插件注册、capabilities dialog:default。
+  **需重启应用（Rust 重编译）后生效**；未重启前点选会提示"无法打开系统文件夹选择器"。
 
 # 产品层需求清单（2026-08-31 用户提出；2/5/6 + 阶段3a 已做，3/4/7 待做）
 

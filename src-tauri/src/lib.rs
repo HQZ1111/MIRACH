@@ -1086,6 +1086,8 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // 原生文件夹/文件选择对话框（环境插件工作区"选择文件夹"）
+        .plugin(tauri_plugin_dialog::init())
         // 全局快捷键：Alt+Space 唤起 quick entry 迷你窗口
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()

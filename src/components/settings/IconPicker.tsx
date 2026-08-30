@@ -86,7 +86,7 @@ function IconCell({
           : "border-transparent text-[#464646] hover:border-border hover:bg-muted",
       )}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="h-4 w-4" weight="fill" />
       <span className="max-w-full truncate px-0.5">{item.label}</span>
       {selected && <Check className="h-2.5 w-2.5" />}
     </button>

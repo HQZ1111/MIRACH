@@ -25,6 +25,7 @@
     "core:window:allow-outer-size",
     "global-shortcut:default",
     "deep-link:default",
-    "opener:default"
+    "opener:default",
+    "dialog:default"
   ]
 }

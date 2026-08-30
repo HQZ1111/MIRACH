@@ -26,6 +26,8 @@ tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-deep-link = "2"
+# 原生对话框（环境工作区"选择文件夹"）
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 简约引擎中继（dsh_relay）：oneshot 回包 + spawn_blocking

@@ -25,7 +25,7 @@ registerPlugin({
       $environments
         .get()
         .filter((e) => e.visible !== false)
-        .map((e) => ({ id: e.id, iconId: e.icon ?? "lucide:bot", label: e.name })),
+        .map((e) => ({ id: e.id, iconId: e.icon ?? "ph:bot", label: e.name })),
     onSelect: (id) => {
       // 切换左栏视图（envIdForView 保证 main/mirach 映射；其余 id 即视图 id）
       window.dispatchEvent(new CustomEvent("mirach:switch-view", { detail: id }));
