@@ -523,6 +523,23 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十五批：酒馆注入门控补全（2026-09-01 深夜）
+
+用户问"插件能只作用在聊天环境里吗"。深挖插件注入门控后的结论 + 补全：
+
+- **插件装载是引擎级**（一个 runtime 服务全部环境，无法按环境装卸——引擎架构）。
+- **注入是会话级门控**（lib/index.js 实锤）：tavern:card 等注入段按
+  `bindings[sid]`（session-bindings.json，键 = dsh 会话 id）判定；未登记的会话
+  直接返回空——主对话、其他环境、普通成员零注入。presetId 解析以 DSH 会话
+  事件流的 agent-preset/selected 为权威（须是酒馆目录预设）。
+- **关键缺口已补**：agentPresets.select（引擎 RPC）只写会话事件流，不写
+  session-bindings.json → 之前绑定后世界书等仍不会注入！现在成员绑定成功后
+  `recordTavernBinding(dshId, presetId)` 读改写 session-bindings.json 落登记
+  （tavern.ts；bindEngineSession 返回 dshSessionId）。
+- **最终效果**：注入精确到"会话"粒度——只有聊天环境的酒馆成员私聊（绑定+登记
+  齐全）有酒馆注入；主对话/其他环境/普通成员零注入。比环境粒度更细。
+- tsc 通过。
+
 # 第十四批：智能体团队并入环境面板 + 原生面板优化（2026-09-01 深夜）
 
 用户反馈四点全落地：

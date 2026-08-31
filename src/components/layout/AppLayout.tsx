@@ -51,6 +51,7 @@ import { getApi } from "@/lib/api";
 import type { MirachEvent } from "@/lib/api/types";
 import { $agents } from "@/store/agents";
 import { bindEngineSession } from "@/store/engine-session";
+import { recordTavernBinding } from "@/lib/tavern";
 import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
 
@@ -431,12 +432,17 @@ export function AppLayout() {
         const member = $agents.get().find((a) => a.id === memberId);
         // 带酒馆预设的成员：人设由预设组合（persona 插件）提供，不再直注入
         const usePreset = !!member?.tavernPresetId;
-        await bindEngineSession(`member-${memberId}`, usePreset ? null : member?.systemPrompt ?? null);
+        const dshId = await bindEngineSession(`member-${memberId}`, usePreset ? null : member?.systemPrompt ?? null);
         // 空白会话绑定酒馆预设（agentPresets.select）：世界书智能注入/记忆总结/
         // 关系网/剧情选项随挂载激活；已有回合（locked）时回退人设直注入
         if (usePreset && !presetBoundRef.current.has(memberId)) {
           const ok = await getApi().selectAgentPreset(`member-${memberId}`, member!.tavernPresetId!);
           presetBoundRef.current.add(memberId);
+          if (ok && dshId) {
+            // 登记进插件 session-bindings.json（注入门控读它）——世界书/记忆/关系网/NSFW 等由此对
+            // 该成员会话激活；未登记的会话零注入（其他环境天然隔离）
+            await recordTavernBinding(dshId, member!.tavernPresetId!).catch(() => {});
+          }
           if (!ok && member?.systemPrompt) {
             await bindEngineSession(`member-${memberId}`, member.systemPrompt);
           }

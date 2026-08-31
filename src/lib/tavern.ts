@@ -112,6 +112,29 @@ export async function writeWorldbook(presetRoot: string, presetKey: string, wb: 
   });
 }
 
+/**
+ * 登记"会话 → 酒馆预设"绑定（session-bindings.json）。
+ *
+ * 插件的注入门控读这个文件：只有登记过的会话才注入角色卡/世界书/记忆/关系网。
+ * mirach 成员经 agentPresets.select 绑定预设成功后调用本函数落一条
+ * dshSessionId → presetId，注入即对该成员会话激活（其他会话零注入）。
+ */
+export async function recordTavernBinding(dshSessionId: string, presetId: string): Promise<void> {
+  const home = await userHomeDir();
+  if (!home || !dshSessionId || !presetId) return;
+  const path = `${home}\\.dsh\\.agent-presets\\session-bindings.json`;
+  let data: Record<string, string> = {};
+  try {
+    data = JSON.parse(await invoke<string>("read_file", { path })) as Record<string, string>;
+    if (!data || typeof data !== "object") data = {};
+  } catch {
+    data = {}; // 文件不存在 = 首条绑定
+  }
+  if (data[dshSessionId] === presetId) return; // 已登记
+  data[dshSessionId] = presetId;
+  await invoke("write_user_file", { path, content: JSON.stringify(data, null, 2) });
+}
+
 interface FileEntry {
   name: string;
   path: string;

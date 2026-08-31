@@ -21,9 +21,11 @@ export const $mainPersona = atom<string | null>(null);
 /**
  * 绑定引擎到指定前端会话（set_env 下发 persona + load_session 建立映射）。
  * 之后对该 sessionId 的 prompt/steer 即在绑定的 dsh 会话里跑（有上文）。
+ * @returns 引擎侧 dsh 会话 id（酒馆绑定登记等用途；拿不到返回 null）
  */
-export async function bindEngineSession(sessionId: string, persona: string | null): Promise<void> {
+export async function bindEngineSession(sessionId: string, persona: string | null): Promise<string | null> {
   const env = $engineEnv.get();
   await invoke("dsh_set_env", { envId: env.id, cwd: env.cwd, systemPrompt: persona });
-  await invoke("load_dsh_session", { sessionId });
+  const res = await invoke<{ dshSessionId?: string } | null>("load_dsh_session", { sessionId });
+  return res?.dshSessionId ?? null;
 }
