@@ -2747,8 +2747,8 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
 
   const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入角色");
 
-  const importMember = (key: string, name: string, systemPrompt: string, desc: string): void => {
-    upsertTavernMember({ key, name, systemPrompt, desc });
+  const importMember = (key: string, name: string, systemPrompt: string, desc: string, presetId?: string): void => {
+    upsertTavernMember({ key, name, systemPrompt, desc, presetId });
     afterImport(key);
     setNote("已导入「" + name + "」（聊天环境成员），到左栏「成员」开聊");
   };
@@ -2759,6 +2759,7 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
       p.name,
       presetToPersona(p),
       p.description || "酒馆角色 · 预设 " + p.key,
+      p.key, // 预设 id（=目录名）：成员会话空白期绑定，点亮世界书/记忆/关系网/剧情选项
     );
   };
 

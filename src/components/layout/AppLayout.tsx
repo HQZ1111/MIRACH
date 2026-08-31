@@ -329,6 +329,8 @@ export function AppLayout() {
   // 成员线程不经 $chat（与主对话转录分轨）；thinking 阶段气泡显示 "…" 占位，
   // 首个 text delta 替换占位，complete 用权威文本定稿，error 落 ⚠️ 行。
   const [memberBusy, setMemberBusy] = useState<Record<string, boolean>>({});
+  // 已尝试过酒馆预设绑定的成员（select 仅限空白会话，锁定后不重试，回退人设直注入）
+  const presetBoundRef = useRef<Set<string>>(new Set());
   const routeMemberEvent = useCallback((memberId: string, e: MirachEvent) => {
     switch (e.type) {
       case "message.start": {
@@ -427,7 +429,18 @@ export function AppLayout() {
     void (async () => {
       try {
         const member = $agents.get().find((a) => a.id === memberId);
-        await bindEngineSession(`member-${memberId}`, member?.systemPrompt ?? null);
+        // 带酒馆预设的成员：人设由预设组合（persona 插件）提供，不再直注入
+        const usePreset = !!member?.tavernPresetId;
+        await bindEngineSession(`member-${memberId}`, usePreset ? null : member?.systemPrompt ?? null);
+        // 空白会话绑定酒馆预设（agentPresets.select）：世界书智能注入/记忆总结/
+        // 关系网/剧情选项随挂载激活；已有回合（locked）时回退人设直注入
+        if (usePreset && !presetBoundRef.current.has(memberId)) {
+          const ok = await getApi().selectAgentPreset(`member-${memberId}`, member!.tavernPresetId!);
+          presetBoundRef.current.add(memberId);
+          if (!ok && member?.systemPrompt) {
+            await bindEngineSession(`member-${memberId}`, member.systemPrompt);
+          }
+        }
         await getApi().submitPromptStream(`member-${memberId}`, text, (e) => routeMemberEvent(memberId, e));
       } catch (err) {
         routeMemberEvent(memberId, {

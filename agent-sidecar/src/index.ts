@@ -627,6 +627,35 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         }
         return;
       }
+      // 酒馆预设绑定（agentPresets.select）：空白会话把 agent 组成切换到目标预设
+      // ——世界书智能注入/记忆总结/关系网/剧情选项等服务随预设挂载激活。
+      // params = { sessionId(前端 id), agentPreset(预设 id=目录名) }。
+      // wire 形态 { agentId, agentPreset }（typert lookup），编码被拒时回退位置数组。
+      if (method === "agentPresets.select") {
+        try {
+          const p = (params ?? {}) as { sessionId?: string; agentPreset?: string };
+          loadSessionMap();
+          const dshId = (p.sessionId ? sessionMap.get(envSessionKey(p.sessionId)) : undefined) ?? p.sessionId ?? "";
+          if (!dshId || !p.agentPreset) {
+            send({ type: "error", id, message: "agentPresets.select 需要 sessionId 与 agentPreset" });
+            return;
+          }
+          const rt = await ensureRuntime(activeModel);
+          let result: unknown;
+          try {
+            result = await rt.harness.client.request(method, { agentId: dshId, agentPreset: p.agentPreset }, 30_000);
+          } catch (encErr) {
+            logWarn("agentPresets.select object-encode rejected, retry positional: %s", encErr instanceof Error ? encErr.message : String(encErr));
+            result = await rt.harness.client.request(method, [dshId, p.agentPreset], 30_000);
+          }
+          log("agentPresets.select ok: %s -> %s", dshId, p.agentPreset);
+          send({ type: "result", id, data: result });
+        } catch (err) {
+          logWarn("agentPresets.select failed: %s", err instanceof Error ? err.message : String(err));
+          send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
       // 本地方法：config.pluginEntries（设置页插件列表）——读生成 cordis.yml 的
       // 插件条目（引擎没有对应 RPC，这里是 sidecar 侧真实装配的镜像）
       if (method === "config.pluginEntries") {

@@ -523,6 +523,29 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十批：深度融合——会话绑定酒馆预设 ✅（2026-09-01 深夜）
+
+**机制探明**（packages/preset/agent-presets/lib/index.js）：引擎 `AgentPresets`
+服务暴露 Remote `select(agent, agentPreset)`——**空白会话**（无 turn/start）可
+把 agent 组成切换到目标预设（recompose + mount），并写 `agent-preset/selected`
+事件（持久化，续聊重建同组成）。世界书智能注入/记忆总结/关系网/剧情选项等服务
+都在预设挂载里，绑定即激活。客户端调用形态：`agentPresets.select(sessionId, presetId)`
+（typert wire = { agentId, agentPreset }，编码被拒回退位置数组）。
+
+**接线**（全部落码，tsc 通过；sidecar 变更需重启应用生效）：
+1. sidecar rpc 透传特例 `agentPresets.select`：params {sessionId(前端 id),
+   agentPreset} → sessionMap 解析 dshId → harness client 两种编码各试一次。
+2. api：`selectAgentPreset(sessionId, presetId)`（RealClient 经 dsh_rpc；locked/
+   不存在返回 false）。
+3. agents store：`ConvItem.tavernPresetId`（酒馆预设导入时携带 = 目录名）。
+4. AppLayout 成员发送：带预设的成员 → bindEngineSession 不注 persona（人设由
+   预设组合提供）→ 空白期 `selectAgentPreset`（每成员只试一次，锁定/失败回退
+   人设直注入）→ prompt。绑定成功 = 该成员会话跑在完整酒馆组合上。
+
+**剩余 UI 增强（待做）**：剧情选项点击按钮（识别 AI 回复末尾选项行）、状态栏
+卡片渲染、世界书管理面板。NSFW 破限**不做**（立场不变：那是绕过模型安全训练
+的机制；酒馆插件自带开关在它自己的面板里，不经 mirach 代码）。
+
 # 第九批：SillyTavern PNG 卡直拖导入 + 市场 ST 卡兼容（2026-09-01）
 
 用户问：① PNG 能直接拖吗 ② 酒馆能和 dsh-agent-rp 融合吗 ③ 市场能用 SillyTavern

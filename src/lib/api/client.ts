@@ -76,6 +76,9 @@ export interface MirachClient {
   getAuthStatus(): Promise<AuthStatus | null>;
   /** 消息反馈上报（dsh messageFeedback.put；messageId 用引擎 assistant 消息 id） */
   sendMessageFeedback(messageId: string, rating: "positive" | "negative"): Promise<boolean>;
+  /** 绑定酒馆预设到空白会话（agentPresets.select：世界书/记忆/关系网/剧情选项随挂载激活）。
+   *  会话已有回合时引擎拒绝（locked）→ 返回 false；成功返回 true。 */
+  selectAgentPreset(sessionId: string, presetId: string): Promise<boolean>;
   /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
   listEnginePlugins(): Promise<{ id: string; name: string }[]>;
   /** 订阅服务端事件流；返回取消订阅函数 */
@@ -249,6 +252,10 @@ class MockClient implements MirachClient {
 
   async sendMessageFeedback(_messageId: string, _rating: "positive" | "negative"): Promise<boolean> {
     return true; // mock：本地赞踩即可
+  }
+
+  async selectAgentPreset(_sessionId: string, _presetId: string): Promise<boolean> {
+    return false; // mock 无引擎预设
   }
 
   subscribe(onEvent: (e: MirachEvent) => void): () => void {
@@ -770,6 +777,20 @@ class RealClient implements MirachClient {
       });
       return Boolean((res as { ok?: boolean } | null)?.ok);
     } catch {
+      return false;
+    }
+  }
+
+  /** 绑定酒馆预设到空白会话（agentPresets.select，sidecar 透传；锁定的会话返回 false） */
+  async selectAgentPreset(sessionId: string, presetId: string): Promise<boolean> {
+    try {
+      await invoke("dsh_rpc", {
+        method: "agentPresets.select",
+        params: { sessionId, agentPreset: presetId },
+      });
+      return true;
+    } catch {
+      // 会话已有回合（locked）/ 预设不存在：绑定失败
       return false;
     }
   }

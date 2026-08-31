@@ -29,6 +29,9 @@ export interface ConvItem {
   tools?: string[];
   /** 来源（"tavern" = 酒馆角色卡/预设导入；缺省 = mirach 原生成员） */
   source?: "tavern";
+  /** 酒馆预设 id（来源为酒馆预设时携带）：成员会话空白期绑定它，
+   *  点亮引擎侧酒馆功能（世界书智能注入/记忆总结/关系网/剧情选项） */
+  tavernPresetId?: string;
 }
 
 const STORAGE_KEY = "mirach.agents.v1";
@@ -282,6 +285,8 @@ export interface TavernMemberInput {
   name: string;
   systemPrompt: string;
   desc?: string;
+  /** 酒馆预设 id（来源为酒馆预设时携带；成员会话空白期绑定） */
+  presetId?: string;
 }
 
 /** 酒馆成员固定归属：聊天环境（用户约定——酒馆角色只放聊天环境） */
@@ -296,7 +301,14 @@ export function upsertTavernMember(input: TavernMemberInput): ConvItem {
   if (existing) {
     next = list.map((a) =>
       a.id === id
-        ? { ...a, name: input.name, systemPrompt: input.systemPrompt, desc: input.desc ?? a.desc, source: "tavern" as const }
+        ? {
+            ...a,
+            name: input.name,
+            systemPrompt: input.systemPrompt,
+            desc: input.desc ?? a.desc,
+            source: "tavern" as const,
+            tavernPresetId: input.presetId,
+          }
         : a,
     );
   } else {
@@ -314,6 +326,7 @@ export function upsertTavernMember(input: TavernMemberInput): ConvItem {
         tab: "all" as const,
         systemPrompt: input.systemPrompt,
         source: "tavern" as const,
+        tavernPresetId: input.presetId,
       },
     ];
   }
