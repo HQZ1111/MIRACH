@@ -503,6 +503,29 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
 拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
 
+# 酒馆角色接入成员体系（2026-08-31 完成）
+
+> 用户问"之前装的三个插件有个酒馆的，能合进聊天的成员里吗"。实况：本机只装过
+> dsh-workgroup + dsh-realtime-voice（~/.mirach/dsh-plugins），酒馆从未装过/已丢失
+> ——本次新装 dsh-tavern@2.2.2（PolyForm-NC，个人使用 OK）并做两层接入。
+
+**引擎侧**（需重启应用生效）：
+- dsh-tavern@2.2.2 npm 装进 ~/.mirach/dsh-plugins（连带 dsh-muv-table/engine）；
+- junction：profiles/mirach/node_modules/dsh-tavern → dsh-plugins/node_modules/dsh-tavern
+  （与 workgroup/voice 同模式）；cordis.patch.yml insert `- id: tavern, name: 'dsh-tavern'`；
+- 酒馆数据根：**~/.dsh/.agent-presets**（插件 index.js 硬编码 homedir，不随 DSH_HOME），
+  每预设目录含 preset.yml（name/description）+ agent.cordis.yml（persona 块标量=角色卡注入文本）。
+
+**成员侧**（纯前端，tsc 通过）：
+- src/lib/tavern.ts：listTavernPresets（Tauri read_dir/read_file 扫预设目录；
+  主目录从 get_config().data_dir 上溯三级推得，不加 Rust 命令）+ extractPersonaText
+  （agent.cordis.yml text 块标量解析）+ parseCharacterCard/cardToPersona（SillyTavern
+  V2/V3 JSON 直导）；
+- agents store：ConvItem.source?: "tavern" + upsertTavernMember（id=tavern-<key> 幂等，
+  重导只更新）；人设走既有成员管线（set_env.systemPrompt 注入），零引擎耦合；
+- 设置页 → 智能体团队 → 「导入酒馆角色」：预设列表（空态给路径提示）+ 角色卡
+  JSON 多选直导。成员卡显示 source；删除走原 removeAgent。
+
 08-31 补充（用户反馈修正）：
 - 图标全量换 Phosphor weight="fill"（面性）——曾误用 lucide 线性，左工具栏环境按钮
   风格跑偏；现与左工具栏固定项一致（size 24 + var(--tool-icon-*) 色）。

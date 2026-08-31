@@ -27,6 +27,8 @@ export interface ConvItem {
   model?: string;
   /** 可用工具清单（bash/文件/搜索/浏览器/网络/代码） */
   tools?: string[];
+  /** 来源（"tavern" = 酒馆角色卡/预设导入；缺省 = mirach 原生成员） */
+  source?: "tavern";
 }
 
 const STORAGE_KEY = "mirach.agents.v1";
@@ -198,10 +200,10 @@ export function addAgent(input: {
   return agent;
 }
 
-/** 修改智能体（name/desc/avatarBg/status/tab/systemPrompt/model/tools） */
+/** 修改智能体（name/desc/avatarBg/status/tab/systemPrompt/model/tools/source） */
 export function updateAgent(
   id: string,
-  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools">>,
+  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
 ): void {
   commit(
     $agents.get().map((a) => {
@@ -217,6 +219,49 @@ export function updateAgent(
 }
 
 /** 删除智能体 */
-export function removeAgent(id: string): void {
+export function removeAgent(id: string): boolean {
+  const before = $agents.get().length;
   commit($agents.get().filter((a) => a.id !== id));
+  return $agents.get().length < before;
+}
+
+// ---- 酒馆角色导入（dsh-tavern → 成员；同 key 幂等 upsert） ----
+
+export interface TavernMemberInput {
+  /** 稳定键（预设目录名 / 角色卡 name）→ 成员 id = tavern-<key>，重导不重复 */
+  key: string;
+  name: string;
+  systemPrompt: string;
+  desc?: string;
+}
+
+/** 导入/更新一个酒馆角色成员（按 key 幂等：已存在则更新人设，不重复建卡） */
+export function upsertTavernMember(input: TavernMemberInput): ConvItem {
+  const id = `tavern-${input.key}`;
+  const existing = $agents.get().find((a) => a.id === id);
+  if (existing) {
+    updateAgent(id, {
+      name: input.name,
+      systemPrompt: input.systemPrompt,
+      desc: input.desc ?? existing.desc,
+      source: "tavern",
+    });
+    return $agents.get().find((a) => a.id === id)!;
+  }
+  const list = $agents.get();
+  const agent: ConvItem = {
+    id,
+    name: input.name,
+    initials: input.name.slice(0, 2).toUpperCase(),
+    avatarBg: AVATAR_COLORS[(list.length + 3) % AVATAR_COLORS.length],
+    preview: "酒馆角色就绪，直接开始对话",
+    desc: input.desc?.trim() || "酒馆角色 · 角色扮演",
+    time: "刚刚",
+    status: "pending",
+    tab: "all",
+    systemPrompt: input.systemPrompt,
+    source: "tavern",
+  };
+  commit([...list, agent]);
+  return agent;
 }
