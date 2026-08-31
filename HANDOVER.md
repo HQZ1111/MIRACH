@@ -523,6 +523,23 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十三批：原生面板归位聊天环境 + dsw 令牌修正（2026-09-01 深夜）
+
+用户反馈：原生面板渲染错乱、与设置不对齐；插件是聊天环境专用的，应放在聊天
+智能体上方；问原生 NSFW 开关是否有用。
+
+- **面板挪位 ✅**：删除独立「酒馆管理（原生）」设置分区（SECTIONS/case/i18n 保留
+  键），NativeTavernPanel 改为嵌在 AgentSection——仅聊天环境标签显示，位于
+  智能体卡片列表上方。
+- **样式错乱修正 ✅**：插件 CSS 依赖官方 `--dsw-alias-*` 令牌（宿主没有 → 颜色/
+  边框全乱）——宿主容器补齐 DSW_ALIAS_VARS（label/border/bg/brand/state 系列
+  浅色值）+ inherit 字体；外框 border+白底与设置页对齐。
+- **NSFW 开关结论（查证）**：有用——`state.nsfwEnabled` 持久化在引擎侧，开启后
+  插件注册 `tavern:nsfw` systemPrompt 段，对**绑定酒馆预设的会话**生效（即从
+  "酒馆预设"导入的成员）；主对话等人设直注入会话不受影响。机制属插件引擎侧，
+  mirach 未参与。NSFW 接线拒绝立场不变。
+- tsc 通过。
+
 # 第十二批：酒馆管理（原生）面板接入设置页 ✅（2026-09-01 深夜）
 
 用户指出：酒馆插件自带"酒馆管理（原生）"设置面板，直接连进 mirach 设置即可。

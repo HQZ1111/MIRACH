@@ -83,7 +83,6 @@ import {
   Upload,
   Users,
   Brain,
-  Store,
   X,
   type LucideIcon,
   Layers,
@@ -101,7 +100,6 @@ const SECTIONS: SettingsSection[] = [
   { id: "presets", icon: Bot },
   { id: "agents", icon: Users },
   { id: "memory", icon: Brain },
-  { id: "tavern", icon: Store },
   { id: "sessions", icon: Archive },
   { id: "safety", icon: Lock },
   { id: "git", icon: GitBranch },
@@ -1871,6 +1869,13 @@ function AgentSection() {
         </div>
       </div>
 
+      {/* 酒馆管理（原生）：聊天环境专属，置于聊天智能体上方 */}
+      {viewEnv === TAVERN_MEMBER_ENV && (
+        <div className="px-5 pb-3">
+          <NativeTavernPanel />
+        </div>
+      )}
+
       <div className="px-5 pb-4">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {list.map((a) => (
@@ -2397,7 +2402,6 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       case "presets": return <PresetsContent />;
       case "agents": return <AgentSection />;
       case "memory": return <MemorySection />;
-      case "tavern": return <NativeTavernPanel />;
       case "sessions": return <SessionsContent />;
       case "safety": return <SafetyContent />;
       case "git": return <GitContent />;
@@ -2475,11 +2479,25 @@ function NavItem({ id, icon: Icon, active, onClick }: { id: string; icon: Lucide
 }
 
 // ================================================================
-// NativeTavernPanel — 酒馆管理（原生）设置面板
-// 直接渲染酒馆插件 client bundle 注册进 settings.section 槽位的官方面板
-// （boot.ts 经 kernel 加载 bundle 并提供 slots/locale shim）。bundle 未加载
-// （VITE_KERNEL 关闭/boot 失败）时显示引导文案。
+// NativeTavernPanel — 酒馆管理（原生）面板
+// 渲染酒馆插件 client bundle 注册进 settings.section 槽位的官方面板
+// （boot.ts 经 kernel 加载 bundle 并提供 slots/locale shim）。
+// 插件 CSS 依赖官方 --dsw-alias-* 令牌 → 宿主容器补齐变量；否则颜色错乱。
 // ================================================================
+
+/** 官方 dsw alias 令牌 → mirach 浅色值（原生面板样式依赖） */
+const DSW_ALIAS_VARS = {
+  "--dsw-alias-label-primary": "#303030",
+  "--dsw-alias-label-secondary": "#6B7280",
+  "--dsw-alias-label-caption": "#8B8C8F",
+  "--dsw-alias-border-l1": "#E5E7EB",
+  "--dsw-alias-border-l2": "#E5E7EB",
+  "--dsw-alias-bg-layer-1": "#FFFFFF",
+  "--dsw-alias-bg-layer-2": "#F5F6F8",
+  "--dsw-alias-brand-primary": "#017CF3",
+  "--dsw-alias-state-business-primary": "#017CF3",
+  "--dsw-font-base": '13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif',
+} as React.CSSProperties;
 
 function NativeTavernPanel() {
   const [entry, setEntry] = useState<{ id: string; label: string; render: (props: unknown) => unknown } | null>(() =>
@@ -2496,19 +2514,18 @@ function NativeTavernPanel() {
   }, [entry, tick]);
   if (!entry) {
     return (
-      <div>
-        <SubHeading>酒馆管理（原生）</SubHeading>
-        <p className="px-5 py-2 text-xs leading-relaxed text-muted-foreground">
+      <div className="rounded-lg border border-black/10 bg-white p-3">
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
           原生面板未加载：需要 VITE_KERNEL=1 启动内核且酒馆插件 client bundle 可用。
-          请重启应用重试；角色/世界书也可在「智能体团队 → 导入酒馆角色」中管理。
+          请重启应用重试。
         </p>
       </div>
     );
   }
   const el = entry.render({ ctx: kernelContext() });
   return (
-    <div>
-      <div className="px-5 py-3">{el as React.ReactElement}</div>
+    <div className="tavern-native-host rounded-lg border border-black/10 bg-white px-3 py-3" style={DSW_ALIAS_VARS}>
+      {el as React.ReactElement}
     </div>
   );
 }
