@@ -33,6 +33,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSy
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
+import { listPlugins, installPlugin, uninstallPlugin } from "./plugins.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
@@ -592,6 +593,26 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         return;
       }
       // 本地方法：session/fork（真分叉）——映射源前端会话 → dsh 源会话，
+      // 社区插件一键管理（plugins.list / plugins.install / plugins.uninstall）：
+      // 自动化官方 `dsh plugin add` 的手工等价三步（npm 装 dsh-plugins → junction
+      // 到 profile node_modules → profile cordis.patch.yml 追加）。装载在 runtime
+      // 启动时发生 —— 安装/卸载后需重启应用。
+      if (method === "plugins.list" || method === "plugins.install" || method === "plugins.uninstall") {
+        try {
+          if (method === "plugins.list") {
+            send({ type: "result", id, data: { plugins: await listPlugins() } });
+          } else {
+            const name = String((params as { name?: string } | undefined)?.name ?? "").trim();
+            if (!name) throw new Error("缺少 name（npm 包名）");
+            const lines = method === "plugins.install" ? await installPlugin(name) : await uninstallPlugin(name);
+            send({ type: "result", id, data: { logs: lines } });
+          }
+        } catch (err) {
+          logWarn("plugins.%s failed: %s", method.split(".")[1] ?? "", err instanceof Error ? err.message : String(err));
+          send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
       // 引擎 ctx.sessions.fork（最近完成回合边界）产出子会话，
       // 新前端会话 id → 子 dsh 会话的映射即刻落盘
       if (method === "session/fork") {

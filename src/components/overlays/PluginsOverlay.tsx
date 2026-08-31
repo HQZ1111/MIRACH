@@ -1,38 +1,36 @@
-﻿/**
- * PluginsOverlay — 插件管理器（S3-5，对应原型 plugins-settings）
+/**
+ * PluginsOverlay — 插件管理器（真实化：社区插件一键安装）
  *
- * 两个标签：已安装（启停/卸载）+ 可安装目录（安装）。
- * 数据走 $plugins store（localStorage 持久化）；主面板标题区图标同步读取。
+ * 三个标签：
+ *   已安装  — dsh-plugins 目录扫描（plugins.list）：包名/版本/描述 + 激活状态
+ *             + 卸载（内置三件禁用卸载）
+ *   安装    — npm 包名输入（如 dsh-tavern）→ plugins.install（npm → junction →
+ *             patch 追加，步骤日志实时展示）
+ *   引擎插件 — cordis 装配清单（config.pluginEntries）
+ *
+ * 装载发生在 runtime 启动：安装/卸载后需重启应用生效。
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { useStore } from "@nanostores/react";
-import { Download, LayoutTemplate, Package, Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Download, LayoutTemplate, Package, RefreshCw, Search, Trash2 } from "lucide-react";
 import { OverlayShell } from "@/components/overlays/OverlayShell";
 import { getApi } from "@/lib/api";
+import type { InstalledPluginInfo } from "@/lib/api/client";
 import { getPluginViewPages } from "@/plugins/registry";
-import {
-  $plugins,
-  installPlugin,
-  PLUGIN_CATALOG,
-  togglePlugin,
-  uninstallPlugin,
-} from "@/store/plugins";
 
-function SwitchButton({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+type Installed = InstalledPluginInfo;
+
+function SwitchBadge({ active }: { active: boolean }) {
   return (
-    <button
-      role="switch"
-      aria-checked={on}
-      onClick={() => onChange(!on)}
+    <span
       className={cn(
-        "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors",
-        on ? "justify-end bg-[#303030]" : "justify-start bg-[#D1D5DB]",
+        "shrink-0 rounded-full px-2 py-0.5 text-[10px]",
+        active ? "bg-[#10B981]/10 text-[#059669]" : "bg-muted text-muted-foreground",
       )}
     >
-      <span className="h-[14px] w-[14px] rounded-full bg-white shadow-sm" />
-    </button>
+      {active ? "已激活" : "未激活"}
+    </span>
   );
 }
 
@@ -41,14 +39,60 @@ export function PluginsOverlay({
   onOpenPluginView,
 }: {
   onClose: () => void;
-  /** 打开插件注册的独立页面（viewPage 扩展路由） */
+  /** 打开插件注册的独立页面（viewId 扩展路由） */
   onOpenPluginView?: (viewId: string) => void;
 }) {
-  const plugins = useStore($plugins);
   const [tab, setTab] = useState<"installed" | "catalog" | "engine">("installed");
   const [query, setQuery] = useState("");
-  // 注册表里带独立页面的插件（代码级贡献点，与 store 插件并列展示）
+  // 注册表里带独立页面的插件（代码级贡献点）
   const viewPages = useMemo(() => getPluginViewPages(), []);
+
+  const [installed, setInstalled] = useState<Installed[] | null>(null);
+  const [installName, setInstallName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+
+  const refresh = useCallback(() => {
+    void getApi()
+      .listCommunityPlugins()
+      .then((list) => setInstalled(list))
+      .catch(() => setInstalled([]));
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const doInstall = async (): Promise<void> => {
+    const name = installName.trim();
+    if (!name) return;
+    setBusy(true);
+    setLogs([`安装 ${name} …`]);
+    try {
+      const lines = await getApi().installCommunityPlugin(name);
+      setLogs(lines);
+      setInstallName("");
+      refresh();
+    } catch (e) {
+      setLogs((l) => [...l, "失败：" + String(e)]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doUninstall = async (name: string): Promise<void> => {
+    if (!window.confirm(`卸载插件「${name}」？重启应用后生效。`)) return;
+    setBusy(true);
+    setLogs([`卸载 ${name} …`]);
+    try {
+      const lines = await getApi().uninstallCommunityPlugin(name);
+      setLogs(lines);
+      refresh();
+    } catch (e) {
+      setLogs((l) => [...l, "失败：" + String(e)]);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // 引擎插件清单（真实 cordis 装配镜像，sidecar config.pluginEntries）
   const [enginePlugins, setEnginePlugins] = useState<{ id: string; name: string }[] | null>(null);
@@ -75,16 +119,11 @@ export function PluginsOverlay({
     if (!q) return enginePlugins;
     return enginePlugins.filter((e) => e.id.toLowerCase().includes(q) || e.name.toLowerCase().includes(q));
   }, [enginePlugins, q]);
-  const installed = useMemo(
-    () => (q ? plugins.filter((p) => p.label.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q)) : plugins),
-    [plugins, q],
-  );
-
-  const catalog = useMemo(() => {
-    const installedIds = new Set(plugins.map((p) => p.id));
-    const notInstalled = PLUGIN_CATALOG.filter((p) => !installedIds.has(p.id));
-    return q ? notInstalled.filter((p) => p.label.toLowerCase().includes(q) || p.desc.toLowerCase().includes(q)) : notInstalled;
-  }, [plugins, q]);
+  const installedFiltered = useMemo(() => {
+    if (!installed) return null;
+    if (!q) return installed;
+    return installed.filter((p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
+  }, [installed, q]);
 
   return (
     <OverlayShell
@@ -103,7 +142,7 @@ export function PluginsOverlay({
                 tab === t ? "bg-[#303030] text-white" : "text-muted-foreground hover:text-[#303030]",
               )}
             >
-              {t === "installed" ? `已安装 ${plugins.length}` : t === "catalog" ? "插件目录" : "引擎插件"}
+              {t === "installed" ? `已安装 ${installed?.length ?? "…"}` : t === "catalog" ? "安装" : "引擎插件"}
             </button>
           ))}
         </div>
@@ -148,29 +187,34 @@ export function PluginsOverlay({
             )
           ) : tab === "installed" ? (
             <>
-              {installed.length === 0 ? (
+              {installedFiltered === null ? (
+                <p className="px-3 py-8 text-center text-body-sm text-muted-foreground">正在读取…</p>
+              ) : installedFiltered.length === 0 ? (
                 <p className="px-3 py-8 text-center text-body-sm text-muted-foreground">
-                  {query ? "没有匹配的插件" : "暂无插件 — 到「插件目录」安装"}
+                  {query ? "没有匹配的插件" : "暂无社区插件 — 到「安装」页签输入 npm 包名"}
                 </p>
               ) : (
                 <div className="space-y-1.5">
-                  {installed.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
+                  {installedFiltered.map((p) => (
+                    <div key={p.name} className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-[#464646]">
                         <Package className="h-4 w-4" strokeWidth={2} />
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-body-sm font-medium text-[#303030]">{p.label}</p>
-                        <p className="truncate text-[11px] text-muted-foreground">{p.desc}</p>
+                        <p className="truncate text-body-sm font-medium text-[#303030]">
+                          {p.name}
+                          {p.version && <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">{p.version}</span>}
+                          {p.builtin && <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">内置</span>}
+                          {!p.isPlugin && <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">依赖包</span>}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">{p.description || "—"}</p>
                       </div>
-                      <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground sm:block">
-                        {p.category}
-                      </span>
-                      <SwitchButton on={p.enabled} onChange={() => togglePlugin(p.id)} />
+                      {p.isPlugin && <SwitchBadge active={p.active} />}
                       <button
-                        onClick={() => uninstallPlugin(p.id)}
-                        title="卸载"
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#EF4444]"
+                        onClick={() => void doUninstall(p.name)}
+                        disabled={p.builtin || busy}
+                        title={p.builtin ? "内置插件不可卸载" : "卸载（重启后生效）"}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#EF4444] disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                       </button>
@@ -212,39 +256,53 @@ export function PluginsOverlay({
                 </div>
               )}
             </>
-          ) : catalog.length === 0 ? (
-            <p className="px-3 py-8 text-center text-body-sm text-muted-foreground">
-              {query ? "没有匹配的插件" : "目录已全部安装 🎉"}
-            </p>
           ) : (
-            <div className="space-y-1.5">
-              {catalog.map((p) => (
-                <div key={p.id} className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-[#464646]">
-                    <Package className="h-4 w-4" strokeWidth={2} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-body-sm font-medium text-[#303030]">{p.label}</p>
-                    <p className="truncate text-[11px] text-muted-foreground">{p.desc}</p>
-                  </div>
-                  <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground sm:block">
-                    {p.category}
-                  </span>
+            <>
+              <div className="rounded-lg border border-border/60 p-3">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  输入 npm 包名安装社区插件（如 <span className="font-mono">dsh-tavern</span>）。
+                  安装 = 装包到插件目录 + 自动激活（junction + 补丁行），<b>重启应用后生效</b>。
+                </p>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <input
+                    value={installName}
+                    onChange={(e) => setInstallName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !busy && void doInstall()}
+                    placeholder="npm 包名（如 dsh-tavern 或 dsh-tavern@1.0.0）"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-white px-2.5 py-1.5 font-mono text-[12px] text-[#303030] outline-none focus:border-[#6366F1]"
+                  />
                   <button
-                    onClick={() => installPlugin(p.id)}
-                    className="flex shrink-0 items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-[#303030] transition-colors hover:bg-muted"
+                    onClick={() => void doInstall()}
+                    disabled={busy || !installName.trim()}
+                    className="flex shrink-0 items-center gap-1 rounded-md bg-[#303030] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
                   >
-                    <Download className="h-3 w-3" strokeWidth={2} />
-                    安装
+                    <Download className="h-3.5 w-3.5" strokeWidth={2} />
+                    {busy ? "安装中…" : "安装"}
                   </button>
                 </div>
-              ))}
-            </div>
+                {logs.length > 0 && (
+                  <pre className="mt-2 max-h-32 overflow-y-auto rounded-md bg-black/5 p-2 font-mono text-[10px] leading-relaxed text-[#303030] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {logs.join("\n")}
+                  </pre>
+                )}
+              </div>
+              <p className="mt-2 px-1 text-[11px] leading-relaxed text-muted-foreground">
+                提示：社区插件都是 npm 包（dsh- 前缀）；安装后到「已安装」查看激活状态。
+                需要界面扩展（如酒馆管理面板）的插件，重启后在其设置入口出现。
+              </p>
+              <button
+                onClick={refresh}
+                className="mt-2 flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
+              >
+                <RefreshCw className="h-3 w-3" />
+                刷新列表
+              </button>
+            </>
           )}
         </div>
 
         <p className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-          主面板标题区的插件图标仅显示已启用插件；真实插件市场 / 本地目录扫描随 Rust 层接入。
+          插件装载发生在引擎启动时：安装 / 卸载后需重启应用生效。
         </p>
       </div>
     </OverlayShell>

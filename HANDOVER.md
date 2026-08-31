@@ -523,6 +523,34 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十六批：插件一键安装（即插即用）✅（2026-09-01）
+
+用户问"装插件为什么这么麻烦，不是即插即用吗"。调查结论：官方 dsh 本有
+`dsh plugin --profile <名> add <npm包>`（pnpm 装 profile + 插件自带 patch 自动
+激活 + bundles 对账，Explore 报告佐证）；但 mirach profile 非官方初始化 +
+插件外挂布局 + 前端硬编码路径，直接用官方命令有 5 个摩擦点。方案 = 把手动
+三步自动化成 mirach 自有安装器（零 Rust 改动）：
+
+1. **sidecar**（agent-sidecar/src/plugins.ts + index.ts rpc 特例）：
+   - `plugins.list`：扫描 ~/.mirach/dsh-plugins/node_modules（顶层+scope 一级），
+     读 package.json（name/version/desc/含 dsh 字段=插件包），激活状态 =
+     profile cordis.patch.yml 含 `name: '<pkg>'`，junction 状态，内置标记；
+   - `plugins.install {name}`：npm install（--legacy-peer-deps，cwd=dsh-plugins）
+     → junction 到 profile node_modules → cordis.patch.yml insert 列表追加
+     （幂等），返回步骤日志；
+   - `plugins.uninstall {name}`：patch 移除 → junction 删除 → npm uninstall。
+2. **前端**：PluginsOverlay 真实化重写——「已安装」= plugins.list（激活徽标/
+   内置/依赖包标注，内置三件禁卸载）；「安装」= npm 包名输入 + 步骤日志 +
+   重启提示；「引擎插件」保留。api 新增 listCommunityPlugins/
+   installCommunityPlugin/uninstallCommunityPlugin；listEnginePlugins 修复为
+   dsh_rpc 通道（原 relay_rpc HTTP 必失败）。
+3. **酒馆迁移官方 bundles 机制**：profile package.json dsh.profile.bundles += 
+   "dsh-tavern"（插件包自带 patch 接管），cordis.patch.yml 手动 insert 行删除
+   ——tavern 升级后自动生效（等价官方 reconcile 结果）。
+- **需重启应用**：装载在 runtime 启动（bundles/patch 均不热加载新插件）。
+- 不做：npm search 市场发现、官方 pnpm 路线迁移（已论证风险）。
+- tsc 双通过。
+
 # 第十五批：酒馆注入门控补全（2026-09-01 深夜）
 
 用户问"插件能只作用在聊天环境里吗"。深挖插件注入门控后的结论 + 补全：

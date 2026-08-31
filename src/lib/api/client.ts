@@ -76,6 +76,12 @@ export interface MirachClient {
   getAuthStatus(): Promise<AuthStatus | null>;
   /** 消息反馈上报（dsh messageFeedback.put；messageId 用引擎 assistant 消息 id） */
   sendMessageFeedback(messageId: string, rating: "positive" | "negative"): Promise<boolean>;
+  /** 社区插件清单（dsh-plugins 目录扫描 + 激活状态） */
+  listCommunityPlugins(): Promise<InstalledPluginInfo[]>;
+  /** 安装社区插件（npm → junction → patch；返回步骤日志，重启应用后生效） */
+  installCommunityPlugin(name: string): Promise<string[]>;
+  /** 卸载社区插件（返回步骤日志，重启应用后生效） */
+  uninstallCommunityPlugin(name: string): Promise<string[]>;
   /** 绑定酒馆预设到空白会话（agentPresets.select：世界书/记忆/关系网/剧情选项随挂载激活）。
    *  会话已有回合时引擎拒绝（locked）→ 返回 false；成功返回 true。 */
   selectAgentPreset(sessionId: string, presetId: string): Promise<boolean>;
@@ -88,6 +94,21 @@ export interface MirachClient {
 // ================================================================
 // Mock 实现（VITE_MOCK=1：演示数据）
 // ================================================================
+
+/** 社区插件（dsh-plugins 目录里已安装的包） */
+export interface InstalledPluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  /** package.json 声明 dsh 字段 = 插件包 */
+  isPlugin: boolean;
+  /** profile cordis.patch.yml 已激活 */
+  active: boolean;
+  /** junction 已建（profile node_modules 可解析） */
+  linked: boolean;
+  /** mirach 内置三件（UI 禁用卸载） */
+  builtin: boolean;
+}
 
 class MockClient implements MirachClient {
   readonly mode = "mock" as const;
@@ -256,6 +277,18 @@ class MockClient implements MirachClient {
 
   async selectAgentPreset(_sessionId: string, _presetId: string): Promise<boolean> {
     return false; // mock 无引擎预设
+  }
+
+  async listCommunityPlugins(): Promise<InstalledPluginInfo[]> {
+    return []; // mock 无插件目录
+  }
+
+  async installCommunityPlugin(_name: string): Promise<string[]> {
+    return ["（mock）无需安装"];
+  }
+
+  async uninstallCommunityPlugin(_name: string): Promise<string[]> {
+    return ["（mock）无需卸载"];
   }
 
   subscribe(onEvent: (e: MirachEvent) => void): () => void {
@@ -660,17 +693,39 @@ class RealClient implements MirachClient {
     }
   }
 
-  /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
+  /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries 走 stdin 通道） */
   async listEnginePlugins(): Promise<{ id: string; name: string }[]> {
     try {
-      const raw = await invoke<unknown>("relay_rpc", { method: "config.pluginEntries", params: null });
-      const entries = ((raw as { result?: { entries?: unknown[] } } | null)?.result?.entries ?? []) as { id: string; name: string }[];
+      const raw = await invoke<unknown>("dsh_rpc", { method: "config.pluginEntries", params: null });
+      const entries = ((raw as { entries?: unknown[] } | null)?.entries ?? []) as { id: string; name: string }[];
       return entries
         .filter((e) => e && typeof e.id === "string")
         .map((e) => ({ id: String(e.id), name: String(e.name ?? "") }));
     } catch {
       return [];
     }
+  }
+
+  /** 社区插件清单（dsh-plugins 目录扫描 + 激活状态） */
+  async listCommunityPlugins(): Promise<InstalledPluginInfo[]> {
+    try {
+      const raw = await invoke<unknown>("dsh_rpc", { method: "plugins.list", params: null });
+      return ((raw as { plugins?: InstalledPluginInfo[] } | null)?.plugins ?? []).filter((p) => p && p.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /** 安装社区插件（npm 装 dsh-plugins → junction → patch 追加；返回步骤日志） */
+  async installCommunityPlugin(name: string): Promise<string[]> {
+    const raw = await invoke<unknown>("dsh_rpc", { method: "plugins.install", params: { name } });
+    return ((raw as { logs?: string[] } | null)?.logs ?? []).map(String);
+  }
+
+  /** 卸载社区插件（patch 移除 → junction 删除 → npm uninstall；返回步骤日志） */
+  async uninstallCommunityPlugin(name: string): Promise<string[]> {
+    const raw = await invoke<unknown>("dsh_rpc", { method: "plugins.uninstall", params: { name } });
+    return ((raw as { logs?: string[] } | null)?.logs ?? []).map(String);
   }
 
   // 技能目录：引擎 RPC skills.list（~/.hermes/skills 递归扫描 + usage 记录）；不可达时返回空
