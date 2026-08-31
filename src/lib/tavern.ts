@@ -129,24 +129,79 @@ export interface TavernCard {
   firstMes: string;
 }
 
+/** 从卡片对象（V2 {data:{…}} 或平铺）提取字段；非卡片返回 null */
+export function cardFromObject(raw: unknown): TavernCard | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const data = (obj.data ?? obj) as Record<string, unknown>;
+  const str = (v: unknown): string => (typeof v === "string" ? v : "");
+  const name = str(data.name).trim();
+  if (!name) return null;
+  return {
+    name,
+    description: str(data.description),
+    personality: str(data.personality),
+    scenario: str(data.scenario),
+    firstMes: str(data.first_mes ?? data.firstMes),
+  };
+}
+
 /** 解析 SillyTavern 角色卡 JSON；非法输入返回 null */
 export function parseCharacterCard(json: string): TavernCard | null {
   try {
-    const raw = JSON.parse(json) as Record<string, unknown>;
-    const data = (raw.data ?? raw) as Record<string, unknown>;
-    const str = (v: unknown): string => (typeof v === "string" ? v : "");
-    const name = str(data.name).trim();
-    if (!name) return null;
-    return {
-      name,
-      description: str(data.description),
-      personality: str(data.personality),
-      scenario: str(data.scenario),
-      firstMes: str(data.first_mes ?? data.firstMes),
-    };
+    return cardFromObject(JSON.parse(json));
   } catch {
     return null;
   }
+}
+
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+
+/**
+ * 解析 SillyTavern PNG 角色卡：角色 JSON 以 base64 藏在 PNG tEXt 块里
+ * （keyword "chara"，V3 卡为 "ccv3"）。非 PNG / 无卡返回 null。
+ */
+export function parseCharacterCardPng(buf: ArrayBuffer): TavernCard | null {
+  const bytes = new Uint8Array(buf);
+  if (!PNG_SIGNATURE.every((b, i) => bytes[i] === b)) return null;
+  const dec = new TextDecoder("utf-8");
+  const latin = (arr: Uint8Array): string => {
+    // 分段 fromCharCode，避开超长数组的参数上限
+    let out = "";
+    for (let i = 0; i < arr.length; i += 0x8000) {
+      out += String.fromCharCode(...arr.subarray(i, i + 0x8000));
+    }
+    return out;
+  };
+  let off = 8;
+  while (off + 8 <= bytes.length) {
+    const len = ((bytes[off]! << 24) | (bytes[off + 1]! << 16) | (bytes[off + 2]! << 8) | bytes[off + 3]!) >>> 0;
+    const type = String.fromCharCode(bytes[off + 4]!, bytes[off + 5]!, bytes[off + 6]!, bytes[off + 7]!);
+    const dataStart = off + 8;
+    if (dataStart + len + 4 > bytes.length) return null;
+    if (type === "tEXt") {
+      const data = bytes.subarray(dataStart, dataStart + len);
+      const z = data.indexOf(0);
+      if (z > 0) {
+        const keyword = latin(data.subarray(0, z));
+        if (keyword === "chara" || keyword === "ccv3") {
+          try {
+            const b64 = latin(data.subarray(z + 1)).replace(/\s/g, "");
+            const bin = atob(b64);
+            const jsonBytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) jsonBytes[i] = bin.charCodeAt(i);
+            const card = cardFromObject(JSON.parse(dec.decode(jsonBytes)));
+            if (card) return card;
+          } catch {
+            /* 该块不是有效卡：继续扫下一块 */
+          }
+        }
+      }
+    }
+    off = dataStart + len + 4; // 跳过 CRC
+    if (type === "IEND") break;
+  }
+  return null;
 }
 
 /** 角色卡 → 成员系统提示词（角色扮演注入文本） */

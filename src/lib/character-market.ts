@@ -12,6 +12,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { cardFromObject, cardToPersona } from "./tavern";
 import type { BuiltinCharacter } from "./tavern-characters";
 
 export interface MarketSource {
@@ -87,21 +88,54 @@ function saveCache(cache: MarketCache): void {
   }
 }
 
-/** 解析并校验角色包 JSON；无有效角色时抛错 */
+/** SillyTavern 卡对象 → 内置角色形态（key 用卡名；persona 由卡字段组装） */
+function characterFromSillyCard(raw: Record<string, unknown>): BuiltinCharacter | null {
+  const card = cardFromObject(raw);
+  if (!card) return null;
+  return {
+    key: `st-${card.name}`,
+    name: card.name,
+    desc: "SillyTavern 角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+    avatarBg: "#8B5CF6",
+    category: "SillyTavern",
+    persona: cardToPersona(card),
+  };
+}
+
+/**
+ * 解析并校验角色包 JSON；无有效角色时抛错。兼容三种形态：
+ *   ① characters: [内置角色形态]（推荐，persona 已编译）；
+ *   ② characters: [ { …, card: <SillyTavern 卡对象> } ]（卡对象自动转人设）；
+ *   ③ cards: [ <SillyTavern 卡对象> ]（整包就是 SillyTavern 角色卡集合）。
+ */
 export function parsePack(text: string): MarketPack {
   const raw = JSON.parse(text) as Record<string, unknown>;
+  const characters: BuiltinCharacter[] = [];
   const list = Array.isArray(raw.characters) ? (raw.characters as Record<string, unknown>[]) : [];
-  const characters: BuiltinCharacter[] = list
-    .filter((c) => c && typeof c.key === "string" && typeof c.name === "string")
-    .map((c) => ({
+  for (const c of list) {
+    if (!c || typeof c.key !== "string" || typeof c.name !== "string") continue;
+    if (c.card && typeof c.card === "object") {
+      const fromCard = characterFromSillyCard(c.card as Record<string, unknown>);
+      if (fromCard) {
+        characters.push({ ...fromCard, key: String(c.key), desc: String(c.desc ?? fromCard.desc) });
+        continue;
+      }
+    }
+    characters.push({
       key: String(c.key),
       name: String(c.name),
       desc: String(c.desc ?? ""),
       avatarBg: String(c.avatarBg ?? "#8B5CF6"),
       category: String(c.category ?? "在线"),
       persona: String(c.persona ?? ""),
-    }));
-  if (characters.length === 0) throw new Error("包里没有有效角色（需 characters 数组且每项含 key/name）");
+    });
+  }
+  const cards = Array.isArray(raw.cards) ? (raw.cards as Record<string, unknown>[]) : [];
+  for (const cd of cards) {
+    const fromCard = characterFromSillyCard(cd);
+    if (fromCard) characters.push(fromCard);
+  }
+  if (characters.length === 0) throw new Error("包里没有有效角色（需 characters 数组或 SillyTavern cards 数组）");
   return {
     name: String(raw.name ?? "远程角色包"),
     version: typeof raw.version === "number" ? raw.version : undefined,

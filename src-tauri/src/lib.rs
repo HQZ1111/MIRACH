@@ -1014,6 +1014,17 @@ async fn write_user_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, &content).map_err(|e| format!("write_file: {e}"))
 }
 
+/// 读二进制文件（SillyTavern PNG 角色卡解析用）；>10MB 拒绝。
+/// 返回字节数组（JSON 序列化为 number[]，典型 PNG 卡几百 KB 可接受）。
+#[tauri::command]
+async fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > 10 * 1024 * 1024 {
+        return Err("文件超过 10MB".to_string());
+    }
+    std::fs::read(&path).map_err(|e| e.to_string())
+}
+
 /// 拉取远程文本（在线角色市场等）：ureq GET，10s 超时，>5MB 拒绝。
 /// 走 Rust 侧请求避开 WebView CORS 限制。
 #[tauri::command]
@@ -1263,6 +1274,7 @@ pub fn run() {
             open_url,
             write_user_file,
             fetch_text,
+            read_file_bytes,
             get_workspace,
             set_analytics_enabled,
             track_analytics_event,

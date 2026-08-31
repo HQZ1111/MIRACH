@@ -25,7 +25,7 @@ import {
   TAVERN_MEMBER_ENV,
   type ConvItem,
 } from "@/store/agents";
-import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
+import { listTavernPresets, parseCharacterCard, parseCharacterCardPng, cardToPersona, presetToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
 import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES, type BuiltinCharacter } from "@/lib/tavern-characters";
 import {
   DEFAULT_MARKET_SOURCES,
@@ -2679,6 +2679,8 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   // 角色库筛选：分类 + 搜索
   const [cat, setCat] = useState<string>("全部");
   const [query, setQuery] = useState("");
+  // 拖拽导入视觉态
+  const [dragOver, setDragOver] = useState(false);
   // 在线市场：源列表 / 当前源 / 包缓存 / 拉取状态 / 自定义源表单
   const [sources, setSources] = useState<MarketSource[]>(() => allSources());
   const [marketUrl, setMarketUrl] = useState<string>(DEFAULT_MARKET_SOURCES[0]!.url);
@@ -2760,15 +2762,49 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
     );
   };
 
-  /** 原生文件对话框选角色卡 JSON（默认打开用户主目录；Tauri dialog 插件） */
+  /** 导入文件（拖拽/选择共用）：PNG 角色卡（tEXt chara 块）+ SillyTavern JSON 卡 */
+  const importFiles = async (files: Iterable<File>): Promise<void> => {
+    let ok = 0;
+    for (const f of files) {
+      try {
+        if (/\.png$/i.test(f.name)) {
+          const buf = await f.arrayBuffer();
+          const card = parseCharacterCardPng(buf);
+          if (!card) continue;
+          importMember(
+            card.name,
+            card.name,
+            cardToPersona(card),
+            "PNG 角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+          );
+          ok += 1;
+        } else if (/\.json$/i.test(f.name)) {
+          const card = parseCharacterCard(await f.text());
+          if (!card) continue;
+          importMember(
+            card.name,
+            card.name,
+            cardToPersona(card),
+            "角色卡 JSON" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+          );
+          ok += 1;
+        }
+      } catch {
+        /* 单个文件失败：跳过 */
+      }
+    }
+    setNote(ok > 0 ? `已导入 ${ok} 个角色成员（聊天环境）` : "没有可识别的角色卡（支持 SillyTavern PNG / JSON）");
+  };
+
+  /** 原生文件对话框选角色卡（PNG + JSON，默认打开用户主目录；Tauri dialog 插件） */
   const pickCardFiles = async (): Promise<void> => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const home = await userHomeDir();
       const picked = await open({
         multiple: true,
-        title: "选择角色卡 JSON 文件",
-        filters: [{ name: "角色卡 JSON", extensions: ["json"] }],
+        title: "选择角色卡（PNG / JSON）",
+        filters: [{ name: "SillyTavern 角色卡", extensions: ["png", "json"] }],
         defaultPath: home ?? undefined,
       });
       if (!picked) return;
@@ -2776,21 +2812,34 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
       let ok = 0;
       for (const path of paths) {
         try {
-          const text = await invoke<string>("read_file", { path });
-          const card = parseCharacterCard(text);
-          if (!card) continue;
-          importMember(
-            card.name,
-            card.name,
-            cardToPersona(card),
-            "酒馆角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
-          );
-          ok += 1;
+          if (/\.png$/i.test(path)) {
+            const arr = await invoke<number[]>("read_file_bytes", { path });
+            const card = parseCharacterCardPng(new Uint8Array(arr).buffer);
+            if (!card) continue;
+            importMember(
+              card.name,
+              card.name,
+              cardToPersona(card),
+              "PNG 角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+            );
+            ok += 1;
+          } else if (/\.json$/i.test(path)) {
+            const text = await invoke<string>("read_file", { path });
+            const card = parseCharacterCard(text);
+            if (!card) continue;
+            importMember(
+              card.name,
+              card.name,
+              cardToPersona(card),
+              "角色卡 JSON" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+            );
+            ok += 1;
+          }
         } catch {
           /* 单个文件读取失败：跳过 */
         }
       }
-      setNote(ok > 0 ? "已导入 " + ok + " 个角色卡成员（聊天环境）" : "没有可识别的角色卡（需 SillyTavern V2/V3 JSON）");
+      setNote(ok > 0 ? "已导入 " + ok + " 个角色成员（聊天环境）" : "没有可识别的角色卡（支持 SillyTavern PNG / JSON）");
     } catch (e) {
       setNote("无法打开文件选择器：" + String(e));
     }
@@ -2799,9 +2848,27 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
-        className="max-h-[85vh] w-[500px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={cn(
+          "relative max-h-[85vh] w-[500px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          dragOver && "ring-2 ring-[#8B5CF6]",
+        )}
         onClick={(e) => e.stopPropagation()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void importFiles(e.dataTransfer.files);
+        }}
       >
+        {dragOver && (
+          <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-xl bg-[#8B5CF6]/10 text-sm font-medium text-[#8B5CF6]">
+            松开导入角色卡（PNG / JSON）
+          </div>
+        )}
         <div className="flex items-start justify-between">
           <div className="min-w-0">
             <h3 className="text-base font-semibold text-[#303030]">导入酒馆角色</h3>
@@ -3068,8 +3135,11 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
               className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2.5 text-xs text-[#464646] transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
             >
               <Upload className="h-4 w-4" />
-              选择角色卡 JSON 文件（可多选，默认打开主目录）
+              选择角色卡文件（PNG / JSON，可多选，默认打开主目录）
             </button>
+            <p className="mt-1.5 text-center text-[10px] text-muted-foreground">
+              也可以把 PNG / JSON 角色卡直接<b>拖进本窗口</b>任意位置导入
+            </p>
           </div>
         )}
 

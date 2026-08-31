@@ -523,6 +523,27 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第九批：SillyTavern PNG 卡直拖导入 + 市场 ST 卡兼容（2026-09-01）
+
+用户问：① PNG 能直接拖吗 ② 酒馆能和 dsh-agent-rp 融合吗 ③ 市场能用 SillyTavern
+做吗 ④ 酒馆功能丰富但 mirach 只用了一角。落地与结论：
+
+- **PNG 角色卡直拖导入 ✅**：`parseCharacterCardPng`（tavern.ts）解析 PNG tEXt 块
+  keyword chara/ccv3（base64 → UTF-8 JSON → cardFromObject）；导入弹窗整窗可拖
+  （dragOver 紫框提示），原生选择器同时收 PNG/JSON（Rust 新 `read_file_bytes`
+  读二进制，>10MB 拒）。共享 `importFiles`（拖拽/选择同一入口）。
+- **市场 SillyTavern 兼容 ✅**：parsePack 三形态——characters（内置形态）/
+  characters[].card（ST 卡对象）/ cards（整包 ST 卡集合），自动经 cardToPersona
+  转人设；ST 卡在市场里 category 标 "SillyTavern"。
+- **深度融合结论（下大件，未做）**：酒馆的丰富功能（世界书关键词智能注入/记忆
+  总结/关系网/剧情选项/会话级配置）都在插件**引擎侧**，触发条件 = 会话绑定酒馆
+  预设（官方在会话创建时绑定）。mirach 现在只用 persona 直注入（成员管线），
+  未走预设绑定 → 世界书等不会触发。下一步大件 = 探明引擎"会话绑定 agent preset"
+  的 RPC，在 mirach 建会话时绑定酒馆预设，即可点亮整套引擎侧功能；之后补 UI
+  （剧情选项按钮/状态栏渲染）。**NSFW 破限不做**。dsh-agent-rp 未在本机安装，
+  融合待其源码/文档到位后再评估。
+- tsc + cargo check 通过；Rust 变更需重启应用。
+
 # 第八批：在线角色市场（2026-09-01）
 
 用户确认要做「在线角色市场」。落地：
