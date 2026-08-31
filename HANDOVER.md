@@ -523,6 +523,17 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第七批：tavern-lite 隐藏 + 角色库来源说明（2026-08-31 深夜）
+
+- **tavern-lite 从导入列表删除**（用户要求）：UI 永久过滤（visiblePresets）。注意
+  不能删盘上目录——`~/.dsh/.agent-presets/tavern-lite/` 是插件默认预设
+  （DEFAULT_PRESET_ID='default'），插件启动时自动重建；过滤 UI 是唯一持久解。
+- **角色库来源澄清**：已验证 dsh-tavern 插件包内**不含任何角色数据**（无 json 卡/
+  png/charx）——插件只是角色卡的"管理器+注入器"，角色卡是 SillyTavern 生态的
+  用户内容。mirach 的内置角色库（tavern-characters.ts）由 mirach 维护，随 mirach
+  更新走 git/版本发布；与插件更新无关。未来可选：在线角色市场（远程角色包）。
+- tsc 通过。
+
 # 第六批：角色库分类扩容 + 导入体验修正（2026-08-31 深夜；用户反馈驱动）
 
 用户反馈五点全部落地：

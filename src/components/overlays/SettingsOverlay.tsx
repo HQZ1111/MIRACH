@@ -2633,6 +2633,10 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
     };
   }, []);
 
+  // tavern-lite（插件自带的空白基础预设，会被插件自动重建）没有任何角色人设，
+  // 导入无价值——在导入列表中永久过滤
+  const visiblePresets = (presets ?? []).filter((p) => p.key !== "tavern-lite");
+
   const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入角色");
 
   const importMember = (key: string, name: string, systemPrompt: string, desc: string): void => {
@@ -2825,33 +2829,25 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           <div className="mt-3">
             <p className="text-[11px] leading-relaxed text-muted-foreground">
               读取 dsh-tavern 插件的预设目录（每个预设 = 一份角色卡注入文本）。
+              插件自带的空白基础预设（tavern-lite，无角色人设）已隐藏。
               <span className="ml-1 font-mono">{rootPath || "…"}</span>
             </p>
             {presets === null ? (
               <p className="mt-2 text-[11px] text-muted-foreground">读取中…</p>
-            ) : presets.length === 0 ? (
+            ) : visiblePresets.length === 0 ? (
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                未找到预设。可在官方 DSH「酒馆管理」导入角色卡后回来导入，或用「角色库 / 角色卡文件」导入。
+                未找到可用预设。可在官方 DSH「酒馆管理」导入角色卡后回来导入，或用「角色库 / 角色卡文件」导入。
               </p>
             ) : (
               <div className="mt-2 max-h-[46vh] space-y-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {presets.map((p) => (
+                {visiblePresets.map((p) => (
                   <div key={p.key} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[12px] font-semibold text-[#303030]">
                         {p.name}
-                        {p.key === "tavern-lite" && (
-                          <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">
-                            酒馆基础预设
-                          </span>
-                        )}
                       </p>
                       <p className="truncate text-[10px] text-muted-foreground">
-                        {p.persona
-                          ? "persona 已就绪 · " + p.persona.slice(0, 40)
-                          : p.key === "tavern-lite"
-                            ? "没有任何角色人设——导入只是一个「通用角色扮演」空壳成员，一般不用导入它"
-                            : "无 persona（导入后为通用角色扮演提示词）"}
+                        {p.persona ? "persona 已就绪 · " + p.persona.slice(0, 40) : "无 persona（导入后为通用角色扮演提示词）"}
                       </p>
                     </div>
                     <button
