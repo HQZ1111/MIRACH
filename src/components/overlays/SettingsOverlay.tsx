@@ -26,7 +26,18 @@ import {
   type ConvItem,
 } from "@/store/agents";
 import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
-import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES } from "@/lib/tavern-characters";
+import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES, type BuiltinCharacter } from "@/lib/tavern-characters";
+import {
+  DEFAULT_MARKET_SOURCES,
+  addCustomSource,
+  allSources,
+  cachedPack,
+  fetchPack,
+  loadCache,
+  removeCustomSource,
+  type MarketCacheEntry,
+  type MarketSource,
+} from "@/lib/character-market";
 import { $engineEnv } from "@/store/engine-session";
 import { userHomeDir } from "@/lib/paths";
 import { $usage, resetUsage } from "@/store/usage";
@@ -2586,18 +2597,76 @@ function MemorySection() {
   );
 }
 
+// 角色卡行（角色库/在线市场共用）：头像+名字+分类+说明 + 修改（展开人设草稿）+ 导入
+function CharacterCard({
+  c,
+  imported,
+  draft,
+  expanded,
+  onToggleExpand,
+  onChangeDraft,
+  onImport,
+}: {
+  c: BuiltinCharacter;
+  imported: boolean;
+  draft: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onChangeDraft: (v: string) => void;
+  onImport: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-black/10 bg-white p-2.5">
+      <div className="flex items-center gap-2.5">
+        <span
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+          style={{ backgroundColor: c.avatarBg }}
+        >
+          {c.name.slice(0, 1)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[12px] font-semibold text-[#303030]">
+            {c.name}
+            <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">{c.category}</span>
+          </p>
+          <p className="truncate text-[10px] text-muted-foreground">{c.desc}</p>
+        </div>
+        <button
+          onClick={onToggleExpand}
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
+        >
+          {expanded ? "收起" : "修改"}
+        </button>
+        <button
+          onClick={onImport}
+          className={cn(
+            "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
+            imported ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
+          )}
+        >
+          {imported ? "已导入" : "导入角色"}
+        </button>
+      </div>
+      {expanded && (
+        <textarea
+          value={draft}
+          onChange={(e) => onChangeDraft(e.target.value)}
+          rows={6}
+          className="mt-2 w-full resize-y rounded-md border border-border bg-white px-2.5 py-2 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
+        />
+      )}
+    </div>
+  );
+}
+
 // ================================================================
-// TavernImportDialog — 导入酒馆角色（dsh-tavern → 成员体系）
-// 两个来源：① 角色卡 JSON（SillyTavern V2/V3，文件选择直导）；
-//          ② 酒馆插件预设目录（~/.dsh/.agent-presets/<dir>，persona 注入文本）。
-// 导入 = agents store 幂等 upsert（id = tavern-<key>），角色卡文本作为
-// 成员 systemPrompt，走既有成员对话注入管线；重导只更新不重复建卡。
-// ================================================================
+// TavernImportDialog — 导入酒馆角色（角色库 / 在线市场 / 酒馆预设 / 角色卡文件）
 
 function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onImported?: () => void }) {
-  // 三个来源：角色库（前端内置，无需文件）/ 酒馆预设（dsh-tavern 插件目录）/
-  // 角色卡文件（SillyTavern V2/V3 JSON）。统一导入为聊天环境成员（幂等 upsert）。
-  const [tab, setTab] = useState<"gallery" | "presets" | "file">("gallery");
+  // 四个来源：角色库（前端内置）/ 在线市场（远程角色包，可加自定义源）/
+  // 酒馆预设（dsh-tavern 插件目录）/ 角色卡文件（SillyTavern V2/V3 JSON）。
+  // 统一导入为聊天环境成员（幂等 upsert）。
+  const [tab, setTab] = useState<"gallery" | "market" | "presets" | "file">("gallery");
   // 已导入标记从聊天环境分片读取（酒馆成员固定放聊天环境，与当前激活环境无关）
   const [importedIds, setImportedIds] = useState<Set<string>>(
     () => new Set(loadAgentsOf(TAVERN_MEMBER_ENV).filter((a) => a.source === "tavern").map((a) => a.id)),
@@ -2610,6 +2679,12 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   // 角色库筛选：分类 + 搜索
   const [cat, setCat] = useState<string>("全部");
   const [query, setQuery] = useState("");
+  // 在线市场：源列表 / 当前源 / 包缓存 / 拉取状态 / 自定义源表单
+  const [sources, setSources] = useState<MarketSource[]>(() => allSources());
+  const [marketUrl, setMarketUrl] = useState<string>(DEFAULT_MARKET_SOURCES[0]!.url);
+  const [packCache, setPackCache] = useState<Record<string, MarketCacheEntry>>(() => loadCache());
+  const [marketBusy, setMarketBusy] = useState(false);
+  const [newSrc, setNewSrc] = useState({ name: "", url: "" });
 
   const afterImport = useCallback(
     (key: string) => {
@@ -2636,6 +2711,37 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   // tavern-lite（插件自带的空白基础预设，会被插件自动重建）没有任何角色人设，
   // 导入无价值——在导入列表中永久过滤
   const visiblePresets = (presets ?? []).filter((p) => p.key !== "tavern-lite");
+
+  // ---- 在线市场 ----
+  const refreshMarket = async (url: string): Promise<void> => {
+    setMarketUrl(url);
+    setMarketBusy(true);
+    try {
+      await fetchPack(url);
+      setPackCache(loadCache());
+      setNote("角色包已更新 ✓");
+    } catch (e) {
+      setPackCache(loadCache());
+      setNote("拉取失败：" + String(e) + (cachedPack(url) ? "（正在显示缓存）" : ""));
+    } finally {
+      setMarketBusy(false);
+    }
+  };
+  const addSource = (): void => {
+    const r = addCustomSource({ name: newSrc.name, url: newSrc.url });
+    setSources(r.sources);
+    setNote(r.ok ? "已添加自定义源" : r.error ?? "添加失败");
+    if (r.ok) setNewSrc({ name: "", url: "" });
+  };
+  const removeSource = (url: string): void => {
+    setSources(removeCustomSource(url));
+    if (marketUrl === url) setMarketUrl(DEFAULT_MARKET_SOURCES[0]!.url);
+  };
+  // 首次切到在线市场且默认源无缓存时自动拉取
+  useEffect(() => {
+    if (tab === "market" && !packCache[marketUrl]) void refreshMarket(marketUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入角色");
 
@@ -2712,11 +2818,12 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           </button>
         </div>
 
-        {/* 来源切换：角色库 / 酒馆预设 / 角色卡文件 */}
+        {/* 来源切换：角色库 / 在线市场 / 酒馆预设 / 角色卡文件 */}
         <div className="mt-3 flex gap-1 rounded-lg bg-muted/60 p-1 text-[11px]">
           {(
             [
               ["gallery", "角色库"],
+              ["market", "在线市场"],
               ["presets", "酒馆预设"],
               ["file", "角色卡文件"],
             ] as const
@@ -2763,60 +2870,25 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
               />
             </div>
             <div className="mt-2 max-h-[40vh] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {BUILTIN_CHARACTERS.filter((c) => (cat === "全部" || c.category === cat) && (!query.trim() || c.name.includes(query.trim()) || c.desc.includes(query.trim()))).map((c) => {
-                const draft = editing[c.key] ?? c.persona;
-                const expanded = editing[c.key] !== undefined;
-                const imported = importedIds.has(`tavern-${c.key}`);
-                return (
-                  <div key={c.key} className="rounded-lg border border-black/10 bg-white p-2.5">
-                    <div className="flex items-center gap-2.5">
-                      <span
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                        style={{ backgroundColor: c.avatarBg }}
-                      >
-                        {c.name.slice(0, 1)}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[12px] font-semibold text-[#303030]">
-                          {c.name}
-                          <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">{c.category}</span>
-                        </p>
-                        <p className="truncate text-[10px] text-muted-foreground">{c.desc}</p>
-                      </div>
-                      <button
-                        onClick={() =>
-                          setEditing((s) => {
-                            const next = { ...s };
-                            if (next[c.key] !== undefined) delete next[c.key];
-                            else next[c.key] = c.persona;
-                            return next;
-                          })
-                        }
-                        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
-                      >
-                        {expanded ? "收起" : "修改"}
-                      </button>
-                      <button
-                        onClick={() => importMember(c.key, c.name, draft, c.desc)}
-                        className={cn(
-                          "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
-                          imported ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
-                        )}
-                      >
-                        {mark(c.key)}
-                      </button>
-                    </div>
-                    {expanded && (
-                      <textarea
-                        value={draft}
-                        onChange={(e) => setEditing((s) => ({ ...s, [c.key]: e.target.value }))}
-                        rows={6}
-                        className="mt-2 w-full resize-y rounded-md border border-border bg-white px-2.5 py-2 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
-                      />
-                    )}
-                  </div>
-                );
-              })}
+              {BUILTIN_CHARACTERS.filter((c) => (cat === "全部" || c.category === cat) && (!query.trim() || c.name.includes(query.trim()) || c.desc.includes(query.trim()))).map((c) => (
+                <CharacterCard
+                  key={c.key}
+                  c={c}
+                  imported={importedIds.has(`tavern-${c.key}`)}
+                  draft={editing[c.key] ?? c.persona}
+                  expanded={editing[c.key] !== undefined}
+                  onToggleExpand={() =>
+                    setEditing((s) => {
+                      const next = { ...s };
+                      if (next[c.key] !== undefined) delete next[c.key];
+                      else next[c.key] = c.persona;
+                      return next;
+                    })
+                  }
+                  onChangeDraft={(v) => setEditing((s) => ({ ...s, [c.key]: v }))}
+                  onImport={() => importMember(c.key, c.name, editing[c.key] ?? c.persona, c.desc)}
+                />
+              ))}
               {BUILTIN_CHARACTERS.filter((c) => (cat === "全部" || c.category === cat) && (!query.trim() || c.name.includes(query.trim()) || c.desc.includes(query.trim()))).length === 0 && (
                 <p className="py-6 text-center text-[11px] text-muted-foreground">没有匹配的角色</p>
               )}
@@ -2824,7 +2896,116 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           </div>
         )}
 
-        {/* 来源二：酒馆预设目录（dsh-tavern 插件 ~/.dsh/.agent-presets） */}
+        {/* 来源二：在线市场（远程角色包，可加自定义源） */}
+        {tab === "market" && (
+          <div className="mt-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              从远程源拉取角色包（JSON 格式）。默认源 = mirach 仓库的角色包，仓库发版即更新；
+              也可以添加自己的源（任何提供这种 JSON 的网址）。
+            </p>
+            {/* 源列表 */}
+            <div className="mt-2 space-y-1">
+              {sources.map((s) => {
+                const entry = packCache[s.url];
+                const isDefault = DEFAULT_MARKET_SOURCES.some((d) => d.url === s.url);
+                return (
+                  <div
+                    key={s.url}
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg border px-2.5 py-1.5",
+                      marketUrl === s.url ? "border-[#8B5CF6] bg-[#8B5CF6]/5" : "border-black/10 bg-white",
+                    )}
+                  >
+                    <button onClick={() => setMarketUrl(s.url)} className="min-w-0 flex-1 text-left">
+                      <p className="truncate text-[11px] font-medium text-[#303030]">
+                        {s.name}
+                        {isDefault && <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">默认</span>}
+                      </p>
+                      <p className="truncate text-[10px] text-muted-foreground">
+                        {entry
+                          ? "缓存 " + new Date(entry.fetchedAt).toLocaleString() + " · " + entry.pack.characters.length + " 个角色"
+                          : s.url}
+                      </p>
+                    </button>
+                    <button
+                      onClick={() => void refreshMarket(s.url)}
+                      disabled={marketBusy}
+                      className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+                    >
+                      {marketBusy && marketUrl === s.url ? "拉取中…" : "拉取"}
+                    </button>
+                    {!isDefault && (
+                      <button
+                        onClick={() => removeSource(s.url)}
+                        title="删除该源"
+                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#EF4444]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* 添加自定义源 */}
+            <div className="mt-1.5 flex items-center gap-1">
+              <input
+                value={newSrc.name}
+                onChange={(e) => setNewSrc((v) => ({ ...v, name: e.target.value }))}
+                placeholder="源名称"
+                className="w-24 rounded-md border border-border bg-white px-2 py-1 text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+              />
+              <input
+                value={newSrc.url}
+                onChange={(e) => setNewSrc((v) => ({ ...v, url: e.target.value }))}
+                placeholder="https://…/characters.json"
+                className="min-w-0 flex-1 rounded-md border border-border bg-white px-2 py-1 font-mono text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+              />
+              <button
+                onClick={addSource}
+                className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted hover:text-[#303030]"
+              >
+                添加
+              </button>
+            </div>
+            {/* 当前源的角色列表 */}
+            {(() => {
+              const entry = packCache[marketUrl];
+              if (marketBusy) return <p className="mt-2 text-[11px] text-muted-foreground">拉取中…</p>;
+              if (!entry)
+                return <p className="mt-2 text-[11px] text-muted-foreground">该源还没有拉取过，点上方「拉取」获取角色包。</p>;
+              return (
+                <div className="mt-2 max-h-[36vh] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <p className="text-[10px] text-muted-foreground">
+                    {entry.pack.name}
+                    {entry.pack.updatedAt ? " · 更新于 " + entry.pack.updatedAt : ""}
+                  </p>
+                  {entry.pack.characters.map((c) => (
+                    <CharacterCard
+                      key={c.key}
+                      c={c}
+                      imported={importedIds.has(`tavern-${c.key}`)}
+                      draft={editing[c.key] ?? c.persona}
+                      expanded={editing[c.key] !== undefined}
+                      onToggleExpand={() =>
+                        setEditing((s) => {
+                          const next = { ...s };
+                          if (next[c.key] !== undefined) delete next[c.key];
+                          else next[c.key] = c.persona;
+                          return next;
+                        })
+                      }
+                      onChangeDraft={(v) => setEditing((s) => ({ ...s, [c.key]: v }))}
+                      onImport={() => importMember(c.key, c.name, editing[c.key] ?? c.persona, c.desc)}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* 来源三：酒馆预设目录（dsh-tavern 插件 ~/.dsh/.agent-presets） */}
         {tab === "presets" && (
           <div className="mt-3">
             <p className="text-[11px] leading-relaxed text-muted-foreground">

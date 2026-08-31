@@ -1014,6 +1014,36 @@ async fn write_user_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, &content).map_err(|e| format!("write_file: {e}"))
 }
 
+/// 拉取远程文本（在线角色市场等）：ureq GET，10s 超时，>5MB 拒绝。
+/// 走 Rust 侧请求避开 WebView CORS 限制。
+#[tauri::command]
+async fn fetch_text(url: String) -> Result<String, String> {
+    use std::time::Duration;
+    tauri::async_runtime::spawn_blocking(move || {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err("仅支持 http(s) 地址".to_string());
+        }
+        let resp = ureq::get(&url)
+            .timeout(Duration::from_secs(10))
+            .call()
+            .map_err(|e| format!("fetch: {e}"))?;
+        let len = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        if len > 5 * 1024 * 1024 {
+            return Err("文件过大（>5MB）".to_string());
+        }
+        let text = resp.into_string().map_err(|e| format!("read: {e}"))?;
+        if text.len() > 5 * 1024 * 1024 {
+            return Err("文件过大（>5MB）".to_string());
+        }
+        Ok(text)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 返回当前工作区路径（简约对话 UI 显示"在哪工作"）。
 #[tauri::command]
 fn get_workspace() -> Result<String, String> {
@@ -1232,6 +1262,7 @@ pub fn run() {
             dsh_relay::toggle_main_maximize,
             open_url,
             write_user_file,
+            fetch_text,
             get_workspace,
             set_analytics_enabled,
             track_analytics_event,

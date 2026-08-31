@@ -523,6 +523,23 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第八批：在线角色市场（2026-09-01）
+
+用户确认要做「在线角色市场」。落地：
+- **角色包格式**：{ name, version, updatedAt, characters:[{key,name,desc,avatarBg,category,persona}] }
+  ——与内置角色库同形；character-market.ts parsePack 校验（无有效角色抛错）。
+- **Rust `fetch_text` 命令**：ureq GET（10s 超时 + 5MB 上限 + 仅 http(s)），绕 WebView
+  CORS。**需重启应用生效**（Rust 变更）。
+- **`src/lib/character-market.ts`**：默认源（Gitee 仓库 docs/tavern-characters.remote.json，
+  仓库发版即更新市场）+ 用户自定义源（localStorage，可增删，上限 10 个）+ 拉取缓存
+  （离线可用，显示拉取时间）。
+- **导入弹窗第四标签「在线市场」**：源列表（拉取/删除自定义源）+ 添加源表单 +
+  当前源角色列表（CharacterCard 共用组件，角色库/市场同款可选可改可导入）；
+  首次切到该标签自动拉取默认源。
+- 官方源起步包 docs/tavern-characters.remote.json（3 个市场专属角色：月见/火花/古灵）。
+- 角色卡组件抽取：CharacterCard（角色库与市场共用渲染）。
+- tsc + cargo check 通过。
+
 # 第七批：tavern-lite 隐藏 + 角色库来源说明（2026-08-31 深夜）
 
 - **tavern-lite 从导入列表删除**（用户要求）：UI 永久过滤（visiblePresets）。注意
