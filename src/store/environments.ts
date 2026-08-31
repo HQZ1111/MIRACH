@@ -94,6 +94,13 @@ export function bumpEnvEpoch(): void {
   $envEpoch.set($envEpoch.get() + 1);
 }
 
+/** 内置环境 id（不可删除；名称/工作区可编辑）——main 之外的部分用户也只能改不能删 */
+export const SEED_ENV_IDS = new Set(VIEW_ENV_SEEDS.map((s) => s.id));
+
+export function isSeedEnv(id: string): boolean {
+  return SEED_ENV_IDS.has(id);
+}
+
 function load(): EnvProfile[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -196,11 +203,12 @@ export function updateEnvironment(id: string, patch: Partial<Pick<EnvProfile, "n
   return true;
 }
 
-/** 删除环境（main 拒绝）。返回是否删除。 */
+/** 删除环境（main 与内置环境拒绝——用户只能删除自己添加的环境）。 */
 export function removeEnvironment(id: string): boolean {
   const list = $environments.get();
   const target = list.find((e) => e.id === id);
   if (!target || target.builtIn) return false;
+  if (SEED_ENV_IDS.has(id)) return false; // 内置环境不可删除
   saveEnvironments(list.filter((e) => e.id !== id));
   return true;
 }

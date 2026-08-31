@@ -12,14 +12,18 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { renderEnvIcon, getIconItem } from "@/plugins/icon-library";
 import { IconPicker } from "@/components/settings/IconPicker";
+import { AgentTeamPanel } from "@/components/settings/AgentTeam";
+import { ChevronDown, ChevronRight, Users } from "lucide-react";
 import {
   $environments,
   addEnvironment,
   updateEnvironment,
   removeEnvironment,
   setEnvVisible,
+  isSeedEnv,
   type EnvProfile,
 } from "@/store/environments";
+import { loadAgentsOf } from "@/store/agents";
 import { Plus, Trash2, Lock, Pencil, Check, X } from "lucide-react";
 
 type Draft = { name: string; cwd: string; icon: string };
@@ -35,6 +39,8 @@ export function EnvSettingsSection() {
   const [draft, setDraft] = useState<Draft>({ name: "", cwd: "", icon: "ph:bot" });
   const [adding, setAdding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // 每个环境各自的智能体团队：点击环境卡片展开/收起
+  const [openTeam, setOpenTeam] = useState<string | null>(null);
 
   const commit = (id: string, d: Draft): void => {
     updateEnvironment(id, { name: d.name, cwd: d.cwd, icon: d.icon });
@@ -161,9 +167,16 @@ export function EnvSettingsSection() {
                       title="编辑"
                       className="rounded p-1 text-muted-foreground hover:bg-black/5"
                     >
-                      <Pencil className="h-3.5 w-3.5" />
+                      <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
-                    {confirmDelete === e.id ? (
+                    {isSeedEnv(e.id) ? (
+                      <span
+                        title="内置环境不可删除"
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/60"
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                      </span>
+                    ) : confirmDelete === e.id ? (
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => {
@@ -187,12 +200,36 @@ export function EnvSettingsSection() {
                         title="删除"
                         className="rounded p-1 text-muted-foreground hover:bg-black/5"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                       </button>
                     )}
                   </div>
                 )}
               </div>
+
+              {/* 智能体团队（每个环境各自一份；点击展开管理） */}
+              {!isEditing && (
+                <button
+                  onClick={() => setOpenTeam(openTeam === e.id ? null : e.id)}
+                  className="flex w-full items-center gap-2 border-t border-black/5 px-3 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/40"
+                >
+                  {openTeam === e.id ? (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <Users className="h-3.5 w-3.5 shrink-0" />
+                  智能体团队（{loadAgentsOf(e.id).length}）
+                  {e.visible === false && (
+                    <span className="ml-auto text-[10px] text-[#B45309]">环境已隐藏 · 团队不生效</span>
+                  )}
+                </button>
+              )}
+              {openTeam === e.id && !isEditing && (
+                <div className="border-t border-black/5 px-3 pb-3 pt-2">
+                  <AgentTeamPanel env={e} />
+                </div>
+              )}
 
               {/* 行内图标选择器（编辑态） */}
               {isEditing && pickerFor === e.id && (

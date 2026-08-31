@@ -523,6 +523,27 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十四批：智能体团队并入环境面板 + 原生面板优化（2026-09-01 深夜）
+
+用户反馈四点全落地：
+1. **智能体团队并入环境设置 ✅**：独立"智能体团队"设置分区取消；EnvSettingsSection
+   每个环境卡片新增「智能体团队（N）」展开条——每个环境各自一份团队管理
+   （增删改/模板导入导出/酒馆导入，聊天环境另有原生面板+角色库+市场）。
+   组件抽取：src/components/settings/AgentTeam.tsx（AgentTeamPanel/AgentEditModal/
+   TavernImportDialog/WorldbookDialog/NativeTavernPanel/CharacterCard），按 env
+   实例化，数据走 agents store 按环境分片读写。
+2. **内置环境不可删除 ✅**：main + chat/code/work/finance/write 种子环境
+   （SEED_ENV_IDS）删除被拒（store 层 + UI 锁图标）；名称/工作区仍可编辑；
+   用户只能删除自己添加的环境。
+3. **环境隐藏 = 团队失效 ✅**：visible=false 的环境，其团队面板显示橙色提示
+   "环境已隐藏 · 团队不生效"（左栏本就不显示，双保险）。
+4. **原生面板样式优化 ✅**：DSW_ALIAS_VARS 补齐全部缺令牌（bg-base/border-default/
+   label-tertiary/state-error/success 等 14 个）+ NATIVE_HOST_CSS 对齐按钮/输入框/
+   表格样式（圆角/字号/内边距与设置页一致）。
+- **NSFW**：原生面板里的开关是插件引擎侧功能（state.nsfwEnabled 持久化，
+  对绑定酒馆预设的会话注入），开关本身可用；mirach 代码不参与、不接线、不复制。
+- tsc 通过；SettingsOverlay 由 3470 行瘦身至 ~2200 行。
+
 # 第十三批：原生面板归位聊天环境 + dsw 令牌修正（2026-09-01 深夜）
 
 用户反馈：原生面板渲染错乱、与设置不对齐；插件是聊天环境专用的，应放在聊天
