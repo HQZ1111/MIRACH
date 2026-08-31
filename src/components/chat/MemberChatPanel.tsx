@@ -23,6 +23,51 @@ import type { ChatMessage } from "@/lib/memberSessions";
 const MIN_TERMINAL = 150;
 const MAX_TERMINAL = 533;
 
+// ── 酒馆式输出解析（对齐 dsh-tavern client 的两种美化） ──
+
+interface ParsedTavernText {
+  main: string;
+  /** 「状态栏：」块（紫色状态卡渲染） */
+  status?: string;
+  /** 结尾剧情选项（"接下来你想怎么做？" + 1.2.3.）→ 可点击按钮 */
+  options?: string[];
+}
+
+/** 解析成员回复：状态栏块 + 结尾剧情选项块（有则从正文剥离单独渲染） */
+function parseTavernText(text: string): ParsedTavernText {
+  let main = text;
+  let status: string | undefined;
+  let options: string[] | undefined;
+  const sb = /(?:^|\n)状态栏[：:][ \t]*\n?([\s\S]*?)(?=\n\s*\n|$)/.exec(main);
+  if (sb) {
+    status = sb[1]!.trim();
+    main = (main.slice(0, sb.index) + main.slice(sb.index + sb[0].length)).trim();
+  }
+  const opt = /接下来你想怎么做？\s*\n\s*1[.、．]\s*(.+)\n\s*2[.、．]\s*(.+)\n\s*3[.、．]\s*(.+)\s*$/.exec(main);
+  if (opt) {
+    options = [opt[1]!.trim(), opt[2]!.trim(), opt[3]!.trim()];
+    main = main.slice(0, opt.index).trim();
+  }
+  return { main, status, options };
+}
+
+/** 状态栏紫色卡片（日期/时间/地点/用户列表等，逐行渲染） */
+function StatusCard({ text }: { text: string }) {
+  const lines = text.split("\n").filter((l) => l.trim());
+  return (
+    <div className="mt-2 rounded-xl border border-[#8B5CF6]/30 bg-[#8B5CF6]/8 px-3 py-2">
+      <p className="text-[10px] font-semibold tracking-wide text-[#8B5CF6]">状态栏</p>
+      <div className="mt-1 space-y-0.5">
+        {lines.map((line, i) => (
+          <p key={i} className="text-[11px] leading-relaxed text-[#4C1D95]">
+            {line.trim()}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface MemberChatPanelProps {
   member: ConvItem;
   /** 子对话栏宽度（px 数字或 CSS 变量，默认 380，可拖拽调节） */
@@ -114,7 +159,8 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
             <div className="mx-auto w-full max-w-[820px] space-y-4">
               {messages.map((m) =>
                 m.role === "member" ? (
-                  /* 成员消息：左侧成员头像 + 名字/时间 + 白色气泡 */
+                  /* 成员消息：左侧成员头像 + 名字/时间 + 白色气泡（酒馆式输出：
+                     状态栏块 → 紫色状态卡；结尾剧情选项 → 可点击按钮） */
                   <div key={m.id} className="flex gap-3">
                     <div className="relative shrink-0" style={{ width: 40, height: 40 }}>
                       <div
@@ -134,17 +180,38 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
                         }}
                       />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="text-member font-medium text-[#303030]">{member.name}</span>
-                        <span className="text-body-sm text-muted-foreground">{m.time}</span>
-                      </div>
-                      <div className="break-words rounded-lg rounded-tl-none border border-black/10 bg-white px-4 py-3">
-                        <div className="text-body-sm leading-relaxed text-[#303030]">
-                          <MarkdownText content={m.text} />
+                    {(() => {
+                      const parsed = parseTavernText(m.text);
+                      return (
+                        <div className="min-w-0 flex-1">
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className="text-member font-medium text-[#303030]">{member.name}</span>
+                            <span className="text-body-sm text-muted-foreground">{m.time}</span>
+                          </div>
+                          <div className="break-words rounded-lg rounded-tl-none border border-black/10 bg-white px-4 py-3">
+                            <div className="text-body-sm leading-relaxed text-[#303030]">
+                              <MarkdownText content={parsed.main} />
+                            </div>
+                          </div>
+                          {parsed.status && <StatusCard text={parsed.status} />}
+                          {parsed.options && parsed.options.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                              <p className="text-[10px] text-muted-foreground">剧情选项（点击发送）</p>
+                              {parsed.options.map((o, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => onSend(member.id, o)}
+                                  className="block w-full rounded-lg border border-[#8B5CF6]/30 bg-white px-3 py-1.5 text-left text-[12px] text-[#303030] transition-colors hover:border-[#8B5CF6] hover:bg-[#8B5CF6]/5"
+                                >
+                                  <span className="mr-1.5 font-semibold text-[#8B5CF6]">{i + 1}.</span>
+                                  {o}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   /* 用户消息：右侧名字 + 浅蓝气泡 + ME 头像 */

@@ -25,7 +25,7 @@ import {
   TAVERN_MEMBER_ENV,
   type ConvItem,
 } from "@/store/agents";
-import { listTavernPresets, parseCharacterCard, parseCharacterCardPng, cardToPersona, presetToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
+import { listTavernPresets, parseCharacterCard, parseCharacterCardPng, cardToPersona, presetToPersona, tavernPresetsRoot, readWorldbook, writeWorldbook, type TavernPreset, type Worldbook, type WbEntry, type WbGroup } from "@/lib/tavern";
 import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES, type BuiltinCharacter } from "@/lib/tavern-characters";
 import {
   DEFAULT_MARKET_SOURCES,
@@ -2681,6 +2681,8 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   const [query, setQuery] = useState("");
   // 拖拽导入视觉态
   const [dragOver, setDragOver] = useState(false);
+  // 世界书编辑（酒馆预设行入口）
+  const [wbEdit, setWbEdit] = useState<{ key: string; name: string } | null>(null);
   // 在线市场：源列表 / 当前源 / 包缓存 / 拉取状态 / 自定义源表单
   const [sources, setSources] = useState<MarketSource[]>(() => allSources());
   const [marketUrl, setMarketUrl] = useState<string>(DEFAULT_MARKET_SOURCES[0]!.url);
@@ -3100,6 +3102,14 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
                       </p>
                     </div>
                     <button
+                      onClick={() => setWbEdit({ key: p.key, name: p.name })}
+                      disabled={!rootPath}
+                      title="编辑该预设的世界书（关键词/全文注入）"
+                      className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+                    >
+                      世界书
+                    </button>
+                    <button
                       onClick={() => importPreset(p)}
                       className={cn(
                         "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
@@ -3144,6 +3154,15 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           </div>
         )}
 
+        {wbEdit && rootPath && (
+          <WorldbookDialog
+            presetKey={wbEdit.key}
+            presetName={wbEdit.name}
+            root={rootPath}
+            onClose={() => setWbEdit(null)}
+          />
+        )}
+
         {note && <p className="mt-3 text-[11px] text-[#10B981]">{note}</p>}
 
         <div className="mt-4 flex justify-end">
@@ -3152,6 +3171,237 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
             className="rounded-md border border-border px-3 py-1.5 text-xs text-[#464646] transition-colors hover:bg-muted"
           >
             完成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// WorldbookDialog — 酒馆世界书编辑器（对齐 dsh-tavern v2 格式）
+// 读写 <预设目录>/worldbooks.json（兼容旧 worldbook.json）：
+// { version: 2, injectMode: "full"|"keyword", groups: [{name, enabled, entries}] }
+// entry = { name, keywords, content, enabled }——keyword 模式按触发词命中注入，
+// full 模式全量注入。保存后该预设绑定的会话即时生效。
+// ================================================================
+
+function WorldbookDialog({
+  presetKey,
+  presetName,
+  root,
+  onClose,
+}: {
+  presetKey: string;
+  presetName: string;
+  root: string;
+  onClose: () => void;
+}) {
+  const [wb, setWb] = useState<Worldbook | null>(null);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const w = await readWorldbook(root, presetKey);
+      if (alive) setWb(w);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [root, presetKey]);
+
+  if (!wb) {
+    return (
+      <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40" onClick={onClose}>
+        <div className="rounded-xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <p className="text-xs text-muted-foreground">读取中…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const patchGroup = (gi: number, patch: Partial<WbGroup>): void =>
+    setWb((w) => (w ? { ...w, groups: w.groups!.map((g, i) => (i === gi ? { ...g, ...patch } : g)) } : w));
+  const patchEntry = (gi: number, ei: number, patch: Partial<WbEntry>): void =>
+    setWb((w) =>
+      w
+        ? {
+            ...w,
+            groups: w.groups!.map((g, i) =>
+              i === gi ? { ...g, entries: g.entries.map((e, j) => (j === ei ? { ...e, ...patch } : e)) } : g,
+            ),
+          }
+        : w,
+    );
+  const addEntry = (gi: number): void =>
+    setWb((w) =>
+      w
+        ? {
+            ...w,
+            groups: w.groups!.map((g, i) =>
+              i === gi
+                ? { ...g, entries: [...g.entries, { name: "新条目", keywords: [], content: "", enabled: true }] }
+                : g,
+            ),
+          }
+        : w,
+    );
+  const removeEntry = (gi: number, ei: number): void =>
+    setWb((w) =>
+      w
+        ? { ...w, groups: w.groups!.map((g, i) => (i === gi ? { ...g, entries: g.entries.filter((_, j) => j !== ei) } : g)) }
+        : w,
+    );
+  const addGroup = (): void =>
+    setWb((w) =>
+      w ? { ...w, groups: [...(w.groups ?? []), { name: "新世界书", enabled: true, entries: [] }] } : w,
+    );
+  const save = async (): Promise<void> => {
+    try {
+      await writeWorldbook(root, presetKey, wb);
+      setNote("已保存 ✓（该预设绑定的会话即时生效）");
+    } catch (e) {
+      setNote("保存失败：" + String(e));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="max-h-[85vh] w-[600px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-[#303030]">世界书 — {presetName}</h3>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              全文注入 = 条目全量进上下文；关键词触发 = 消息命中触发词才注入（省上下文）。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#303030]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* 注入模式 + 分组 */}
+        <div className="mt-3 flex items-center gap-1 rounded-lg bg-muted/60 p-1 text-[11px]">
+          {(
+            [
+              ["full", "全文注入"],
+              ["keyword", "关键词触发"],
+            ] as const
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setWb({ ...wb, injectMode: v })}
+              className={cn(
+                "flex-1 rounded-md py-1 transition-colors",
+                wb.injectMode === v ? "bg-white font-medium text-[#303030] shadow-sm" : "text-muted-foreground hover:text-[#303030]",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            onClick={addGroup}
+            className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] transition-colors hover:bg-white hover:text-[#303030]"
+          >
+            + 分组
+          </button>
+        </div>
+
+        {/* 分组与条目 */}
+        <div className="mt-3 space-y-3">
+          {wb.groups!.map((g, gi) => (
+            <div key={gi} className="rounded-lg border border-black/10 p-2.5">
+              <div className="flex items-center gap-2">
+                <input
+                  value={g.name ?? ""}
+                  onChange={(e) => patchGroup(gi, { name: e.target.value })}
+                  className="min-w-0 flex-1 rounded-md border border-border bg-white px-2 py-1 text-[11px] font-medium text-[#303030] outline-none focus:border-[#8B5CF6]"
+                />
+                <button
+                  onClick={() => addEntry(gi)}
+                  className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
+                >
+                  + 条目
+                </button>
+              </div>
+              <div className="mt-2 space-y-2">
+                {g.entries.map((e, ei) => (
+                  <div key={ei} className="rounded-md border border-black/5 bg-muted/30 p-2">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={e.name ?? ""}
+                        onChange={(ev) => patchEntry(gi, ei, { name: ev.target.value })}
+                        placeholder="条目名"
+                        className="min-w-0 flex-1 rounded border border-border bg-white px-2 py-1 text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+                      />
+                      <input
+                        value={(e.keywords ?? []).join(", ")}
+                        onChange={(ev) =>
+                          patchEntry(gi, ei, {
+                            keywords: ev.target.value
+                              .split(/[,，]/)
+                              .map((k) => k.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                        placeholder="触发词（逗号分隔）"
+                        className="min-w-0 flex-1 rounded border border-border bg-white px-2 py-1 font-mono text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+                      />
+                      <label className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={e.enabled !== false}
+                          onChange={(ev) => patchEntry(gi, ei, { enabled: ev.target.checked })}
+                        />
+                        启用
+                      </label>
+                      <button
+                        onClick={() => removeEntry(gi, ei)}
+                        title="删除条目"
+                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#EF4444]"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <textarea
+                      value={e.content ?? ""}
+                      onChange={(ev) => patchEntry(gi, ei, { content: ev.target.value })}
+                      rows={3}
+                      placeholder="条目内容（注入给模型的世界观/设定文本）"
+                      className="mt-1.5 w-full resize-y rounded border border-border bg-white px-2 py-1 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          {wb.groups!.length === 0 && (
+            <p className="py-4 text-center text-[11px] text-muted-foreground">空世界书——用「+ 条目」前先加一个分组字段（保存时自动建组）</p>
+          )}
+        </div>
+
+        {note && <p className="mt-3 text-[11px] text-[#10B981]">{note}</p>}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-[#464646] transition-colors hover:bg-muted"
+          >
+            关闭
+          </button>
+          <button
+            onClick={() => void save()}
+            className="rounded-md bg-[#8B5CF6] px-3 py-1.5 text-xs text-white transition-colors hover:bg-[#8B5CF6]/90"
+          >
+            保存世界书
           </button>
         </div>
       </div>

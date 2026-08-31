@@ -25,6 +25,93 @@ export interface TavernPreset {
   persona: string;
 }
 
+// ── 世界书（对齐 dsh-tavern v2 统一格式） ──
+// 存储：<预设目录>/worldbooks.json（旧 worldbook.json 兼容读）
+// { version: 2, injectMode: "full"|"keyword", groups: [{ name, enabled, entries }] }
+// entry：{ name, keywords: string[], content, enabled }——keyword 模式按触发词命中。
+
+export interface WbEntry {
+  name?: string;
+  keywords?: string[];
+  content?: string;
+  enabled?: boolean;
+}
+
+export interface WbGroup {
+  name?: string;
+  enabled?: boolean;
+  entries: WbEntry[];
+}
+
+export interface Worldbook {
+  version?: number;
+  injectMode?: string;
+  groups?: WbGroup[];
+}
+
+function normalizeWorldbook(d: unknown): Worldbook {
+  if (Array.isArray(d)) {
+    const looksLikeWorldbooks = d.some((wb) => wb && Array.isArray((wb as WbGroup).entries));
+    if (looksLikeWorldbooks) {
+      return {
+        injectMode: "full",
+        groups: d
+          .filter((wb) => wb && Array.isArray((wb as WbGroup).entries))
+          .map((wb) => ({
+            name: (wb as WbGroup).name || "未命名世界书",
+            enabled: (wb as WbGroup).enabled !== false,
+            entries: (wb as WbGroup).entries ?? [],
+          })),
+      };
+    }
+    return { injectMode: "full", groups: [{ name: "导入条目", enabled: true, entries: d as WbEntry[] }] };
+  }
+  const o = (d ?? {}) as Worldbook;
+  let groups = Array.isArray(o.groups) ? o.groups : [];
+  if (!groups.length && Array.isArray((o as { entries?: WbEntry[] }).entries)) {
+    groups = [{ name: "导入条目", enabled: true, entries: (o as { entries: WbEntry[] }).entries }];
+  }
+  return {
+    injectMode: o.injectMode === "keyword" ? "keyword" : "full",
+    groups: groups.map((g) => ({
+      name: g?.name || "未命名世界书",
+      enabled: g?.enabled !== false,
+      entries: Array.isArray(g?.entries) ? g.entries : [],
+    })),
+  };
+}
+
+/** 读取预设的世界书（worldbooks.json 优先，worldbook.json 兼容；缺失返回空书） */
+export async function readWorldbook(presetRoot: string, presetKey: string): Promise<Worldbook> {
+  const base = `${presetRoot}\\${presetKey}`;
+  for (const f of ["worldbooks.json", "worldbook.json"]) {
+    try {
+      const text = await invoke<string>("read_file", { path: `${base}\\${f}` });
+      return normalizeWorldbook(JSON.parse(text));
+    } catch {
+      /* 换下一个/缺失 */
+    }
+  }
+  return { version: 2, injectMode: "full", groups: [] };
+}
+
+/** 保存预设的世界书（统一写 worldbooks.json v2 格式） */
+export async function writeWorldbook(presetRoot: string, presetKey: string, wb: Worldbook): Promise<void> {
+  const unified = {
+    version: 2,
+    injectMode: wb.injectMode === "keyword" ? "keyword" : "full",
+    groups: (wb.groups ?? []).map((g) => ({
+      name: g.name || "未命名世界书",
+      enabled: g.enabled !== false,
+      entries: g.entries ?? [],
+    })),
+  };
+  await invoke("write_user_file", {
+    path: `${presetRoot}\\${presetKey}\\worldbooks.json`,
+    content: JSON.stringify(unified, null, 2),
+  });
+}
+
 interface FileEntry {
   name: string;
   path: string;

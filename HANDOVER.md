@@ -523,6 +523,23 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十一批：酒馆 UI 全量对接（2026-09-01 深夜）
+
+1. **剧情选项按钮 ✅**：MemberChatPanel 解析酒馆式输出（"接下来你想怎么做？"+
+   1./2./3. 结尾块）→ 正文剥离渲染 + 三个可点击选项按钮（点击即发送该行动）。
+2. **状态栏卡片 ✅**：「状态栏：」块（日期/时间/地点/用户列表）从正文剥离，
+   渲染为紫色状态卡（对齐酒馆 client 的美化）。
+3. **世界书面板 ✅**：导入弹窗"酒馆预设"标签每个预设加「世界书」按钮 →
+   WorldbookDialog：读写 <预设目录>/worldbooks.json（v2 统一格式，兼容旧
+   worldbook.json），injectMode 全文/关键词切换，分组/条目（名称、触发词、
+   内容、启用）增删改；保存写回（write_user_file 自动建目录）。tavern.ts 新增
+   readWorldbook/writeWorldbook/normalizeWorldbook。
+4. **NSFW 接线：明确拒绝（立场不变）**。已向用户说明：已读过插件的注入文本，
+   它是编造"历史共识"+ 命令模型永不拒绝的越狱脚本——接开关=搭越狱操作面。
+   插件自带开关在官方酒馆管理面板里，不经 mirach 代码。
+5. dsh-agent-rp：本机未装、无源码，融合评估仍待其到位。
+- tsc 通过。
+
 # 第十批：深度融合——会话绑定酒馆预设 ✅（2026-09-01 深夜）
 
 **机制探明**（packages/preset/agent-presets/lib/index.js）：引擎 `AgentPresets`
