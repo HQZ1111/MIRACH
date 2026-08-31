@@ -33,6 +33,7 @@ import {
   triggerCronNow,
   type EngineCronJob,
 } from "@/store/cron";
+import { $engineEnv } from "@/store/engine-session";
 
 type JobState = "enabled" | "scheduled" | "running" | "paused" | "disabled" | "error" | "completed";
 
@@ -82,9 +83,11 @@ export function CronOverlay() {
   const jobs = useStore($cronJobs);
   const engineOk = useStore($cronEngineOk);
   const loading = useStore($cronLoading);
+  const engineEnvId = useStore($engineEnv).id;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showAllEnv, setShowAllEnv] = useState(false);
   const [draft, setDraft] = useState({ name: "", prompt: "", freq: FREQUENCIES[0], deliver: DELIVER_OPTIONS[0], customCron: "" });
 
   // 首次挂载加载登记表（真实模式读本地持久化；mock 读演示种子）
@@ -93,9 +96,15 @@ export function CronOverlay() {
   }, []);
 
   const selected = jobs.find((j) => j.id === selectedId) ?? null;
-  const filtered = jobs.filter(
-    (j) => !search || j.name.toLowerCase().includes(search.toLowerCase()) || j.prompt.toLowerCase().includes(search.toLowerCase()),
-  );
+  // 环境视图（默认）：只显示当前环境的任务（名称带 "[envId] " 前缀标记）
+  // 和未标记的旧任务；可切"全部环境"
+  const filtered = jobs.filter((j) => {
+    if (!showAllEnv) {
+      const m = /^\[([^\]]+)\]/.exec(j.name);
+      if (m && m[1] !== engineEnvId) return false;
+    }
+    return !search || j.name.toLowerCase().includes(search.toLowerCase()) || j.prompt.toLowerCase().includes(search.toLowerCase());
+  });
 
   const submitCreate = async () => {
     if (validationError) {
@@ -105,8 +114,9 @@ export function CronOverlay() {
     const f = draft.freq;
     if (f.value === "custom" && !draft.customCron.trim()) return;
     // 频率折算在 store 内完成（send_prompt → 引擎 schedule_create）
+    // 环境标记：名称加 "[envId] " 前缀（排程面板按当前环境过滤显示）
     const ok = await createCronJob({
-      name: draft.name,
+      name: draft.name.startsWith("[") ? draft.name : `[${engineEnvId}] ${draft.name}`,
       prompt: draft.prompt,
       schedule: f.value,
       deliver: draft.deliver,
@@ -139,6 +149,18 @@ export function CronOverlay() {
             />
             <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           </div>
+          {/* 环境视图切换：默认只看当前环境的任务（名称 "[envId] " 前缀标记） */}
+          <button
+            onClick={() => setShowAllEnv((v) => !v)}
+            className={cn(
+              "mt-1.5 w-full rounded-md border px-2 py-0.5 text-[10px] transition-colors",
+              showAllEnv
+                ? "border-border text-muted-foreground hover:bg-muted"
+                : "border-[#6366F1]/40 bg-[#6366F1]/8 text-[#6366F1]",
+            )}
+          >
+            {showAllEnv ? "显示：全部环境" : `显示：[${engineEnvId}] 环境`}
+          </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {filtered.map((j) => (

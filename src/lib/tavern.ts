@@ -13,6 +13,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { userHomeDir } from "./paths";
 
 /** 酒馆预设（agent-presets 目录下的一个预设） */
 export interface TavernPreset {
@@ -32,15 +33,12 @@ interface FileEntry {
 
 /**
  * 酒馆 agent-presets 根目录（~/.dsh/.agent-presets）。
- * 主目录从 get_config().data_dir（%APPDATA%\my-hermes-rs）上溯三级推得，
- * 不新增 Rust 命令。非 Tauri 环境/读取失败返回 null。
+ * 主目录经 userHomeDir() 推得；非 Tauri 环境/解析失败返回 null。
  */
 export async function tavernPresetsRoot(): Promise<string | null> {
   try {
-    const cfg = await invoke<{ data_dir: string }>("get_config");
-    const parts = cfg.data_dir.replace(/\//g, "\\").split("\\").filter(Boolean);
-    if (parts.length < 4) return null;
-    const home = parts.slice(0, parts.length - 3).join("\\"); // 去掉 AppData\Roaming\my-hermes-rs
+    const home = await userHomeDir();
+    if (!home) return null;
     return `${home}\\.dsh\\.agent-presets`;
   } catch {
     return null;

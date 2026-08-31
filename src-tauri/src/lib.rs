@@ -1003,9 +1003,14 @@ async fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 写用户文件（zosma 导出等；路径由前端决定）。
+/// 写用户文件（zosma 导出等；路径由前端决定）。父目录不存在时自动创建
+/// （环境记忆 .mirach/MEMORY.md 首次保存、团队导出等依赖）。
 #[tauri::command]
 async fn write_user_file(path: String, content: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     std::fs::write(&path, &content).map_err(|e| format!("write_file: {e}"))
 }
 

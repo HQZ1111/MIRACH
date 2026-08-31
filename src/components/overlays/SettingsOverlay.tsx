@@ -12,11 +12,12 @@ import { useI18n, type Lang } from "@/lib/i18n";
 import { useTheme } from "@/hooks/useTheme";
 import { useAppConfig } from "@/hooks/useAppConfig";
 import { $providerConfig, removeProviderConfig, type ProviderConfig } from "@/store/providerConfig";
-import { $environments, $envVersion, saveEnvironments, type EnvProfile } from "@/store/environments";
+import { $environments, envById, $envVersion, saveEnvironments, type EnvProfile } from "@/store/environments";
 import { $passwordEnabled, clearAppPassword, enableAppPassword, hasPasswordData, setAppPassword, verifyAppPassword } from "@/store/password";
 import { KEYBIND_ACTIONS, bindings, setBinding, resetAllBindings, ownerOf, comboFromEvent } from "@/lib/keybinds";
 import {
   loadAgentsOf,
+  saveAgentsOf,
   addAgentIn,
   updateAgentIn,
   removeAgentIn,
@@ -26,6 +27,7 @@ import {
 } from "@/store/agents";
 import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
 import { $engineEnv } from "@/store/engine-session";
+import { userHomeDir } from "@/lib/paths";
 import { $usage, resetUsage } from "@/store/usage";
 import { $agentMode, setAgentMode, $approvalMode, setApprovalMode, type AgentMode } from "@/store/agent";
 import {
@@ -67,6 +69,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Brain,
   type LucideIcon,
   Layers,
 } from "lucide-react";
@@ -82,6 +85,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "plugins", icon: Package },
   { id: "presets", icon: Bot },
   { id: "agents", icon: Users },
+  { id: "memory", icon: Brain },
   { id: "sessions", icon: Archive },
   { id: "safety", icon: Lock },
   { id: "git", icon: GitBranch },
@@ -1734,6 +1738,39 @@ function AgentSection() {
   const [agentModal, setAgentModal] = useState<null | { mode: "add" } | { mode: "edit"; agent: ConvItem }>(null);
   const [confirmDel, setConfirmDel] = useState<ConvItem | null>(null);
   const [tavernOpen, setTavernOpen] = useState(false);
+  const teamImportRef = useRef<HTMLInputElement>(null);
+
+  /** 导出当前标签环境的团队为 JSON（文件保存对话框选位置） */
+  const exportTeam = async (): Promise<void> => {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const path = await save({
+        defaultPath: `mirach-agents-${viewEnv}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const data = { version: 1, env: viewEnv, exportedAt: Date.now(), members: loadAgentsOf(viewEnv) };
+      await invoke("write_user_file", { path, content: JSON.stringify(data, null, 2) });
+    } catch (e) {
+      window.alert("导出失败：" + String(e));
+    }
+  };
+
+  /** 导入团队 JSON：成员按 id 合并进当前标签环境（已存在的不覆盖） */
+  const importTeamFile = async (f: File | undefined): Promise<void> => {
+    if (!f) return;
+    try {
+      const data = JSON.parse(await f.text()) as { members?: ConvItem[] };
+      if (!Array.isArray(data.members)) throw new Error("缺少 members 数组");
+      const cur = loadAgentsOf(viewEnv);
+      const ids = new Set(cur.map((a) => a.id));
+      const merged = [...cur, ...data.members.filter((m) => m && m.id && !ids.has(m.id))];
+      saveAgentsOf(viewEnv, merged);
+      refresh();
+    } catch (e) {
+      window.alert("导入失败：" + String(e));
+    }
+  };
 
   const saveAgent = (data: {
     name: string;
@@ -1789,6 +1826,33 @@ function AgentSection() {
             {e.name}
           </button>
         ))}
+        <div className="ml-auto flex items-center gap-1">
+          {/* 团队模板导入/导出（当前标签环境为单位） */}
+          <button
+            onClick={() => void exportTeam()}
+            title="导出当前环境的团队为 JSON 文件"
+            className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
+          >
+            导出团队
+          </button>
+          <button
+            onClick={() => teamImportRef.current?.click()}
+            title="从 JSON 文件导入团队（成员按 id 合并，不覆盖已有）"
+            className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
+          >
+            导入团队
+          </button>
+          <input
+            ref={teamImportRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              void importTeamFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+        </div>
       </div>
 
       <div className="px-5 pb-4">
@@ -2314,6 +2378,7 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       case "plugins": return <PluginsContent />;
       case "presets": return <PresetsContent />;
       case "agents": return <AgentSection />;
+      case "memory": return <MemorySection />;
       case "sessions": return <SessionsContent />;
       case "safety": return <SafetyContent />;
       case "git": return <GitContent />;
@@ -2387,6 +2452,133 @@ function NavItem({ id, icon: Icon, active, onClick }: { id: string; icon: Lucide
       <Icon className="h-4 w-4 shrink-0" strokeWidth={2} />
       <span className="truncate">{t(`settings.${id}`)}</span>
     </button>
+  );
+}
+
+// ================================================================
+// MemorySection — 环境记忆（per-env MEMORY.md / USER.md）
+// 记忆文件 = <环境工作区>/.mirach/MEMORY.md（环境记忆）+ USER.md（用户档案）。
+// sidecar 在 set_env 时把内容注入该环境全部对话（主对话 + 成员）的系统提示，
+// AI 亦按注入的维护约定用文件工具自行更新。cwd 即环境边界 → 记忆天然按环境
+// 隔离；工作区未设置的环境回退用户主目录。
+// ================================================================
+
+function MemorySection() {
+  const envs = useStore($environments);
+  const engineEnvId = useStore($engineEnv).id;
+  const [tab, setTab] = useState<string | null>(null);
+  const viewEnv = tab ?? engineEnvId;
+  const env = envById(viewEnv);
+
+  const [dir, setDir] = useState("");
+  const [memory, setMemory] = useState("");
+  const [user, setUser] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    setLoaded(false);
+    setNote("");
+    void (async () => {
+      const home = await userHomeDir();
+      if (!alive) return;
+      const base = env.cwd || home || "";
+      setDir(base);
+      const read = async (f: string): Promise<string> => {
+        try {
+          return await invoke<string>("read_file", { path: `${base}\\.mirach\\${f}` });
+        } catch {
+          return ""; // 文件不存在 = 还没有记忆
+        }
+      };
+      const [m, u] = await Promise.all([read("MEMORY.md"), read("USER.md")]);
+      if (!alive) return;
+      setMemory(m);
+      setUser(u);
+      setLoaded(true);
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewEnv, env.cwd]);
+
+  const save = async (): Promise<void> => {
+    if (!dir) {
+      setNote("无法确定工作区目录");
+      return;
+    }
+    try {
+      await invoke("write_user_file", { path: `${dir}\\.mirach\\MEMORY.md`, content: memory });
+      await invoke("write_user_file", { path: `${dir}\\.mirach\\USER.md`, content: user });
+      setNote("已保存 ✓（下一条消息起注入该环境的全部对话）");
+    } catch (e) {
+      setNote("保存失败：" + String(e));
+    }
+  };
+
+  return (
+    <div>
+      <SubHeading>记忆</SubHeading>
+      <p className="px-5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        每个环境一份长期记忆，按环境标签切换。内容注入该环境全部对话（主对话与成员）的系统提示；
+        AI 也会按约定把值得记住的信息写回这些文件。文件位置：
+        <span className="ml-1 font-mono">{dir ? `${dir}\\.mirach\\` : "…"}</span>
+      </p>
+
+      {/* 环境标签 */}
+      <div className="flex flex-wrap items-center gap-1 px-5 pb-2">
+        {envs.map((e) => (
+          <button
+            key={e.id}
+            onClick={() => setTab(e.id)}
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+              viewEnv === e.id
+                ? "border-[#6366F1] bg-[#6366F1]/10 text-[#6366F1]"
+                : "border-border text-muted-foreground hover:bg-muted",
+            )}
+          >
+            {e.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-3 px-5 pb-4">
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-[#303030]">MEMORY.md — 环境记忆（项目事实 / 决策 / 约定）</span>
+          <textarea
+            value={memory}
+            onChange={(e) => setMemory(e.target.value)}
+            rows={10}
+            placeholder={loaded ? "如：- 仓库用 pnpm，禁 npm\n- 部署目标是内网 192.168.x.x\n- 用户偏好中文回复" : "读取中…"}
+            className="w-full resize-y rounded-md border border-border bg-white px-3 py-2 font-mono text-[12px] leading-relaxed text-[#303030] outline-none focus:border-[#6366F1]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] font-medium text-[#303030]">USER.md — 用户档案（偏好 / 习惯 / 背景）</span>
+          <textarea
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            rows={6}
+            placeholder={loaded ? "如：- 称呼：H 总\n- 时区 Asia/Shanghai\n- 回复要结论先行" : "读取中…"}
+            className="w-full resize-y rounded-md border border-border bg-white px-3 py-2 font-mono text-[12px] leading-relaxed text-[#303030] outline-none focus:border-[#6366F1]"
+          />
+        </label>
+
+        <div className="flex items-center justify-end gap-3">
+          {note && <span className="text-[11px] text-[#10B981]">{note}</span>}
+          <button
+            onClick={() => void save()}
+            disabled={!loaded}
+            className="rounded-md bg-[#017CF3] px-3 py-1 text-xs text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+          >
+            保存记忆
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

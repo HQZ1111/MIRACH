@@ -503,6 +503,26 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
 拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
 
+# 第四批：记忆系统 + cron 环境标记 + 模板导入导出（2026-08-31 深夜）
+
+1. **记忆系统 ✅（P2 大件落地）**：
+   - 位置 = 每环境工作区的 `.mirach/MEMORY.md`（环境记忆）+ `.mirach/USER.md`
+     （用户档案）；cwd 即环境边界 → 天然按环境隔离，且在引擎沙箱（workspace-write）
+     内，AI 可用文件工具自行维护。
+   - 注入：sidecar set_env 时读两文件拼进 systemPrompt（`memoryBlock()` +
+     MEMORY_MAINTAIN_HINT 维护约定），主对话与成员私聊共享（都走 set_env）。
+     **需重启应用生效**（sidecar 变更）。
+   - 设置页新分区「记忆」（SECTIONS + MemorySection）：环境标签切换，双 textarea
+     编辑 + 保存（read_file / write_user_file 既有命令；write_user_file 已补
+     create_dir_all）。工作区未设置的环境回退用户主目录（userHomeDir，
+     新 src/lib/paths.ts，tavern.ts 同步复用）。
+2. **定时任务环境标记 ✅（约定式隔离）**：cron 名称加 "[envId] " 前缀；排程面板
+   默认只显示当前环境（+未标记旧任务），可切"全部环境"。引擎侧 job 模型无环境
+   字段，真字段级隔离需引擎支持（已注明）。
+3. **成员模板导入导出 ✅**：智能体团队标签行右侧「导出团队/导入团队」——导出 =
+   save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
+   合并进当前标签环境（不覆盖已有）。
+
 # 第三批收尾（2026-08-31 晚；用户反馈驱动）
 
 - **Mirach-harness GitHub 推送取消**（用户决定不做）：父仓库 github remote 已移除，

@@ -22,6 +22,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { homedir } from "node:os";
 import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
 
 import { createDshAdapter } from "./adapter.js";
@@ -294,6 +295,33 @@ function emitQueueSnapshot(): void {
 
 // ── 命令处理 ───────────────────────────────────────────────────────────────
 
+/** 记忆维护约定（追加在注入文本尾部；引擎用文件工具自行维护记忆文件） */
+const MEMORY_MAINTAIN_HINT =
+  "（记忆维护约定：当对话出现值得长期记住的信息——用户偏好、项目事实、重要决策——" +
+  "用文件工具把简洁条目写入/更新工作区 .mirach/MEMORY.md；关于用户本人的写 .mirach/USER.md。" +
+  "只记要点，不记过程；每次更新保持文件结构清晰。）";
+
+/**
+ * 读取环境记忆块（<cwd>/.mirach/MEMORY.md + USER.md）。
+ * 文件不存在返回空串；读失败静默（记忆缺失不应阻断对话）。
+ */
+function memoryBlock(cwd: string): string {
+  const base = join(cwd, ".mirach");
+  const read = (f: string): string => {
+    try {
+      return readFileSync(join(base, f), "utf8").trim();
+    } catch {
+      return "";
+    }
+  };
+  const mem = read("MEMORY.md");
+  const usr = read("USER.md");
+  const parts: string[] = [];
+  if (mem) parts.push(`# 环境记忆（MEMORY.md）\n${mem}`);
+  if (usr) parts.push(`# 用户档案（USER.md）\n${usr}`);
+  return parts.join("\n\n");
+}
+
 interface InboundCommand {
   type: string;
   id?: string;
@@ -373,7 +401,14 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       }
       setWorkspace(envId, cwd || undefined);
       // 主聊天 persona（奎木狼/成员人设）：经 DSH_SYSTEM_PROMPT 注入引擎
-      if (typeof cmd.systemPrompt === "string") setSystemPrompt(cmd.systemPrompt);
+      // 环境记忆（per-env MEMORY.md/USER.md，位于工作区 .mirach/ 下）随后注入：
+      // cwd 即环境边界 → 记忆天然按环境隔离，且引擎文件工具可自行维护。
+      const cwdResolved = workspace().cwd ?? homedir();
+      const mem = memoryBlock(cwdResolved);
+      const basePersona = typeof cmd.systemPrompt === "string" ? cmd.systemPrompt : "";
+      if (basePersona || mem) {
+        setSystemPrompt([basePersona, mem, MEMORY_MAINTAIN_HINT].filter((s) => s.trim()).join("\n\n"));
+      }
       // sessionMap 已按 "<envId>::<frontendId>" 寻址；新环境下旧映射自然 miss
       currentFrontendId = null;
       currentSessionId = null;
