@@ -33,7 +33,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSy
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
-import { listPlugins, installPlugin, uninstallPlugin, netInfo } from "./plugins.js";
+import { listPlugins, installPlugin, uninstallPlugin, netAccessInfo } from "./plugins.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
@@ -613,9 +613,9 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         }
         return;
       }
-      // 手机接入：局域网 IP + 核心 web 面地址（设置页「手机接入」二维码/链接用）
+      // 手机接入：网卡枚举（分类）+ 核心 web 面连通性探测（设置页「手机接入」用）
       if (method === "net.info") {
-        send({ type: "result", id, data: netInfo() });
+        send({ type: "result", id, data: await netAccessInfo() });
         return;
       }
       // 引擎 ctx.sessions.fork（最近完成回合边界）产出子会话，

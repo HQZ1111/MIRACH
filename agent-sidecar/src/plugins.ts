@@ -12,6 +12,7 @@
  */
 
 import { exec } from "node:child_process";
+import net from "node:net";
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, lstatSync, symlinkSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
@@ -237,24 +238,60 @@ export async function uninstallPlugin(pkgName: string): Promise<string[]> {
   return lines;
 }
 
-// ── 手机接入（net.info）：局域网 IP + 核心 web 面地址 ──
+// ── 手机接入（net.access）：局域网/虚拟网 IP + 连通性探测 ──
 
-export interface NetInfo {
-  lanIps: string[];
-  port: string;
-  host: string;
+export interface NetAccessIface {
+  /** 网卡名（Windows 上 Tailscale 网卡就叫 "Tailscale"） */
+  name: string;
+  address: string;
+  kind: "lan" | "tailscale" | "zerotier" | "other";
+  /** 核心 web 面在该地址:端口是否可达（未监听 = 开关未开/未重启） */
+  reachable: boolean;
 }
 
-export function netInfo(): NetInfo {
-  const lanIps: string[] = [];
-  for (const list of Object.values(networkInterfaces())) {
+export interface NetAccessInfo {
+  port: string;
+  host: string;
+  ifaces: NetAccessIface[];
+}
+
+function classifyIface(ip: string, ifName: string): NetAccessIface["kind"] {
+  const lower = ifName.toLowerCase();
+  // Tailscale CGNAT 段 100.64.0.0/10
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip) || lower.includes("tailscale")) return "tailscale";
+  if (lower.includes("zerotier") || /^10\.147\./.test(ip)) return "zerotier";
+  return "lan";
+}
+
+function checkReachable(ip: string, port: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const done = (ok: boolean): void => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(600);
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+    socket.connect(Number(port) || 3212, ip);
+  });
+}
+
+/** 枚举非内网 IPv4 网卡（分类 + 逐个探测核心 web 面连通性） */
+export async function netAccessInfo(): Promise<NetAccessInfo> {
+  const port = process.env.MIRACH_WEB_PORT ?? "3212";
+  const host = process.env.MIRACH_WEB_HOST ?? "127.0.0.1";
+  const out: NetAccessIface[] = [];
+  for (const [ifName, list] of Object.entries(networkInterfaces())) {
     for (const ni of list ?? []) {
-      if (ni.family === "IPv4" && !ni.internal) lanIps.push(ni.address);
+      if (ni.family !== "IPv4" || ni.internal) continue;
+      const kind = classifyIface(ni.address, ifName);
+      const reachable = await checkReachable(ni.address, port);
+      out.push({ name: ifName, address: ni.address, kind, reachable });
     }
   }
-  return {
-    lanIps,
-    port: process.env.MIRACH_WEB_PORT ?? "3212",
-    host: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
-  };
+  // 可达的排前面
+  out.sort((a, b) => Number(b.reachable) - Number(a.reachable));
+  return { port, host, ifaces: out };
 }

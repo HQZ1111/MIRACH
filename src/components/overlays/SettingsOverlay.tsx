@@ -2173,11 +2173,20 @@ function MemorySection() {
 // 局域网 IP 由 sidecar net.info 提供（os.networkInterfaces）。
 // ================================================================
 
+// ================================================================
+// MobileAccessSection — 手机接入（局域网扫码 / 跨网虚拟网卡 / 链接直达）
+// 开关 = 核心 web 面监听地址（config webHost：127.0.0.1 / 0.0.0.0，重启生效）。
+// net.access 逐网卡探测连通性：未监听 = 开关未开/未重启/防火墙拦截。
+// Tailscale/ZeroTier 虚拟网卡单独分组——跨网访问的推荐通道。
+// ================================================================
+
 function MobileAccessSection() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [lanIps, setLanIps] = useState<string[]>([]);
+  const [ifaces, setIfaces] = useState<
+    { name: string; address: string; kind: "lan" | "tailscale" | "zerotier" | "other"; reachable: boolean }[]
+  >([]);
   const [port, setPort] = useState("3212");
-  const [qr, setQr] = useState("");
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [copied, setCopied] = useState("");
 
@@ -2189,29 +2198,38 @@ function MobileAccessSection() {
       setEnabled(false);
     }
     try {
-      const n = await invoke<{ lanIps: string[]; port: string }>("dsh_rpc", { method: "net.info", params: null });
-      setLanIps(n.lanIps ?? []);
+      const n = await invoke<{
+        port: string;
+        ifaces: { name: string; address: string; kind: "lan" | "tailscale" | "zerotier" | "other"; reachable: boolean }[];
+      }>("dsh_rpc", { method: "net.info", params: null });
+      setIfaces(n.ifaces ?? []);
       setPort(n.port ?? "3212");
     } catch {
-      setLanIps([]);
+      setIfaces([]);
     }
   }, []);
   useEffect(() => {
     void loadCfg();
   }, [loadCfg]);
 
-  // 二维码：开启且拿到局域网 IP 后生成（第一个 IP）
+  const urlOf = (ip: string): string => `http://${ip}:${port}`;
+  // 二维码跟随选中链接（默认第一个可达地址）
+  const selected = useMemo(
+    () => ifaces.find((i) => urlOf(i.address) === qrUrl) ?? ifaces.find((i) => i.reachable) ?? ifaces[0],
+    [ifaces, qrUrl],
+  );
   useEffect(() => {
-    if (!enabled || lanIps.length === 0) {
-      setQr("");
+    if (!enabled || !selected) {
+      setQrUrl(null);
       return;
     }
-    const url = `http://${lanIps[0]}:${port}`;
+    const url = urlOf(selected.address);
     void import("qrcode")
       .then((QR) => QR.toDataURL(url, { width: 220, margin: 1 }))
-      .then((d) => setQr(d))
-      .catch(() => setQr(""));
-  }, [enabled, lanIps, port]);
+      .then(() => setQrUrl(url))
+      .catch(() => setQrUrl(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, selected?.address, port]);
 
   const toggle = async (): Promise<void> => {
     const next = enabled ? "127.0.0.1" : "0.0.0.0";
@@ -2219,6 +2237,7 @@ function MobileAccessSection() {
       await invoke("set_config", { webHost: next });
       setEnabled(next === "0.0.0.0");
       setNote(next === "0.0.0.0" ? "已开启 —— 重启应用后手机可访问" : "已关闭 —— 重启应用后恢复仅本机");
+      void loadCfg();
     } catch (e) {
       setNote("保存失败：" + String(e));
     }
@@ -2229,6 +2248,50 @@ function MobileAccessSection() {
       setCopied(url);
       window.setTimeout(() => setCopied(""), 1500);
     });
+  };
+
+  const lanIfaces = ifaces.filter((i) => i.kind === "lan" || i.kind === "other");
+  const vpnIfaces = ifaces.filter((i) => i.kind === "tailscale" || i.kind === "zerotier");
+  const anyReachable = ifaces.some((i) => i.reachable);
+
+  const renderRow = (i: { name: string; address: string; kind: string; reachable: boolean }): React.ReactNode => {
+    const url = urlOf(i.address);
+    const selectedThis = selected?.address === i.address;
+    return (
+      <div
+        key={i.address}
+        onClick={() => setQrUrl(url)}
+        className={cn(
+          "flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 transition-colors",
+          selectedThis ? "border-[#017CF3] bg-[#017CF3]/5" : "border-black/5 bg-muted/30 hover:bg-muted/60",
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-mono text-[11px] text-[#303030]">
+            {url}
+            {i.reachable ? (
+              <span className="ml-1.5 rounded bg-[#10B981]/10 px-1.5 py-px text-[10px] text-[#059669]">可达</span>
+            ) : (
+              <span className="ml-1.5 rounded bg-[#EF4444]/10 px-1.5 py-px text-[10px] text-[#EF4444]">核心未监听</span>
+            )}
+          </p>
+          <p className="truncate text-[10px] text-muted-foreground">{i.name}</p>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            copyLink(url);
+          }}
+          title="复制链接"
+          className={cn(
+            "shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+            copied === url ? "border-[#10B981] text-[#10B981]" : "border-border text-muted-foreground hover:bg-muted hover:text-[#303030]",
+          )}
+        >
+          {copied === url ? "已复制" : "复制"}
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -2265,47 +2328,47 @@ function MobileAccessSection() {
         {/* 链接 + 二维码 */}
         {enabled && (
           <div className="mt-2 rounded-lg border border-black/10 bg-white p-3">
-            {lanIps.length === 0 ? (
+            {ifaces.length === 0 ? (
               <p className="text-[11px] text-muted-foreground">未找到局域网 IP——请确认电脑已联网/接入路由器。</p>
             ) : (
-              <div className="flex items-start gap-4">
-                {qr && (
-                  <img src={qr} alt="手机扫码接入" className="h-[160px] w-[160px] shrink-0 rounded-lg border border-black/10" />
-                )}
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <p className="text-[11px] font-medium text-[#303030]">手机扫码，或点对应链接：</p>
-                  {lanIps.map((ip) => {
-                    const url = `http://${ip}:${port}`;
-                    return (
-                      <div key={ip} className="flex items-center gap-1.5">
-                        <a
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="min-w-0 flex-1 truncate font-mono text-[11px] text-[#017CF3] hover:underline"
-                        >
-                          {url}
-                        </a>
-                        <button
-                          onClick={() => copyLink(url)}
-                          title="复制链接"
-                          className={cn(
-                            "shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition-colors",
-                            copied === url
-                              ? "border-[#10B981] text-[#10B981]"
-                              : "border-border text-muted-foreground hover:bg-muted hover:text-[#303030]",
-                          )}
-                        >
-                          {copied === url ? "已复制" : "复制"}
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <p className="pt-1 text-[10px] leading-relaxed text-muted-foreground">
-                    要求：手机与电脑同一局域网；首次访问如被 Windows 防火墙拦截，放行 Node.js 即可。
+              <>
+                {!anyReachable && (
+                  <p className="mb-2 rounded-md bg-[#EF4444]/10 px-3 py-2 text-[11px] leading-relaxed text-[#B91C1C]">
+                    核心 web 面尚未在任何地址监听——请确认开关已打开并<b>重启过应用</b>；若仍不通，
+                    检查 Windows 防火墙是否放行 Node.js。
                   </p>
-                </div>
-              </div>
+                )}
+                {qrUrl && (
+                  <div className="mb-2 flex items-center gap-3">
+                    <img src={qrUrl} alt="手机扫码接入" className="h-[150px] w-[150px] shrink-0 rounded-lg border border-black/10" />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      手机扫码直达
+                      <br />
+                      （二维码跟随下方选中的地址）
+                    </p>
+                  </div>
+                )}
+                <p className="text-[11px] font-medium text-[#303030]">本局域网（同一 WiFi/路由器）</p>
+                <div className="mt-1 space-y-1">{lanIfaces.map(renderRow)}</div>
+                {vpnIfaces.length > 0 && (
+                  <>
+                    <p className="mt-3 text-[11px] font-medium text-[#303030]">
+                      虚拟网络（跨网可用——手机在外网/流量也能访问）
+                    </p>
+                    <div className="mt-1 space-y-1">{vpnIfaces.map(renderRow)}</div>
+                    <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                      跨网原理：电脑与手机都安装 Tailscale（免费）并登录同一账号，即组成加密虚拟局域网——上方的
+                      100.x 地址在任何网络都能访问。直接把 192.168 内网地址发到外网是打不开的（内网地址不在公网路由）。
+                    </p>
+                  </>
+                )}
+                {vpnIfaces.length === 0 && (
+                  <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                    需要跨网访问（手机不在家里 WiFi）：装 Tailscale（免费，电脑+手机同账号）即可——装好后这里会自动出现
+                    虚拟网卡地址。直接做公网暴露（端口转发）不安全，不支持。
+                  </p>
+                )}
+              </>
             )}
           </div>
         )}
@@ -2315,4 +2378,3 @@ function MobileAccessSection() {
     </div>
   );
 }
-
