@@ -2,7 +2,7 @@
  * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,8 +15,17 @@ import { $providerConfig, removeProviderConfig, type ProviderConfig } from "@/st
 import { $environments, $envVersion, saveEnvironments, type EnvProfile } from "@/store/environments";
 import { $passwordEnabled, clearAppPassword, enableAppPassword, hasPasswordData, setAppPassword, verifyAppPassword } from "@/store/password";
 import { KEYBIND_ACTIONS, bindings, setBinding, resetAllBindings, ownerOf, comboFromEvent } from "@/lib/keybinds";
-import { $agents, addAgent, updateAgent, removeAgent, upsertTavernMember, type ConvItem } from "@/store/agents";
+import {
+  loadAgentsOf,
+  addAgentIn,
+  updateAgentIn,
+  removeAgentIn,
+  upsertTavernMember,
+  TAVERN_MEMBER_ENV,
+  type ConvItem,
+} from "@/store/agents";
 import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
+import { $engineEnv } from "@/store/engine-session";
 import { $usage, resetUsage } from "@/store/usage";
 import { $agentMode, setAgentMode, $approvalMode, setApprovalMode, type AgentMode } from "@/store/agent";
 import {
@@ -1711,7 +1720,17 @@ function PresetsContent() {
 
 /** 智能体（团队成员）管理：卡片 grid，支持添加 / 修改 / 删除 */
 function AgentSection() {
-  const agents = useStore($agents);
+  // 团队按环境隔离：环境标签切换查看/编辑对应环境的分片（不影响左栏当前激活环境）
+  const envs = useStore($environments);
+  const engineEnvId = useStore($engineEnv).id;
+  const [tab, setTab] = useState<string | null>(null);
+  const viewEnv = tab ?? engineEnvId;
+  const [list, setList] = useState<ConvItem[]>(() => loadAgentsOf(viewEnv));
+  const refresh = useCallback(() => setList(loadAgentsOf(viewEnv)), [viewEnv]);
+  useEffect(() => {
+    setList(loadAgentsOf(viewEnv));
+  }, [viewEnv]);
+
   const [agentModal, setAgentModal] = useState<null | { mode: "add" } | { mode: "edit"; agent: ConvItem }>(null);
   const [confirmDel, setConfirmDel] = useState<ConvItem | null>(null);
   const [tavernOpen, setTavernOpen] = useState(false);
@@ -1725,7 +1744,7 @@ function AgentSection() {
     tools?: string[];
   }) => {
     if (agentModal?.mode === "edit" && agentModal.agent) {
-      updateAgent(agentModal.agent.id, {
+      updateAgentIn(viewEnv, agentModal.agent.id, {
         name: data.name,
         desc: data.desc,
         avatarBg: data.avatarBg,
@@ -1734,7 +1753,7 @@ function AgentSection() {
         tools: data.tools,
       });
     } else {
-      addAgent({
+      addAgentIn(viewEnv, {
         name: data.name,
         desc: data.desc,
         avatarBg: data.avatarBg,
@@ -1744,18 +1763,37 @@ function AgentSection() {
       });
     }
     setAgentModal(null);
+    refresh();
   };
 
   return (
     <div>
       <SubHeading>智能体团队</SubHeading>
       <p className="px-5 py-2 text-body-sm text-muted-foreground">
-        团队的智能体成员，可在左侧栏「成员」中对话；支持添加 / 修改 / 删除。
+        团队按环境隔离（聊天/代码/写作…各自独立）；左栏「成员」显示的是当前激活环境的团队。
       </p>
+
+      {/* 环境标签：逐环境查看/编辑团队 */}
+      <div className="flex flex-wrap items-center gap-1 px-5 pb-2">
+        {envs.map((e) => (
+          <button
+            key={e.id}
+            onClick={() => setTab(e.id)}
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+              viewEnv === e.id
+                ? "border-[#6366F1] bg-[#6366F1]/10 text-[#6366F1]"
+                : "border-border text-muted-foreground hover:bg-muted",
+            )}
+          >
+            {e.name}
+          </button>
+        ))}
+      </div>
 
       <div className="px-5 pb-4">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {agents.map((a) => (
+          {list.map((a) => (
             <div
               key={a.id}
               className="flex flex-col rounded-lg border border-black/10 bg-white p-3 shadow-sm transition-shadow hover:shadow-md"
@@ -1781,6 +1819,9 @@ function AgentSection() {
                       <span className="dot" />
                       {a.status === "generating" ? "生成中" : a.status === "completed" ? "就绪" : "空闲"}
                     </span>
+                    {a.source === "tavern" && (
+                      <span className="rounded bg-[#8B5CF6]/10 px-1.5 py-px text-[10px] font-medium text-[#8B5CF6]">酒馆</span>
+                    )}
                     <span className="truncate font-mono text-[10px] text-muted-foreground/60">{a.id}</span>
                   </div>
                   {(a.model || a.tools?.length) && (
@@ -1835,7 +1876,7 @@ function AgentSection() {
         </button>
       </div>
 
-      {tavernOpen && <TavernImportDialog onClose={() => setTavernOpen(false)} />}
+      {tavernOpen && <TavernImportDialog onClose={() => setTavernOpen(false)} onImported={refresh} />}
 
       {agentModal && (
         <AgentEditModal
@@ -1851,8 +1892,9 @@ function AgentSection() {
         description={"确定删除「" + (confirmDel?.name ?? "") + "」吗？其会话记录将保留。"}
         confirmLabel="删除"
         onConfirm={() => {
-          if (confirmDel) removeAgent(confirmDel.id);
+          if (confirmDel) removeAgentIn(viewEnv, confirmDel.id);
           setConfirmDel(null);
+          refresh();
         }}
         onCancel={() => setConfirmDel(null)}
       />
@@ -2356,12 +2398,23 @@ function NavItem({ id, icon: Icon, active, onClick }: { id: string; icon: Lucide
 // 成员 systemPrompt，走既有成员对话注入管线；重导只更新不重复建卡。
 // ================================================================
 
-function TavernImportDialog({ onClose }: { onClose: () => void }) {
-  const agents = useStore($agents);
+function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onImported?: () => void }) {
+  // 已导入标记从聊天环境分片读取（酒馆成员固定放聊天环境，与当前激活环境无关）
+  const [importedIds, setImportedIds] = useState<Set<string>>(
+    () => new Set(loadAgentsOf(TAVERN_MEMBER_ENV).filter((a) => a.source === "tavern").map((a) => a.id)),
+  );
   const [presets, setPresets] = useState<TavernPreset[] | null>(null);
   const [rootPath, setRootPath] = useState("");
   const [note, setNote] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const afterImport = useCallback(
+    (key: string) => {
+      setImportedIds((s) => new Set(s).add(`tavern-${key}`));
+      onImported?.();
+    },
+    [onImported],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -2377,10 +2430,6 @@ function TavernImportDialog({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  const importedIds = useMemo(
-    () => new Set(agents.filter((a) => a.source === "tavern").map((a) => a.id)),
-    [agents],
-  );
   const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入");
 
   const importPreset = (p: TavernPreset): void => {
@@ -2390,7 +2439,8 @@ function TavernImportDialog({ onClose }: { onClose: () => void }) {
       systemPrompt: presetToPersona(p),
       desc: p.description || "酒馆角色 · 预设 " + p.key,
     });
-    setNote("已导入「" + p.name + "」，可在左侧栏成员中开聊");
+    afterImport(p.key);
+    setNote("已导入「" + p.name + "」（聊天环境），到左栏「成员」开聊");
   };
 
   const importCardFiles = (files: FileList | null): void => {
@@ -2409,7 +2459,7 @@ function TavernImportDialog({ onClose }: { onClose: () => void }) {
         });
         ok += 1;
       }
-      setNote(ok > 0 ? "已导入 " + ok + " 个角色卡成员" : "没有可识别的角色卡（需 SillyTavern V2/V3 JSON）");
+      setNote(ok > 0 ? "已导入 " + ok + " 个角色卡成员（聊天环境）" : "没有可识别的角色卡（需 SillyTavern V2/V3 JSON）");
     })();
   };
 

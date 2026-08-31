@@ -125,9 +125,10 @@ function teamSeedFor(env: string): ConvItem[] {
   return env === "chat" ? TEAM_SEED_CHAT : [];
 }
 
-function load(): ConvItem[] {
-  const key = agentsEnvKey(currentAgentsEnv);
-  const seed = teamSeedFor(currentAgentsEnv);
+/** 读取指定环境的成员分片（不切换当前分片——设置页环境标签用） */
+export function loadAgentsOf(envId: string): ConvItem[] {
+  const key = agentsEnvKey(envId);
+  const seed = teamSeedFor(envId);
   try {
     const raw = localStorage.getItem(key);
     if (raw) {
@@ -146,12 +147,8 @@ function load(): ConvItem[] {
   return seed;
 }
 
-function persist(list: ConvItem[]): void {
-  try {
-    localStorage.setItem(agentsEnvKey(currentAgentsEnv), JSON.stringify(list));
-  } catch {
-    /* 存储失败忽略 */
-  }
+function load(): ConvItem[] {
+  return loadAgentsOf(currentAgentsEnv);
 }
 
 /** 环境切换：成员列表随之切换到对应环境的分片（MainPanel 流水线调用） */
@@ -163,26 +160,22 @@ export function setAgentsEnv(envId: string): void {
 
 export const $agents = atom<ConvItem[]>(load());
 
-function commit(list: ConvItem[]): void {
-  persist(list);
-  $agents.set(list);
-}
-
 let idSeq = 0;
 
-/** 新增智能体（名称必填；可带系统提示词/模型/工具） */
-export function addAgent(input: {
-  name: string;
-  desc?: string;
-  avatarBg?: string;
-  tab?: ConvItem["tab"];
-  systemPrompt?: string;
-  model?: string;
-  tools?: string[];
-}): ConvItem {
-  const list = $agents.get();
+function buildAgent(
+  input: {
+    name: string;
+    desc?: string;
+    avatarBg?: string;
+    tab?: ConvItem["tab"];
+    systemPrompt?: string;
+    model?: string;
+    tools?: string[];
+  },
+  list: ConvItem[],
+): ConvItem {
   const name = input.name.trim();
-  const agent: ConvItem = {
+  return {
     id: `a${Date.now()}_${idSeq++}`,
     name,
     initials: name.slice(0, 2).toUpperCase(),
@@ -196,17 +189,59 @@ export function addAgent(input: {
     model: input.model || undefined,
     tools: input.tools?.length ? input.tools : undefined,
   };
-  commit([...list, agent]);
+}
+
+/** 写入指定环境的成员分片；写当前分片时同步 $agents（左栏/对话区实时刷新） */
+export function saveAgentsOf(envId: string, list: ConvItem[]): void {
+  try {
+    localStorage.setItem(agentsEnvKey(envId), JSON.stringify(list));
+  } catch {
+    /* 存储失败忽略 */
+  }
+  if (envId === currentAgentsEnv) $agents.set(list);
+}
+
+/** 新增智能体到指定环境（设置页环境标签用；当前环境走 addAgent） */
+export function addAgentIn(
+  envId: string,
+  input: {
+    name: string;
+    desc?: string;
+    avatarBg?: string;
+    tab?: ConvItem["tab"];
+    systemPrompt?: string;
+    model?: string;
+    tools?: string[];
+  },
+): ConvItem {
+  const list = loadAgentsOf(envId);
+  const agent = buildAgent(input, list);
+  saveAgentsOf(envId, [...list, agent]);
   return agent;
 }
 
-/** 修改智能体（name/desc/avatarBg/status/tab/systemPrompt/model/tools/source） */
-export function updateAgent(
+/** 新增智能体（名称必填；可带系统提示词/模型/工具）——写当前激活环境分片 */
+export function addAgent(input: {
+  name: string;
+  desc?: string;
+  avatarBg?: string;
+  tab?: ConvItem["tab"];
+  systemPrompt?: string;
+  model?: string;
+  tools?: string[];
+}): ConvItem {
+  return addAgentIn(currentAgentsEnv, input);
+}
+
+/** 修改指定环境的智能体（name/desc/avatarBg/status/tab/systemPrompt/model/tools/source） */
+export function updateAgentIn(
+  envId: string,
   id: string,
   patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
 ): void {
-  commit(
-    $agents.get().map((a) => {
+  saveAgentsOf(
+    envId,
+    loadAgentsOf(envId).map((a) => {
       if (a.id !== id) return a;
       const next = { ...a, ...patch };
       if (patch.name?.trim()) {
@@ -218,11 +253,25 @@ export function updateAgent(
   );
 }
 
-/** 删除智能体 */
+/** 修改智能体——写当前激活环境分片 */
+export function updateAgent(
+  id: string,
+  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
+): void {
+  updateAgentIn(currentAgentsEnv, id, patch);
+}
+
+/** 删除指定环境的智能体 */
+export function removeAgentIn(envId: string, id: string): boolean {
+  const before = loadAgentsOf(envId);
+  const after = before.filter((a) => a.id !== id);
+  saveAgentsOf(envId, after);
+  return after.length < before.length;
+}
+
+/** 删除智能体——写当前激活环境分片 */
 export function removeAgent(id: string): boolean {
-  const before = $agents.get().length;
-  commit($agents.get().filter((a) => a.id !== id));
-  return $agents.get().length < before;
+  return removeAgentIn(currentAgentsEnv, id);
 }
 
 // ---- 酒馆角色导入（dsh-tavern → 成员；同 key 幂等 upsert） ----
@@ -235,33 +284,39 @@ export interface TavernMemberInput {
   desc?: string;
 }
 
-/** 导入/更新一个酒馆角色成员（按 key 幂等：已存在则更新人设，不重复建卡） */
+/** 酒馆成员固定归属：聊天环境（用户约定——酒馆角色只放聊天环境） */
+export const TAVERN_MEMBER_ENV = "chat";
+
+/** 导入/更新一个酒馆角色成员（固定写入聊天环境；按 key 幂等，重导只更新人设） */
 export function upsertTavernMember(input: TavernMemberInput): ConvItem {
   const id = `tavern-${input.key}`;
-  const existing = $agents.get().find((a) => a.id === id);
+  const list = loadAgentsOf(TAVERN_MEMBER_ENV);
+  const existing = list.find((a) => a.id === id);
+  let next: ConvItem[];
   if (existing) {
-    updateAgent(id, {
-      name: input.name,
-      systemPrompt: input.systemPrompt,
-      desc: input.desc ?? existing.desc,
-      source: "tavern",
-    });
-    return $agents.get().find((a) => a.id === id)!;
+    next = list.map((a) =>
+      a.id === id
+        ? { ...a, name: input.name, systemPrompt: input.systemPrompt, desc: input.desc ?? a.desc, source: "tavern" as const }
+        : a,
+    );
+  } else {
+    next = [
+      ...list,
+      {
+        id,
+        name: input.name,
+        initials: input.name.slice(0, 2).toUpperCase(),
+        avatarBg: AVATAR_COLORS[(list.length + 3) % AVATAR_COLORS.length],
+        preview: "酒馆角色就绪，直接开始对话",
+        desc: input.desc?.trim() || "酒馆角色 · 角色扮演",
+        time: "刚刚",
+        status: "pending" as const,
+        tab: "all" as const,
+        systemPrompt: input.systemPrompt,
+        source: "tavern" as const,
+      },
+    ];
   }
-  const list = $agents.get();
-  const agent: ConvItem = {
-    id,
-    name: input.name,
-    initials: input.name.slice(0, 2).toUpperCase(),
-    avatarBg: AVATAR_COLORS[(list.length + 3) % AVATAR_COLORS.length],
-    preview: "酒馆角色就绪，直接开始对话",
-    desc: input.desc?.trim() || "酒馆角色 · 角色扮演",
-    time: "刚刚",
-    status: "pending",
-    tab: "all",
-    systemPrompt: input.systemPrompt,
-    source: "tavern",
-  };
-  commit([...list, agent]);
-  return agent;
+  saveAgentsOf(TAVERN_MEMBER_ENV, next);
+  return next.find((a) => a.id === id)!;
 }

@@ -43,7 +43,7 @@ import { $sessionDialog, closeSessionDialog } from "@/store/session-dialog";
 import { $chatHistoryOpen, closeChatHistory } from "@/store/chat-history";
 import { useI18n } from "@/lib/i18n";
 import { useWindowMaximized } from "@/hooks/use-window-maximized";
-import { createProjectSession, ensureMemberThread, generateMemberReply, now, type ProjectSession, type ChatMessage } from "@/lib/memberSessions";
+import { createProjectSession, ensureMemberThread, generateMemberReply, now, persistThreads, type ProjectSession, type ChatMessage } from "@/lib/memberSessions";
 import { LEFT_TOOLBAR_WIDTH, RIGHT_TOOLBAR_WIDTH } from "@/lib/layout";
 import { ColumnResizeHandle } from "@/components/ui/ResizeHandle";
 import { invoke } from "@tauri-apps/api/core";
@@ -284,6 +284,13 @@ export function AppLayout() {
   }, [toggleTheme]);
   // 项目固定会话（跟随主项目建立；成员对话是其下的成员线程）
   const [projectSession, setProjectSession] = useState<ProjectSession>(() => createProjectSession());
+  // 持久化成员线程：任何线程变化即写 localStorage（重启恢复会话记录）
+  useEffect(() => {
+    persistThreads(projectSession.memberThreads);
+  }, [projectSession]);
+  // 最新线程快照引用（异步历史回放守卫读它，避免闭包拿到旧值）
+  const projectSessionRef = useRef(projectSession);
+  projectSessionRef.current = projectSession;
 
   // ---- 点击成员：展开子对话栏；再次点击同一成员收起（默认收起） ----
   const openMember = (member: ConvItem) => {
@@ -295,6 +302,8 @@ export function AppLayout() {
     if (!MOCK) {
       void (async () => {
         try {
+          // 本地已有会话记录（超过种子 1 条）时不回放，避免覆盖本地较新的记录
+          if ((projectSessionRef.current.memberThreads[member.id]?.length ?? 0) > 1) return;
           const r = await invoke<{ messages?: { role: string; text?: string }[] }>("dsh_get_history", {
             sessionId: `member-${member.id}`,
           });

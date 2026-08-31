@@ -38,12 +38,45 @@ export const now = () => {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-/** 跟随主项目建立固定会话 */
+// ---- 成员线程持久化（localStorage）：重启恢复会话记录；引擎侧 dsh 会话
+// （member-<成员id>）另有完整持久日志，重开面板时回放补全 ----
+
+const THREADS_KEY = "mirach.member-threads.v1";
+const MAX_PER_MEMBER = 200;
+
+/** 读取持久化的成员线程（重启恢复；损坏回退空） */
+export function loadPersistedThreads(): Record<string, ChatMessage[]> {
+  try {
+    const raw = localStorage.getItem(THREADS_KEY);
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, ChatMessage[]>;
+      if (obj && typeof obj === "object") return obj;
+    }
+  } catch {
+    /* 损坏忽略 */
+  }
+  return {};
+}
+
+/** 持久化成员线程（每成员只留最近 MAX 条，防无限膨胀） */
+export function persistThreads(threads: Record<string, ChatMessage[]>): void {
+  try {
+    const trimmed: Record<string, ChatMessage[]> = {};
+    for (const [k, list] of Object.entries(threads)) {
+      trimmed[k] = list.length > MAX_PER_MEMBER ? list.slice(-MAX_PER_MEMBER) : list;
+    }
+    localStorage.setItem(THREADS_KEY, JSON.stringify(trimmed));
+  } catch {
+    /* 配额满静默 */
+  }
+}
+
+/** 跟随主项目建立固定会话（启动时恢复上次会话记录） */
 export function createProjectSession(): ProjectSession {
   return {
     projectId: PROJECT_CONTEXT.id,
     projectName: PROJECT_CONTEXT.name,
-    memberThreads: {},
+    memberThreads: loadPersistedThreads(),
   };
 }
 

@@ -503,6 +503,23 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
 拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
 
+# 第三批收尾（2026-08-31 晚；用户反馈驱动）
+
+- **Mirach-harness GitHub 推送取消**（用户决定不做）：父仓库 github remote 已移除，
+  Gitee gitee.com/HANQINGZHOU/mirach-harness 保留（提交 385cca0，mirach 为子模块）。
+- **智能体团队按环境管理 ✅**：设置页「智能体团队」加环境标签页（聊天/代码/写作…），
+  逐环境查看/编辑；store 新增 loadAgentsOf/saveAgentsOf/addAgentIn/updateAgentIn/
+  removeAgentIn（写指定环境分片；写当前分片时同步 $agents，左栏实时刷新）。
+  默认标签 = 当前激活环境（$engineEnv）。
+- **酒馆成员固定聊天环境 ✅**（用户约定）：upsertTavernMember 固定写 TAVERN_MEMBER_ENV
+  = "chat" 分片；成员卡带「酒馆」角标；导入弹窗的已导入标记也从 chat 分片读取。
+- **成员会话记录持久化 ✅**（用户问"每个成员的会话记录没有吗"）：成员线程写
+  localStorage（mirach.member-threads.v1，每成员留最近 200 条），重启恢复；
+  打开面板时的引擎历史回放加守卫（本地已有记录则不覆盖）。引擎侧 member-<id>
+  会话日志本就持久化（续聊上下文不丢）。
+- **成员记忆现状**：会话内记忆 = dsh 会话上下文（续聊有效，已接引擎）；跨会话
+  长期记忆（MEMORY.md 式 per-env 记忆系统）仍是 P2 待做。
+
 # 零散收尾完成（2026-08-31 第二批）
 
 1. **成员私聊接引擎 ✅（原 P1 #6 待办落地）**：
