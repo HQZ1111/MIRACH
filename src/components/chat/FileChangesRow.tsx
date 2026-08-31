@@ -84,10 +84,13 @@ export function aggregateFileChanges(toolCalls: ToolCall[]): { files: FileChange
 export function FileChangesRow({
   toolCalls,
   onOpenFile,
+  onReview,
   className,
 }: {
   toolCalls: ToolCall[];
   onOpenFile?: (path: string) => void;
+  /** 点击"审查"打开 Git Review（diff 审查面板） */
+  onReview?: () => void;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -120,6 +123,26 @@ export function FileChangesRow({
         </span>
         <span className="tabular-nums text-[#10B981]">+{added}</span>
         <span className="tabular-nums text-[#EF4444]">-{removed}</span>
+        {onReview && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReview();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                onReview();
+              }
+            }}
+            title="打开 Git Review 审查改动"
+            className="ml-auto shrink-0 rounded border border-black/10 px-1.5 py-px text-[10px] text-[#464646] transition-colors hover:border-[#6366F1] hover:text-[#6366F1]"
+          >
+            审查
+          </span>
+        )}
       </button>
       {open && (
         <div className="border-t border-black/5">

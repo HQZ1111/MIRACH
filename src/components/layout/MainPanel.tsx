@@ -71,6 +71,7 @@ import { speak, stopSpeaking, isSpeaking } from "@/lib/tts";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $lastFailedPrompt, setLastFailedPrompt } from "@/store/retry";
 import { sendMessage, $busyMap } from "@/store/agent";
+import { $engineEnv, $mainPersona } from "@/store/engine-session";
 import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { useMockStatus } from "@/hooks/useMockStatus";
@@ -573,6 +574,10 @@ function JobsAction() {
   };
   useEffect(() => {
     load();
+    // 轮询统一（对齐 JobsOverlay 的 5s 间隔）：后台任务状态变化及时反映到徽标
+    const t = window.setInterval(load, 5000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 打开时点外部关闭
@@ -1113,7 +1118,11 @@ const ChatSection = memo(function ChatSection({
       <>
         {waiting && <WaitingIndicator />}
         {!agentBusy && !streaming && (
-          <FileChangesRow toolCalls={toolCalls} className="mx-4 mb-1" />
+          <FileChangesRow
+            toolCalls={toolCalls}
+            className="mx-4 mb-1"
+            onReview={() => window.dispatchEvent(new CustomEvent("mirach:open-git-review"))}
+          />
         )}
       </>
     ),
@@ -1417,18 +1426,28 @@ function DateDivider({ date }: { date: string }) {
 // 等待指示（AI 消息样式：头像 + 名字 + 思考气泡 + 工作中 X 秒计时）。
 // 挂在 Virtuoso Footer = 对话区"AI 回复将出现的位置"：流式第一步显示等待动画，
 // 内容出来后被真实气泡接替。计时器在组件内部自跑，不牵动父级重渲染。
+// 头像/名字动态取默认成员（$defaultAgent；未设置回退奎木狼）。
 const WaitingIndicator = memo(function WaitingIndicator() {
   const [sec, setSec] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => setSec((s) => s + 1), 1000);
     return () => window.clearInterval(t);
   }, []);
+  const agents = useStore($agents);
+  const defaultId = useStore($defaultAgent) || DEFAULT_TEAM_ID;
+  const who = agents.find((a) => a.id === defaultId);
+  const name = who?.name ?? "奎木狼";
+  const initials = name.slice(0, 1);
+  const bg = who?.avatarBg ?? "#7C5CFF";
   return (
     <div className="flex items-start gap-2 px-4 py-2">
       {/* AI 头像 + 在线状态（对齐成员列表样式） */}
       <div className="relative shrink-0">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#7C5CFF] text-[10px] font-bold text-white">
-          奎
+        <div
+          className="flex h-9 w-9 items-center justify-center rounded-full text-[10px] font-bold text-white"
+          style={{ backgroundColor: bg }}
+        >
+          {initials}
         </div>
         <span
           className="absolute rounded-full border-2 border-white"
@@ -1436,7 +1455,7 @@ const WaitingIndicator = memo(function WaitingIndicator() {
         />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-member font-medium text-[#303030]">奎木狼</p>
+        <p className="text-member font-medium text-[#303030]">{name}</p>
         <div className="mt-1 flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-[#017CF3]" />
           <span className="text-xs tabular-nums text-muted-foreground">工作中 {sec} 秒</span>
@@ -1869,6 +1888,9 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
         // 主聊天 persona：默认成员（奎木狼）或用户设置的默认成员的 systemPrompt
         const members = $agents.get();
         const persona = members.find((a) => a.id === ($defaultAgent.get() || DEFAULT_TEAM_ID))?.systemPrompt;
+        // 写入共享引擎绑定源（成员私聊发送前用它恢复主 persona，见 engine-session）
+        $engineEnv.set({ id: env.id, cwd: env.cwd || null });
+        $mainPersona.set(persona ?? null);
         await invoke("dsh_set_env", { envId: env.id, cwd: env.cwd || null, systemPrompt: persona ?? null });
       } catch {
         /* 环境下发失败不阻断会话加载 */

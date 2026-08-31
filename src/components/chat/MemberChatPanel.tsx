@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { HeaderRule } from "@/components/layout/HeaderRule";
-import { Clock, Copy, RefreshCw } from "lucide-react";
+import { Clock, Copy, Loader2, RefreshCw } from "lucide-react";
 import { Composer } from "@/components/chat/Composer";
 import { TerminalPanel } from "@/components/chat/TerminalPanel";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
@@ -29,12 +29,14 @@ interface MemberChatPanelProps {
   width?: number | string;
   /** 该成员线程的消息列表（归属项目固定会话） */
   messages: ChatMessage[];
+  /** 该成员是否正在等引擎回复（真实模式流式中显示"正在回复"提示） */
+  busy?: boolean;
   /** 点击标题栏文字关闭子对话栏 */
   onClose: () => void;
   onSend: (memberId: string, text: string) => void;
 }
 
-export function MemberChatPanel({ member, width = 380, messages, onClose, onSend }: MemberChatPanelProps) {
+export function MemberChatPanel({ member, width = 380, messages, busy = false, onClose, onSend }: MemberChatPanelProps) {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalH, setTerminalH] = useState(MIN_TERMINAL);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -168,6 +170,13 @@ export function MemberChatPanel({ member, width = 380, messages, onClose, onSend
                     </div>
                   </div>
                 ),
+              )}
+              {/* 等待指示：真实模式引擎回复中（流式首包前/思考阶段） */}
+              {busy && (
+                <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin text-[#017CF3]" />
+                  {member.name} 正在回复…
+                </div>
               )}
             </div>
 

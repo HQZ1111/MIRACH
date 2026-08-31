@@ -24,7 +24,7 @@
  * - 网关连接正常恒为 #009292
  */
 
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { RIGHT_TOOLBAR_WIDTH } from "@/lib/layout";
 import { APP_VERSION } from "@/lib/constants";
@@ -164,6 +164,13 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   // ---- 工具菜单（位于版本/更新上方）：Git Review / 文件树 / 导出日志 / 产品文档 / 记忆星图 / 插件 ----
   const [toolOpen, setToolOpen] = useState(false);
   const [toolOverlay, setToolOverlay] = useState<null | "git" | "files" | "logs" | "docs" | "starmap" | "profiles" | "agents">(null);
+
+  // 外部打开 Git Review（对话区"已更改文件"行的审查按钮 → mirach:open-git-review）
+  useEffect(() => {
+    const onOpenReview = () => setToolOverlay("git");
+    window.addEventListener("mirach:open-git-review", onOpenReview);
+    return () => window.removeEventListener("mirach:open-git-review", onOpenReview);
+  }, []);
 
   const TOOL_MENU: { id: string; icon: React.ElementType; label: string; run: () => void }[] = [
     { id: "git", icon: GitBranch, label: "Git Review", run: () => setToolOverlay("git") },

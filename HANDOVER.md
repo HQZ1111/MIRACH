@@ -503,6 +503,27 @@ e2e 结果（实机）：**角标 `KERNEL OK sessions=0`**——五插件经 min
 store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正激活自动切回。
 拔插 = 禁用插件注册 → 左栏环境区消失，引擎对接不受影响。
 
+# 零散收尾完成（2026-08-31 第二批）
+
+1. **成员私聊接引擎 ✅（原 P1 #6 待办落地）**：
+   - `src/store/engine-session.ts`：$engineEnv/$mainPersona（MainPanel 流水线写入）+
+     bindEngineSession(sessionId, persona) = dsh_set_env + load_dsh_session 两连。
+     **persona 是运行时全局的**——主对话与成员私聊共享 runtime，故每次发送前各自
+     绑定（useStreamingReply 主发送前重绑主 persona；成员发送前绑成员人设）。
+   - 成员会话 id = `member-<成员id>`，sessionMap 键 "<envId>::member-<id>" 持久化
+     → **每成员独立 dsh 会话**，上下文互不可见（结构性隔离），重启续聊。
+   - AppLayout：openMember 时 dsh_get_history 回放成员历史（替换种子消息）；
+     sendMemberMessage 真实路径 = 绑定 → submitPromptStream → routeMemberEvent
+     （MirachEvent → memberThreads，thinking 阶段 "…" 占位、complete 权威定稿、
+     error 落 ⚠️）；mock 模式保留演示回复池。MemberChatPanel 加 busy 提示。
+   - 已知边界：成员线程 UI 记录仍在内存（重启后靠引擎历史回放补全）；并发绑定
+     窗口（成员绑定 in-flight 时主发送）理论上可交错，引擎串行队列兜底。
+2. **FileChangesRow 审查入口 ✅（原产品清单 #4 收尾）**：行头新增「审查」按钮 →
+   `mirach:open-git-review` 事件 → RightToolbar 打开 GitReviewOverlay（diff 审查）。
+3. **等待指示头像动态化 ✅**：WaitingIndicator 头像/名字取 $defaultAgent 对应成员
+   （未设置回退奎木狼），不再写死。
+4. **JobsAction 轮询统一 ✅**：对话区后台任务徽标改 5s 轮询（对齐 JobsOverlay）。
+
 # 酒馆角色接入成员体系（2026-08-31 完成）
 
 > 用户问"之前装的三个插件有个酒馆的，能合进聊天的成员里吗"。实况：本机只装过

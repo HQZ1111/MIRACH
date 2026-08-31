@@ -43,10 +43,14 @@ import { $sessionDialog, closeSessionDialog } from "@/store/session-dialog";
 import { $chatHistoryOpen, closeChatHistory } from "@/store/chat-history";
 import { useI18n } from "@/lib/i18n";
 import { useWindowMaximized } from "@/hooks/use-window-maximized";
-import { createProjectSession, ensureMemberThread, generateMemberReply, now, type ProjectSession } from "@/lib/memberSessions";
+import { createProjectSession, ensureMemberThread, generateMemberReply, now, type ProjectSession, type ChatMessage } from "@/lib/memberSessions";
 import { LEFT_TOOLBAR_WIDTH, RIGHT_TOOLBAR_WIDTH } from "@/lib/layout";
 import { ColumnResizeHandle } from "@/components/ui/ResizeHandle";
+import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
+import type { MirachEvent } from "@/lib/api/types";
+import { $agents } from "@/store/agents";
+import { bindEngineSession } from "@/store/engine-session";
 import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
 
@@ -286,9 +290,97 @@ export function AppLayout() {
     setSelectedMember((prev) => (prev && prev.id === member.id ? null : member));
     // 确保该成员线程存在（幂等，首次打开时创建）
     setProjectSession((s) => ensureMemberThread(s, member));
+    // 引擎侧续聊历史回放：线程只有种子消息时拉取该成员 dsh 会话的历史
+    // （成员会话映射持久化在 session-map，重开面板/重启应用都能续上下文）
+    if (!MOCK) {
+      void (async () => {
+        try {
+          const r = await invoke<{ messages?: { role: string; text?: string }[] }>("dsh_get_history", {
+            sessionId: `member-${member.id}`,
+          });
+          const hist: ChatMessage[] = (r.messages ?? [])
+            .filter((m) => (m.text ?? "").trim())
+            .map((m) => ({
+              id: `h${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              role: m.role === "user" ? ("user" as const) : ("member" as const),
+              text: m.text ?? "",
+              time: "",
+            }));
+          if (hist.length > 0) {
+            setProjectSession((s) => ({ ...s, memberThreads: { ...s.memberThreads, [member.id]: hist } }));
+          }
+        } catch {
+          /* 无历史/引擎未就绪：保持种子消息 */
+        }
+      })();
+    }
   };
 
-  // ---- 成员对话发送：追加用户消息到该成员线程 → 模拟思考后回复 ----
+  // ---- 成员对话事件路由：MirachEvent → memberThreads ----
+  // 成员线程不经 $chat（与主对话转录分轨）；thinking 阶段气泡显示 "…" 占位，
+  // 首个 text delta 替换占位，complete 用权威文本定稿，error 落 ⚠️ 行。
+  const [memberBusy, setMemberBusy] = useState<Record<string, boolean>>({});
+  const routeMemberEvent = useCallback((memberId: string, e: MirachEvent) => {
+    switch (e.type) {
+      case "message.start": {
+        setProjectSession((s) => ({
+          ...s,
+          memberThreads: {
+            ...s.memberThreads,
+            [memberId]: [...(s.memberThreads[memberId] ?? []), { id: e.messageId, role: "member" as const, text: "…", time: now() }],
+          },
+        }));
+        break;
+      }
+      case "message.delta": {
+        if (e.partType !== "text") break;
+        setProjectSession((s) => {
+          const list = s.memberThreads[memberId] ?? [];
+          const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
+          if (ridx === -1) return s;
+          const i = list.length - 1 - ridx;
+          const next = [...list];
+          next[i] = { ...next[i]!, text: next[i]!.text === "…" ? e.delta : next[i]!.text + e.delta };
+          return { ...s, memberThreads: { ...s.memberThreads, [memberId]: next } };
+        });
+        break;
+      }
+      case "message.complete": {
+        setProjectSession((s) => {
+          const list = s.memberThreads[memberId] ?? [];
+          const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
+          const next = [...list];
+          if (ridx >= 0) {
+            const i = list.length - 1 - ridx;
+            if (e.text) next[i] = { ...next[i]!, text: e.text };
+            else next.splice(i, 1); // 纯工具回合无文本：撤掉占位气泡
+          } else if (e.text) {
+            next.push({ id: e.messageId, role: "member", text: e.text, time: now() });
+          }
+          return { ...s, memberThreads: { ...s.memberThreads, [memberId]: next } };
+        });
+        setMemberBusy((b) => ({ ...b, [memberId]: false }));
+        break;
+      }
+      case "message.error": {
+        setProjectSession((s) => ({
+          ...s,
+          memberThreads: {
+            ...s.memberThreads,
+            [memberId]: [...(s.memberThreads[memberId] ?? []), { id: `e${Date.now()}`, role: "member" as const, text: `⚠️ ${e.message}`, time: now() }],
+          },
+        }));
+        setMemberBusy((b) => ({ ...b, [memberId]: false }));
+        break;
+      }
+      default:
+        break;
+    }
+  }, []);
+
+  // ---- 成员对话发送：追加用户消息到该成员线程 → 真实引擎（每成员独立 dsh 会话）----
+  // mock 模式保留演示回复池；真实模式发送前绑定成员 persona + member-<id> 会话
+  // （sessionMap 按 "<envId>::member-<id>" 持久化，续聊有上下文），流式事件写回线程。
   const sendMemberMessage = (memberId: string, text: string) => {
     setProjectSession((s) => ({
       ...s,
@@ -300,25 +392,45 @@ export function AppLayout() {
         ],
       },
     }));
-    // 模拟成员思考（2s 后回复，引用项目上下文）
-    const member = selectedMember;
-    window.setTimeout(() => {
-      setProjectSession((s) => ({
-        ...s,
-        memberThreads: {
-          ...s.memberThreads,
-          [memberId]: [
-            ...(s.memberThreads[memberId] ?? []),
-            {
-              id: `r${Date.now()}`,
-              role: "member",
-              text: generateMemberReply(member ?? ({ name: "成员" } as ConvItem), text),
-              time: now(),
-            },
-          ],
-        },
-      }));
-    }, 2000);
+    if (MOCK) {
+      // 模拟成员思考（2s 后回复，引用项目上下文）
+      const member = selectedMember;
+      window.setTimeout(() => {
+        setProjectSession((s) => ({
+          ...s,
+          memberThreads: {
+            ...s.memberThreads,
+            [memberId]: [
+              ...(s.memberThreads[memberId] ?? []),
+              {
+                id: `r${Date.now()}`,
+                role: "member",
+                text: generateMemberReply(member ?? ({ name: "成员" } as ConvItem), text),
+                time: now(),
+              },
+            ],
+          },
+        }));
+      }, 2000);
+      return;
+    }
+    setMemberBusy((b) => ({ ...b, [memberId]: true }));
+    void (async () => {
+      try {
+        const member = $agents.get().find((a) => a.id === memberId);
+        await bindEngineSession(`member-${memberId}`, member?.systemPrompt ?? null);
+        await getApi().submitPromptStream(`member-${memberId}`, text, (e) => routeMemberEvent(memberId, e));
+      } catch (err) {
+        routeMemberEvent(memberId, {
+          type: "message.error",
+          sessionId: `member-${memberId}`,
+          messageId: "",
+          message: String(err),
+        });
+      } finally {
+        setMemberBusy((b) => ({ ...b, [memberId]: false }));
+      }
+    })();
   };
 
   // ---- 收放回调 ----
@@ -677,6 +789,7 @@ export function AppLayout() {
             width="var(--col-member-w)"
             member={selectedMember}
             messages={projectSession.memberThreads[selectedMember.id] ?? []}
+            busy={!!memberBusy[selectedMember.id]}
             onClose={() => setSelectedMember(null)}
             onSend={sendMemberMessage}
           />
