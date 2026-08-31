@@ -28,6 +28,7 @@ import {
   type ConvItem,
 } from "@/store/agents";
 import { $providerConfig } from "@/store/providerConfig";
+import { $groups, createGroup, removeGroup, type GroupMode } from "@/store/groups";
 import {
   listTavernPresets,
   parseCharacterCard,
@@ -927,6 +928,14 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
   const [confirmDel, setConfirmDel] = useState<ConvItem | null>(null);
   const [tavernOpen, setTavernOpen] = useState(false);
   const teamImportRef = useRef<HTMLInputElement>(null);
+  // 群聊
+  const groups = useStore($groups);
+  const [groupCreating, setGroupCreating] = useState(false);
+  const [groupDraft, setGroupDraft] = useState<{ name: string; memberIds: string[]; mode: GroupMode }>({
+    name: "",
+    memberIds: [],
+    mode: "all",
+  });
   const isChat = env.id === TAVERN_MEMBER_ENV;
 
   const saveAgent = (data: {
@@ -1116,6 +1125,125 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
         </button>
       )}
 
+      {/* 群聊（多成员同聊）：仅聊天环境 */}
+      {isChat && (
+        <div className="mt-3 rounded-lg border border-black/10 p-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-semibold text-[#303030]">群聊（多成员同聊）</p>
+            <button
+              onClick={() => setGroupCreating((v) => !v)}
+              className="rounded-md border border-border px-2 py-0.5 text-[11px] text-[#464646] transition-colors hover:bg-muted"
+            >
+              {groupCreating ? "收起" : "新建群聊"}
+            </button>
+          </div>
+
+          {groups.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {groups.map((g) => {
+                const agent = list.find((a) => a.id === g.id);
+                if (!agent) return null; // 群聊伪成员已被删除
+                const names = g.memberIds
+                  .map((id) => list.find((a) => a.id === id)?.name)
+                  .filter(Boolean)
+                  .join("、");
+                return (
+                  <div key={g.id} className="flex items-center gap-2 rounded-md border border-black/5 bg-muted/30 px-2.5 py-1.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[11px] font-medium text-[#303030]">{g.name}</p>
+                      <p className="truncate text-[10px] text-muted-foreground">
+                        {names || "未选成员"} · {g.mode === "all" ? "全员依次回复" : "轮流发言"}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => window.dispatchEvent(new CustomEvent("mirach:open-member", { detail: agent }))}
+                      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[11px] text-[#464646] transition-colors hover:bg-muted hover:text-[#303030]"
+                    >
+                      打开
+                    </button>
+                    <button
+                      onClick={() => {
+                        removeGroup(g.id);
+                        removeAgentIn(env.id, g.id);
+                        refresh();
+                      }}
+                      title="删除群聊"
+                      className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#EF4444]"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {groupCreating && (
+            <div className="mt-2 rounded-md border border-border p-2">
+              <input
+                value={groupDraft.name}
+                onChange={(e) => setGroupDraft((v) => ({ ...v, name: e.target.value }))}
+                placeholder="群聊名称"
+                className="w-full rounded-md border border-border bg-white px-2 py-1 text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+              />
+              <p className="mt-1.5 text-[10px] text-muted-foreground">选择参与者：</p>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {list
+                  .filter((a) => !a.id.startsWith("grp-"))
+                  .map((a) => {
+                    const on = groupDraft.memberIds.includes(a.id);
+                    return (
+                      <button
+                        key={a.id}
+                        onClick={() =>
+                          setGroupDraft((v) => ({
+                            ...v,
+                            memberIds: on ? v.memberIds.filter((x) => x !== a.id) : [...v.memberIds, a.id],
+                          }))
+                        }
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                          on ? "border-[#0EA5E9] bg-[#0EA5E9]/10 text-[#0EA5E9]" : "border-border text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        {a.name}
+                      </button>
+                    );
+                  })}
+              </div>
+              <div className="mt-1.5 flex items-center gap-2">
+                <select
+                  value={groupDraft.mode}
+                  onChange={(e) => setGroupDraft((v) => ({ ...v, mode: e.target.value as GroupMode }))}
+                  className="rounded-md border border-border bg-white px-2 py-1 text-[11px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+                >
+                  <option value="all">全员依次回复</option>
+                  <option value="round">轮流发言（每次一人）</option>
+                </select>
+                <button
+                  onClick={() => {
+                    if (!groupDraft.name.trim() || groupDraft.memberIds.length === 0) return;
+                    const agent = addAgentIn(env.id, {
+                      name: "群聊 · " + groupDraft.name.trim(),
+                      desc: `${groupDraft.memberIds.length} 位成员群聊`,
+                      avatarBg: "#0EA5E9",
+                    });
+                    createGroup(groupDraft.name.trim(), groupDraft.memberIds, groupDraft.mode, agent.id);
+                    setGroupDraft({ name: "", memberIds: [], mode: "all" });
+                    setGroupCreating(false);
+                    refresh();
+                  }}
+                  disabled={!groupDraft.name.trim() || groupDraft.memberIds.length === 0}
+                  className="ml-auto rounded-md bg-[#0EA5E9] px-2.5 py-1 text-[11px] text-white transition-colors hover:bg-[#0EA5E9]/90 disabled:opacity-50"
+                >
+                  创建群聊
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {agentModal && (
         <AgentEditModal
           agent={agentModal.mode === "edit" ? agentModal.agent : null}
@@ -1132,7 +1260,10 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
         description={"确定删除「" + (confirmDel?.name ?? "") + "」吗？其会话记录将保留。"}
         confirmLabel="删除"
         onConfirm={() => {
-          if (confirmDel) removeAgentIn(env.id, confirmDel.id);
+          if (confirmDel) {
+            if (confirmDel.id.startsWith("grp-")) removeGroup(confirmDel.id); // 群聊定义一并清理
+            removeAgentIn(env.id, confirmDel.id);
+          }
           setConfirmDel(null);
           refresh();
         }}

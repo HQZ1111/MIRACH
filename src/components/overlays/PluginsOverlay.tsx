@@ -12,12 +12,19 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { Download, LayoutTemplate, Package, RefreshCw, Search, Trash2 } from "lucide-react";
 import { OverlayShell } from "@/components/overlays/OverlayShell";
 import { getApi } from "@/lib/api";
 import type { InstalledPluginInfo } from "@/lib/api/client";
 import { getPluginViewPages } from "@/plugins/registry";
+
+interface NpmResult {
+  name: string;
+  version: string;
+  description: string;
+}
 
 type Installed = InstalledPluginInfo;
 
@@ -51,6 +58,47 @@ export function PluginsOverlay({
   const [installName, setInstallName] = useState("");
   const [busy, setBusy] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  // npm 市场发现（registry 搜索，Rust fetch_text 绕 CORS）
+  const [npmQuery, setNpmQuery] = useState("");
+  const [npmResults, setNpmResults] = useState<NpmResult[] | null>(null);
+  const [npmBusy, setNpmBusy] = useState(false);
+
+  const searchNpm = async (): Promise<void> => {
+    const q = (npmQuery.trim() || "dsh") + " keywords:dsh-plugin";
+    setNpmBusy(true);
+    try {
+      const text = await invoke<string>("fetch_text", {
+        url: `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(q)}&size=25`,
+      });
+      const data = JSON.parse(text) as { objects?: { package: { name: string; version: string; description?: string } }[] };
+      setNpmResults(
+        (data.objects ?? []).map((o) => ({
+          name: String(o.package.name),
+          version: String(o.package.version ?? ""),
+          description: String(o.package.description ?? ""),
+        })),
+      );
+    } catch {
+      setNpmResults([]);
+    } finally {
+      setNpmBusy(false);
+    }
+  };
+
+  const installNamed = async (name: string): Promise<void> => {
+    setBusy(true);
+    setLogs([`安装 ${name} …`]);
+    setTab("catalog");
+    try {
+      const lines = await getApi().installCommunityPlugin(name);
+      setLogs(lines);
+      refresh();
+    } catch (e) {
+      setLogs((l) => [...l, "失败：" + String(e)]);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const refresh = useCallback(() => {
     void getApi()
@@ -65,18 +113,7 @@ export function PluginsOverlay({
   const doInstall = async (): Promise<void> => {
     const name = installName.trim();
     if (!name) return;
-    setBusy(true);
-    setLogs([`安装 ${name} …`]);
-    try {
-      const lines = await getApi().installCommunityPlugin(name);
-      setLogs(lines);
-      setInstallName("");
-      refresh();
-    } catch (e) {
-      setLogs((l) => [...l, "失败：" + String(e)]);
-    } finally {
-      setBusy(false);
-    }
+    await installNamed(name);
   };
 
   const doUninstall = async (name: string): Promise<void> => {
@@ -260,8 +297,56 @@ export function PluginsOverlay({
             <>
               <div className="rounded-lg border border-border/60 p-3">
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  输入 npm 包名安装社区插件（如 <span className="font-mono">dsh-tavern</span>）。
+                  从 npm 发现社区插件（搜索 dsh 相关包），或直接输入包名安装。
                   安装 = 装包到插件目录 + 自动激活（junction + 补丁行），<b>重启应用后生效</b>。
+                </p>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <input
+                    value={npmQuery}
+                    onChange={(e) => setNpmQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !npmBusy && void searchNpm()}
+                    placeholder="搜索 npm（如 tavern / workgroup / 记忆，默认 dsh）"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-white px-2.5 py-1.5 text-[12px] text-[#303030] outline-none focus:border-[#6366F1]"
+                  />
+                  <button
+                    onClick={() => void searchNpm()}
+                    disabled={npmBusy}
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                    {npmBusy ? "搜索中…" : "发现"}
+                  </button>
+                </div>
+                {npmResults !== null && (
+                  <div className="mt-2 max-h-52 space-y-1 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {npmResults.length === 0 ? (
+                      <p className="py-2 text-center text-[11px] text-muted-foreground">没有匹配结果</p>
+                    ) : (
+                      npmResults.map((r) => (
+                        <div key={r.name} className="flex items-center gap-2 rounded-md border border-black/5 bg-muted/30 px-2.5 py-1.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[11px] font-medium text-[#303030]">
+                              {r.name}
+                              <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">{r.version}</span>
+                            </p>
+                            <p className="truncate text-[10px] text-muted-foreground">{r.description}</p>
+                          </div>
+                          <button
+                            onClick={() => void installNamed(r.name)}
+                            disabled={busy}
+                            className="shrink-0 rounded-md bg-[#303030] px-2 py-0.5 text-[10px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                          >
+                            安装
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 rounded-lg border border-border/60 p-3">
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  已知包名直装：
                 </p>
                 <div className="mt-2 flex items-center gap-1.5">
                   <input

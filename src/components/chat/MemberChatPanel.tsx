@@ -165,9 +165,9 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
                     <div className="relative shrink-0" style={{ width: 40, height: 40 }}>
                       <div
                         className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold"
-                        style={{ backgroundColor: member.avatarBg }}
+                        style={{ backgroundColor: m.from?.avatarBg ?? member.avatarBg }}
                       >
-                        {member.initials}
+                        {m.from?.initials ?? member.initials}
                       </div>
                       <span
                         className="absolute block rounded-full border-2 border-white"
@@ -181,11 +181,12 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
                       />
                     </div>
                     {(() => {
+                      const who = m.from?.name ?? member.name;
                       const parsed = parseTavernText(m.text);
                       return (
                         <div className="min-w-0 flex-1">
                           <div className="mb-2 flex items-center gap-2">
-                            <span className="text-member font-medium text-[#303030]">{member.name}</span>
+                            <span className="text-member font-medium text-[#303030]">{who}</span>
                             <span className="text-body-sm text-muted-foreground">{m.time}</span>
                           </div>
                           <div className="break-words rounded-lg rounded-tl-none border border-black/10 bg-white px-4 py-3">

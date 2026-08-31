@@ -51,6 +51,7 @@ import { getApi } from "@/lib/api";
 import type { MirachEvent } from "@/lib/api/types";
 import { $agents } from "@/store/agents";
 import { bindEngineSession } from "@/store/engine-session";
+import { getGroupById } from "@/store/groups";
 import { recordTavernBinding } from "@/lib/tavern";
 import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
@@ -300,7 +301,7 @@ export function AppLayout() {
     setProjectSession((s) => ensureMemberThread(s, member));
     // 引擎侧续聊历史回放：线程只有种子消息时拉取该成员 dsh 会话的历史
     // （成员会话映射持久化在 session-map，重开面板/重启应用都能续上下文）
-    if (!MOCK) {
+    if (!MOCK && !member.id.startsWith("grp-")) {
       void (async () => {
         try {
           // 本地已有会话记录（超过种子 1 条）时不回放，避免覆盖本地较新的记录
@@ -326,74 +327,141 @@ export function AppLayout() {
     }
   };
 
-  // ---- 成员对话事件路由：MirachEvent → memberThreads ----
-  // 成员线程不经 $chat（与主对话转录分轨）；thinking 阶段气泡显示 "…" 占位，
-  // 首个 text delta 替换占位，complete 用权威文本定稿，error 落 ⚠️ 行。
+  // ---- 成员/群聊对话事件路由：MirachEvent → memberThreads ----
+  // threadKey = 成员 id（私聊）或群聊 id（群聊）；from = 群聊场景的发言成员署名。
+  // thinking 阶段气泡显示 "…" 占位，首个 text delta 替换占位，complete 权威定稿，
+  // error 落 ⚠️ 行。
   const [memberBusy, setMemberBusy] = useState<Record<string, boolean>>({});
   // 已尝试过酒馆预设绑定的成员（select 仅限空白会话，锁定后不重试，回退人设直注入）
   const presetBoundRef = useRef<Set<string>>(new Set());
-  const routeMemberEvent = useCallback((memberId: string, e: MirachEvent) => {
-    switch (e.type) {
-      case "message.start": {
-        setProjectSession((s) => ({
-          ...s,
-          memberThreads: {
-            ...s.memberThreads,
-            [memberId]: [...(s.memberThreads[memberId] ?? []), { id: e.messageId, role: "member" as const, text: "…", time: now() }],
-          },
-        }));
-        break;
-      }
-      case "message.delta": {
-        if (e.partType !== "text") break;
-        setProjectSession((s) => {
-          const list = s.memberThreads[memberId] ?? [];
-          const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
-          if (ridx === -1) return s;
-          const i = list.length - 1 - ridx;
-          const next = [...list];
-          next[i] = { ...next[i]!, text: next[i]!.text === "…" ? e.delta : next[i]!.text + e.delta };
-          return { ...s, memberThreads: { ...s.memberThreads, [memberId]: next } };
-        });
-        break;
-      }
-      case "message.complete": {
-        setProjectSession((s) => {
-          const list = s.memberThreads[memberId] ?? [];
-          const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
-          const next = [...list];
-          if (ridx >= 0) {
+  const routeMemberEvent = useCallback(
+    (threadKey: string, e: MirachEvent, from?: ChatMessage["from"]) => {
+      switch (e.type) {
+        case "message.start": {
+          setProjectSession((s) => ({
+            ...s,
+            memberThreads: {
+              ...s.memberThreads,
+              [threadKey]: [...(s.memberThreads[threadKey] ?? []), { id: e.messageId, role: "member" as const, text: "…", time: now(), ...(from ? { from } : {}) }],
+            },
+          }));
+          break;
+        }
+        case "message.delta": {
+          if (e.partType !== "text") break;
+          setProjectSession((s) => {
+            const list = s.memberThreads[threadKey] ?? [];
+            const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
+            if (ridx === -1) return s;
             const i = list.length - 1 - ridx;
-            if (e.text) next[i] = { ...next[i]!, text: e.text };
-            else next.splice(i, 1); // 纯工具回合无文本：撤掉占位气泡
-          } else if (e.text) {
-            next.push({ id: e.messageId, role: "member", text: e.text, time: now() });
-          }
-          return { ...s, memberThreads: { ...s.memberThreads, [memberId]: next } };
-        });
-        setMemberBusy((b) => ({ ...b, [memberId]: false }));
-        break;
+            const next = [...list];
+            next[i] = { ...next[i]!, text: next[i]!.text === "…" ? e.delta : next[i]!.text + e.delta };
+            return { ...s, memberThreads: { ...s.memberThreads, [threadKey]: next } };
+          });
+          break;
+        }
+        case "message.complete": {
+          setProjectSession((s) => {
+            const list = s.memberThreads[threadKey] ?? [];
+            const ridx = [...list].reverse().findIndex((m) => m.id === e.messageId && m.role === "member");
+            const next = [...list];
+            if (ridx >= 0) {
+              const i = list.length - 1 - ridx;
+              if (e.text) next[i] = { ...next[i]!, text: e.text };
+              else next.splice(i, 1); // 纯工具回合无文本：撤掉占位气泡
+            } else if (e.text) {
+              next.push({ id: e.messageId, role: "member", text: e.text, time: now(), ...(from ? { from } : {}) });
+            }
+            return { ...s, memberThreads: { ...s.memberThreads, [threadKey]: next } };
+          });
+          setMemberBusy((b) => ({ ...b, [threadKey]: false }));
+          break;
+        }
+        case "message.error": {
+          setProjectSession((s) => ({
+            ...s,
+            memberThreads: {
+              ...s.memberThreads,
+              [threadKey]: [...(s.memberThreads[threadKey] ?? []), { id: `e${Date.now()}`, role: "member" as const, text: `⚠️ ${e.message}`, time: now(), ...(from ? { from } : {}) }],
+            },
+          }));
+          setMemberBusy((b) => ({ ...b, [threadKey]: false }));
+          break;
+        }
+        default:
+          break;
       }
-      case "message.error": {
-        setProjectSession((s) => ({
-          ...s,
-          memberThreads: {
-            ...s.memberThreads,
-            [memberId]: [...(s.memberThreads[memberId] ?? []), { id: `e${Date.now()}`, role: "member" as const, text: `⚠️ ${e.message}`, time: now() }],
-          },
-        }));
-        setMemberBusy((b) => ({ ...b, [memberId]: false }));
-        break;
-      }
-      default:
-        break;
+    },
+    [],
+  );
+
+  // ---- 群聊发送：按策略选应答成员，逐个走各自的成员会话（persona/酒馆预设
+  // 照常生效），回复带 from 署名写回群聊线程。@点名优先于策略。 ----
+  const groupSendFlow = async (groupId: string, text: string): Promise<void> => {
+    const g = getGroupById(groupId);
+    if (!g) return;
+    const members = g.memberIds
+      .map((id) => $agents.get().find((a) => a.id === id))
+      .filter((a): a is ConvItem => !!a);
+    if (members.length === 0) return;
+    const mentioned = members.filter((m) => text.includes("@" + m.name));
+    let responders = members;
+    if (mentioned.length > 0) responders = mentioned;
+    else if (g.mode === "round") {
+      const turns = (projectSessionRef.current.memberThreads[groupId] ?? []).filter((mm) => mm.role === "user").length;
+      responders = [members[turns % members.length]!];
     }
+    setMemberBusy((b) => ({ ...b, [groupId]: true }));
+    const convo = members.map((m) => m.name).join("、");
+    for (const m of responders) {
+      const from = { name: m.name, initials: m.initials, avatarBg: m.avatarBg };
+      const usePreset = !!m.tavernPresetId;
+      try {
+        const dshId = await bindEngineSession(`member-${m.id}`, usePreset ? null : m.systemPrompt ?? null);
+        if (usePreset && !presetBoundRef.current.has(m.id)) {
+          const ok = await getApi().selectAgentPreset(`member-${m.id}`, m.tavernPresetId!);
+          presetBoundRef.current.add(m.id);
+          if (ok && dshId) await recordTavernBinding(dshId, m.tavernPresetId!).catch(() => {});
+          if (!ok && m.systemPrompt) await bindEngineSession(`member-${m.id}`, m.systemPrompt);
+        }
+        // 群聊上下文：最近 12 条快照（逐成员发送前刷新，前面成员的回复可见）
+        const thread = projectSessionRef.current.memberThreads[groupId] ?? [];
+        const transcript = thread
+          .slice(-12)
+          .map((mm) => (mm.role === "user" ? "用户" : mm.from?.name ?? m.name) + "：" + mm.text)
+          .join("\n");
+        const prompt =
+          `【群聊场景】你在群聊「${g.name}」中，参与者：${convo}。你是「${m.name}」。\n` +
+          `最近对话：\n${transcript}\n---\n刚才用户说：${text}\n` +
+          `请以「${m.name}」的身份回应（贴合你的人设），2~5 句；不要以其他参与者身份发言，不要复述本提示。`;
+        await getApi().submitPromptStream(`member-${m.id}`, prompt, (e) => routeMemberEvent(groupId, e, from));
+      } catch (err) {
+        routeMemberEvent(
+          groupId,
+          { type: "message.error", sessionId: `member-${m.id}`, messageId: "", message: String(err) },
+          from,
+        );
+      }
+    }
+    setMemberBusy((b) => ({ ...b, [groupId]: false }));
+  };
+
+  // 设置页（环境团队 → 群聊）"打开" → 展开该群聊子面板
+  useEffect(() => {
+    const onOpenMember = (e: Event) => {
+      const m = (e as CustomEvent<ConvItem>).detail;
+      if (m) openMember(m);
+    };
+    window.addEventListener("mirach:open-member", onOpenMember as EventListener);
+    return () => window.removeEventListener("mirach:open-member", onOpenMember as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- 成员对话发送：追加用户消息到该成员线程 → 真实引擎（每成员独立 dsh 会话）----
-  // mock 模式保留演示回复池；真实模式发送前绑定成员 persona + member-<id> 会话
-  // （sessionMap 按 "<envId>::member-<id>" 持久化，续聊有上下文），流式事件写回线程。
+  // ---- 成员/群聊对话发送：追加用户消息到线程 → 真实引擎 ----
+  // 群聊（grp- 前缀）：按策略选应答成员，逐个走各自会话（persona/酒馆预设生效），
+  // 回复带成员署名；mock 模式保留演示回复。私聊照旧：绑定成员 persona + 独立会话。
   const sendMemberMessage = (memberId: string, text: string) => {
+    const isGroup = memberId.startsWith("grp-");
     setProjectSession((s) => ({
       ...s,
       memberThreads: {
@@ -405,8 +473,10 @@ export function AppLayout() {
       },
     }));
     if (MOCK) {
-      // 模拟成员思考（2s 后回复，引用项目上下文）
-      const member = selectedMember;
+      // 模拟成员思考（2s 后回复，引用项目上下文；群聊取第一位参与者署名）
+      const member = isGroup
+        ? ($agents.get().find((a) => a.id === (getGroupById(memberId)?.memberIds[0] ?? "")) ?? selectedMember)
+        : selectedMember;
       window.setTimeout(() => {
         setProjectSession((s) => ({
           ...s,
@@ -419,11 +489,17 @@ export function AppLayout() {
                 role: "member",
                 text: generateMemberReply(member ?? ({ name: "成员" } as ConvItem), text),
                 time: now(),
+                ...(member && isGroup ? { from: { name: member.name, initials: member.initials, avatarBg: member.avatarBg } } : {}),
               },
             ],
           },
         }));
       }, 2000);
+      return;
+    }
+    if (isGroup) {
+      setMemberBusy((b) => ({ ...b, [memberId]: true }));
+      void groupSendFlow(memberId, text).finally(() => setMemberBusy((b) => ({ ...b, [memberId]: false })));
       return;
     }
     setMemberBusy((b) => ({ ...b, [memberId]: true }));

@@ -13,6 +13,8 @@ export interface ChatMessage {
   role: "member" | "user";
   text: string;
   time: string;
+  /** 群聊场景：该条消息来自哪位成员（私聊缺省 = 面板的成员本人） */
+  from?: { name: string; initials: string; avatarBg: string };
 }
 
 export interface ProjectSession {
