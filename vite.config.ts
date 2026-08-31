@@ -9,6 +9,18 @@ const host = process.env.TAURI_DEV_HOST;
 // B 阶段：核心（profile 模式引擎）的 web 面地址；内核链经 vite 代理同源访问
 // @ts-expect-error process is a nodejs global
 const core = process.env.MIRACH_CORE_URL ?? "http://127.0.0.1:3212";
+// 酒馆插件 client bundle（社区插件装在 ~/.mirach/dsh-plugins，非 workspace 依赖，
+// vite 静态解析不到 → 显式别名指向绝对路径；boot.ts 侧载后经 kernel 挂原生面板）
+// @ts-expect-error process is a nodejs global
+const tavernBundle = path.join(
+  process.env.USERPROFILE ?? "",
+  ".mirach",
+  "dsh-plugins",
+  "node_modules",
+  "dsh-tavern",
+  "lib",
+  "client.manager.bundle.js",
+);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -16,6 +28,7 @@ export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "dsh-tavern/client": tavernBundle,
     },
   },
 

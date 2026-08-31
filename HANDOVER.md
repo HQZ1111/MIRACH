@@ -523,6 +523,31 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十二批：酒馆管理（原生）面板接入设置页 ✅（2026-09-01 深夜）
+
+用户指出：酒馆插件自带"酒馆管理（原生）"设置面板，直接连进 mirach 设置即可。
+已实现（这是官方面板本体，不是我手搓的替代品）：
+
+- **bundle 挂载**：酒馆 client bundle（client.manager.bundle.js，ModuleLoader 格式，
+  factory 只依赖 react——shim PLATFORM 已支持）经 vite 别名 `dsh-tavern/client`
+  → `~/.mirach/dsh-plugins/node_modules/dsh-tavern/lib/client.manager.bundle.js`
+  静态导入注册；boot 在 KERNEL_PLUGINS + typert 之后装 **slots/locale 最小 shim**
+  （register/inject + locale 字典，挂到 ctx.slots/ctx.locale），然后直接调
+  `bundleRequire("dsh-tavern").apply(ctx)` —— 插件注册 settings.section
+  "tavern-manager"（React 组件，经 shim 的同实例 React）。
+- **设置页渲染**：SECTIONS 新增「酒馆管理（原生）」（Store 图标）→
+  NativeTavernPanel 从 boot 的槽位注册表取 "tavern-manager" 条目，调
+  render({ctx}) 渲染返回的 React 元素。未加载（VITE_KERNEL 关闭/boot 失败）
+  显示引导文案。
+- 面板功能 = 插件原生全套（角色卡拖入/预设/世界书/记忆/关系网/剧情选项开关/
+  状态栏美化开关等），数据走引擎 /api/tavern/* HTTP 端点（vite 代理同源）。
+- 插件内置的 NSFW 破限开关在原生面板里属插件作者的功能，随面板原样出现
+  （mirach 未参与其实现）；mirach 自有代码仍不实现任何破限。
+- **需重启应用**（vite.config 别名 + bundle 侧载）。
+- 注意：编辑时曾把 boot 的 api-gateway 导入误写成 dsh-client-gateway（TS2882
+  暴露），已修正——教训：新字符串里的 import specifier 要逐字核对。
+- tsc 通过。
+
 # 第十一批：酒馆 UI 全量对接（2026-09-01 深夜）
 
 1. **剧情选项按钮 ✅**：MemberChatPanel 解析酒馆式输出（"接下来你想怎么做？"+

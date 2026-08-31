@@ -15,13 +15,16 @@ import "@deepseek-ai/dsh-client-connection/client";
 import "@deepseek-ai/dsh-api-gateway/client";
 import "@deepseek-ai/dsh-api-remotes/client";
 import "@deepseek-ai/dsh-api-session-controller/client";
+// 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
+// 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
+import "dsh-tavern/client";
 import { Context } from "@deepseek-ai/cordis";
 import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
 import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
-import { logInfo } from "./kernel-log";
+import { logInfo, logWarn } from "./kernel-log";
 
 /** 鍐呮牳鎻掍欢婵€娲婚『搴忥紙modules 绯荤粺 bundle id 鈫?瀹炰緥鍖?鈫?cordis plugin锛夈€?*/
 const KERNEL_PLUGINS = [
@@ -42,6 +45,58 @@ export function kernelContext(): Context | null {
   return kernelCtx;
 }
 
+// ── 酒馆原生面板（client bundle 的 settings.section 槽位） ──
+
+interface NativeSlotEntry {
+  meta: { id?: string; name?: string; label?: () => string };
+  render: (props: unknown) => unknown;
+}
+
+const nativeSlotRegistry = new Map<string, NativeSlotEntry[]>();
+
+/** 官方 client 侧 slots/locale 的最小 shim（酒馆 bundle 依赖这两个服务） */
+function installClientShims(ctx: Context): void {
+  const host = ctx as unknown as Record<string, unknown>;
+  const dicts = new Map<string, Record<string, Record<string, string>>>();
+  host.locale = {
+    register: (ns: string, dict: Record<string, Record<string, string>>): void => {
+      dicts.set(ns, dict);
+    },
+    bind: (ns: string) =>
+      (key: string, vars?: Record<string, unknown>): string => {
+        const lang = typeof localStorage !== "undefined" && localStorage.getItem("mirach.lang") === "en" ? "en" : "zh";
+        const d = dicts.get(ns)?.[lang] ?? dicts.get(ns)?.zh ?? {};
+        let s = d[key] ?? key;
+        if (vars) for (const [k, v] of Object.entries(vars)) s = s.split("{" + k + "}").join(String(v));
+        return s;
+      },
+  };
+  host.slots = {
+    register: (meta: { name?: string }, render: (props: unknown) => unknown): unknown => {
+      const keyName = meta?.name ?? "";
+      const list = nativeSlotRegistry.get(keyName) ?? [];
+      list.push({ meta: meta as NativeSlotEntry["meta"], render });
+      nativeSlotRegistry.set(keyName, list);
+      return { meta, render };
+    },
+    inject: (_name: string, factory: () => unknown): unknown => factory(),
+  };
+}
+
+export interface NativeSection {
+  id: string;
+  label: string;
+  render: (props: unknown) => unknown;
+}
+
+/** 酒馆原生"酒馆管理"设置面板（bundle 注册进 settings.section 槽位）；未加载返回 null */
+export function nativeTavernSection(): NativeSection | null {
+  const list = nativeSlotRegistry.get("settings.section");
+  const hit = list?.find((e) => e.meta.id === "tavern-manager");
+  if (!hit) return null;
+  return { id: "tavern-manager", label: hit.meta.label?.() ?? "酒馆管理", render: hit.render };
+}
+
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
 export async function bootKernelMirror(): Promise<void> {
   try {
@@ -54,6 +109,18 @@ export async function bootKernelMirror(): Promise<void> {
     // typert 客户端反射根：bundle 注册实测不稳定，直接实例化主类（与 client apply 等价）
     new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     kernelCtx = ctx;
+    // ── 酒馆原生面板挂载 ──
+    // 官方 client 侧 slots/locale 服务由 client-runtime 提供，mirach 内核镜像
+    // 不加载完整 client-runtime —— 这里装最小 shim（register/inject、locale
+    // 字典），让酒馆 client bundle 的 apply(ctx) 能注册 settings.section。
+    installClientShims(ctx);
+    try {
+      const tavern = bundleRequire("dsh-tavern") as { apply?: (c: Context) => void };
+      tavern?.apply?.(ctx);
+      logInfo("tavern native panel registered");
+    } catch (err) {
+      logWarn("tavern native panel mount failed: %s", err instanceof Error ? err.message : String(err));
+    }
     bridge = createDshBridge();
 
     const sessions = (ctx as unknown as { sessions: KernelSessions }).sessions;

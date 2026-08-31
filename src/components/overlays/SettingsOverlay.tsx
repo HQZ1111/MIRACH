@@ -40,6 +40,7 @@ import {
 } from "@/lib/character-market";
 import { $engineEnv } from "@/store/engine-session";
 import { userHomeDir } from "@/lib/paths";
+import { nativeTavernSection, kernelContext } from "@/dsh-kernel/boot";
 import { $usage, resetUsage } from "@/store/usage";
 import { $agentMode, setAgentMode, $approvalMode, setApprovalMode, type AgentMode } from "@/store/agent";
 import {
@@ -82,6 +83,7 @@ import {
   Upload,
   Users,
   Brain,
+  Store,
   X,
   type LucideIcon,
   Layers,
@@ -99,6 +101,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "presets", icon: Bot },
   { id: "agents", icon: Users },
   { id: "memory", icon: Brain },
+  { id: "tavern", icon: Store },
   { id: "sessions", icon: Archive },
   { id: "safety", icon: Lock },
   { id: "git", icon: GitBranch },
@@ -2394,6 +2397,7 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       case "presets": return <PresetsContent />;
       case "agents": return <AgentSection />;
       case "memory": return <MemorySection />;
+      case "tavern": return <NativeTavernPanel />;
       case "sessions": return <SessionsContent />;
       case "safety": return <SafetyContent />;
       case "git": return <GitContent />;
@@ -2467,6 +2471,45 @@ function NavItem({ id, icon: Icon, active, onClick }: { id: string; icon: Lucide
       <Icon className="h-4 w-4 shrink-0" strokeWidth={2} />
       <span className="truncate">{t(`settings.${id}`)}</span>
     </button>
+  );
+}
+
+// ================================================================
+// NativeTavernPanel — 酒馆管理（原生）设置面板
+// 直接渲染酒馆插件 client bundle 注册进 settings.section 槽位的官方面板
+// （boot.ts 经 kernel 加载 bundle 并提供 slots/locale shim）。bundle 未加载
+// （VITE_KERNEL 关闭/boot 失败）时显示引导文案。
+// ================================================================
+
+function NativeTavernPanel() {
+  const [entry, setEntry] = useState<{ id: string; label: string; render: (props: unknown) => unknown } | null>(() =>
+    nativeTavernSection(),
+  );
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (entry) return;
+    const t = window.setTimeout(() => {
+      setEntry(nativeTavernSection());
+      setTick((v) => v + 1);
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [entry, tick]);
+  if (!entry) {
+    return (
+      <div>
+        <SubHeading>酒馆管理（原生）</SubHeading>
+        <p className="px-5 py-2 text-xs leading-relaxed text-muted-foreground">
+          原生面板未加载：需要 VITE_KERNEL=1 启动内核且酒馆插件 client bundle 可用。
+          请重启应用重试；角色/世界书也可在「智能体团队 → 导入酒馆角色」中管理。
+        </p>
+      </div>
+    );
+  }
+  const el = entry.render({ ctx: kernelContext() });
+  return (
+    <div>
+      <div className="px-5 py-3">{el as React.ReactElement}</div>
+    </div>
   );
 }
 
