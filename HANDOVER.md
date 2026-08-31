@@ -523,6 +523,22 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第十八批：手机接入（扫码/链接直达）✅（2026-09-01）
+
+用户问"手机端不能直接给个链接点击吗"。落地：
+
+- **设置新分区「手机接入」**（Smartphone 图标）：开关「允许局域网访问」 +
+  二维码 + 每个局域网 IP 的 http://IP:3212 链接（可复制）+ 防火墙提示。
+- **链路**：config webHost（127.0.0.1/0.0.0.0，set_config 新参数）→ Rust
+  spawn_sidecar 下发 MIRACH_WEB_HOST → sidecar runtimeEnv 透传 → profile patch
+  webserver host 表达式读取 → 核心监听 0.0.0.0。**开关改动需重启应用**。
+- **sidecar `net.info` RPC**：os.networkInterfaces 收集局域网 IPv4 + 端口
+  （MIRACH_WEB_PORT 默认 3212）。
+- **二维码**：前端 qrcode 库（pnpm add qrcode @types/qrcode）toDataURL 渲染。
+- 手机访问 = 引擎官方网页界面（apps/web），同一核心同一数据；局域网信任由核心
+  webRuntime 自动派生（HANDOVER 阶段 3b）。仅限可信局域网，公网勿直接暴露。
+- tsc + cargo check 通过。
+
 # 第十七批：npm 市场发现 + 群聊 v1（2026-09-01）
 
 1. **插件市场发现 ✅**：插件管理器"安装"页签新增 npm registry 搜索

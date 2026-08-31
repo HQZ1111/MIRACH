@@ -350,6 +350,8 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
             ? {
                 DSH_HOME: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
                 MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
+                // 手机接入：web 面监听地址（Rust 侧从配置下发；127.0.0.1 = 仅本机）
+                MIRACH_WEB_HOST: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
                 DSH_EFFORT: effortNow,
               }
             : {}),

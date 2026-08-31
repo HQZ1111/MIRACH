@@ -34,6 +34,8 @@ struct AppConfig {
     hermes_bin: String,
     /// 应用数据目录（%APPDATA%\my-hermes-rs，日志/配置存放处）
     data_dir: String,
+    /// 核心 web 面监听地址（127.0.0.1 = 仅本机；0.0.0.0 = 局域网手机可访问）
+    web_host: String,
 }
 
 fn app_config_dir() -> std::path::PathBuf {
@@ -71,6 +73,7 @@ fn load_config() -> AppConfig {
         api_token: get("apiToken", "HERMES_API_TOKEN", ""),
         hermes_bin: get("hermesBin", "HERMES_BIN", ""),
         data_dir: app_config_dir().to_string_lossy().to_string(),
+        web_host: get("webHost", "MIRACH_WEB_HOST", "127.0.0.1"),
     }
 }
 
@@ -384,6 +387,7 @@ fn set_config(
     api_base: Option<String>,
     api_token: Option<String>,
     hermes_bin: Option<String>,
+    web_host: Option<String>,
 ) -> Result<(), String> {
     let dir = app_config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -417,6 +421,9 @@ fn set_config(
     }
     if let Some(v) = hermes_bin {
         obj.insert("hermesBin".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = web_host {
+        obj.insert("webHost".into(), serde_json::Value::String(v));
     }
 
     std::fs::write(&file, serde_json::to_string_pretty(&cur).map_err(|e| e.to_string())?)

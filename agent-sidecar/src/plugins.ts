@@ -13,7 +13,7 @@
 
 import { exec } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, lstatSync, symlinkSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { log, logWarn } from "./protocol.js";
@@ -235,4 +235,26 @@ export async function uninstallPlugin(pkgName: string): Promise<string[]> {
   lines.push("完成 —— 重启应用后生效");
   log("plugins.uninstall %s OK", pkgName);
   return lines;
+}
+
+// ── 手机接入（net.info）：局域网 IP + 核心 web 面地址 ──
+
+export interface NetInfo {
+  lanIps: string[];
+  port: string;
+  host: string;
+}
+
+export function netInfo(): NetInfo {
+  const lanIps: string[] = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const ni of list ?? []) {
+      if (ni.family === "IPv4" && !ni.internal) lanIps.push(ni.address);
+    }
+  }
+  return {
+    lanIps,
+    port: process.env.MIRACH_WEB_PORT ?? "3212",
+    host: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
+  };
 }

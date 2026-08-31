@@ -2,7 +2,7 @@
  * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
@@ -55,6 +55,7 @@ import {
   Settings2,
   Trash2,
   Upload,
+  Smartphone,
   Brain,
   type LucideIcon,
   Layers,
@@ -71,6 +72,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "plugins", icon: Package },
   { id: "presets", icon: Bot },
   { id: "memory", icon: Brain },
+  { id: "mobile", icon: Smartphone },
   { id: "sessions", icon: Archive },
   { id: "safety", icon: Lock },
   { id: "git", icon: GitBranch },
@@ -1960,6 +1962,7 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       case "plugins": return <PluginsContent />;
       case "presets": return <PresetsContent />;
       case "memory": return <MemorySection />;
+      case "mobile": return <MobileAccessSection />;
       case "sessions": return <SessionsContent />;
       case "safety": return <SafetyContent />;
       case "git": return <GitContent />;
@@ -2158,6 +2161,156 @@ function MemorySection() {
             保存记忆
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// MobileAccessSection — 手机接入（局域网扫码 / 链接直达）
+// 开关 = 核心 web 面监听地址（config webHost：127.0.0.1 / 0.0.0.0，重启生效）。
+// 开启后手机浏览器扫二维码或点链接，打开引擎的网页界面（同一核心、同一数据）。
+// 局域网 IP 由 sidecar net.info 提供（os.networkInterfaces）。
+// ================================================================
+
+function MobileAccessSection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [lanIps, setLanIps] = useState<string[]>([]);
+  const [port, setPort] = useState("3212");
+  const [qr, setQr] = useState("");
+  const [note, setNote] = useState("");
+  const [copied, setCopied] = useState("");
+
+  const loadCfg = useCallback(async (): Promise<void> => {
+    try {
+      const cfg = await invoke<{ web_host: string }>("get_config");
+      setEnabled(cfg.web_host === "0.0.0.0");
+    } catch {
+      setEnabled(false);
+    }
+    try {
+      const n = await invoke<{ lanIps: string[]; port: string }>("dsh_rpc", { method: "net.info", params: null });
+      setLanIps(n.lanIps ?? []);
+      setPort(n.port ?? "3212");
+    } catch {
+      setLanIps([]);
+    }
+  }, []);
+  useEffect(() => {
+    void loadCfg();
+  }, [loadCfg]);
+
+  // 二维码：开启且拿到局域网 IP 后生成（第一个 IP）
+  useEffect(() => {
+    if (!enabled || lanIps.length === 0) {
+      setQr("");
+      return;
+    }
+    const url = `http://${lanIps[0]}:${port}`;
+    void import("qrcode")
+      .then((QR) => QR.toDataURL(url, { width: 220, margin: 1 }))
+      .then((d) => setQr(d))
+      .catch(() => setQr(""));
+  }, [enabled, lanIps, port]);
+
+  const toggle = async (): Promise<void> => {
+    const next = enabled ? "127.0.0.1" : "0.0.0.0";
+    try {
+      await invoke("set_config", { webHost: next });
+      setEnabled(next === "0.0.0.0");
+      setNote(next === "0.0.0.0" ? "已开启 —— 重启应用后手机可访问" : "已关闭 —— 重启应用后恢复仅本机");
+    } catch (e) {
+      setNote("保存失败：" + String(e));
+    }
+  };
+
+  const copyLink = (url: string): void => {
+    void navigator.clipboard?.writeText(url).then(() => {
+      setCopied(url);
+      window.setTimeout(() => setCopied(""), 1500);
+    });
+  };
+
+  return (
+    <div>
+      <SubHeading>手机接入</SubHeading>
+      <p className="px-5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        同一局域网的手机/平板，扫码或点链接直接打开引擎的网页界面——与桌面同一核心、同一会话数据，
+        酒馆等插件功能同样可用。
+      </p>
+
+      <div className="px-5 pb-4">
+        {/* 开关：局域网访问 */}
+        <div className="flex items-center justify-between rounded-lg border border-black/10 bg-white px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-[12px] font-medium text-[#303030]">允许局域网访问</p>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+              开启后核心监听 0.0.0.0（局域网内设备可访问）；关闭 = 仅本机。重启应用后生效。
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={enabled === true}
+            onClick={() => void toggle()}
+            disabled={enabled === null}
+            className={cn(
+              "flex h-[20px] w-9 shrink-0 items-center rounded-full px-[2px] transition-colors disabled:opacity-50",
+              enabled ? "justify-end bg-[#10B981]" : "justify-start bg-[#D1D5DB]",
+            )}
+          >
+            <span className="h-[16px] w-[16px] rounded-full bg-white shadow-sm" />
+          </button>
+        </div>
+
+        {/* 链接 + 二维码 */}
+        {enabled && (
+          <div className="mt-2 rounded-lg border border-black/10 bg-white p-3">
+            {lanIps.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">未找到局域网 IP——请确认电脑已联网/接入路由器。</p>
+            ) : (
+              <div className="flex items-start gap-4">
+                {qr && (
+                  <img src={qr} alt="手机扫码接入" className="h-[160px] w-[160px] shrink-0 rounded-lg border border-black/10" />
+                )}
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <p className="text-[11px] font-medium text-[#303030]">手机扫码，或点对应链接：</p>
+                  {lanIps.map((ip) => {
+                    const url = `http://${ip}:${port}`;
+                    return (
+                      <div key={ip} className="flex items-center gap-1.5">
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="min-w-0 flex-1 truncate font-mono text-[11px] text-[#017CF3] hover:underline"
+                        >
+                          {url}
+                        </a>
+                        <button
+                          onClick={() => copyLink(url)}
+                          title="复制链接"
+                          className={cn(
+                            "shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+                            copied === url
+                              ? "border-[#10B981] text-[#10B981]"
+                              : "border-border text-muted-foreground hover:bg-muted hover:text-[#303030]",
+                          )}
+                        >
+                          {copied === url ? "已复制" : "复制"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <p className="pt-1 text-[10px] leading-relaxed text-muted-foreground">
+                    要求：手机与电脑同一局域网；首次访问如被 Windows 防火墙拦截，放行 Node.js 即可。
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {note && <p className="px-5 pt-2 text-[11px] text-[#10B981]">{note}</p>}
       </div>
     </div>
   );

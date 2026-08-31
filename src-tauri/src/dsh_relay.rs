@@ -116,6 +116,9 @@ pub fn spawn_sidecar() -> Result<(Child, ChildStdout, ChildStdin), String> {
     c.env("SIDECAR_LOG_LEVEL", if cfg!(debug_assertions) { "debug" } else { "warn" });
     // 便携化：把 node/引擎路径显式传给 sidecar（覆盖其硬编码候选列表）
     c.env("DSH_NODE_BIN", &node);
+    // 手机接入：核心 web 面监听地址由配置驱动（webHost：127.0.0.1 / 0.0.0.0），
+    // sidecar 透传给 runtime（profile patch 的 MIRACH_WEB_HOST 表达式读取）
+    c.env("MIRACH_WEB_HOST", crate::load_config().web_host);
     if let Some(root) = runtime_root() {
         let harness = root.join("deepseek-harness");
         if harness.is_dir() {
