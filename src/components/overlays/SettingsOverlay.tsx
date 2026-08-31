@@ -26,6 +26,7 @@ import {
   type ConvItem,
 } from "@/store/agents";
 import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
+import { BUILTIN_CHARACTERS } from "@/lib/tavern-characters";
 import { $engineEnv } from "@/store/engine-session";
 import { userHomeDir } from "@/lib/paths";
 import { $usage, resetUsage } from "@/store/usage";
@@ -1930,14 +1931,20 @@ function AgentSection() {
           </button>
         </div>
 
-        {/* 酒馆角色接入（dsh-tavern）：预设目录扫描 + 角色卡 JSON 直导 */}
-        <button
-          onClick={() => setTavernOpen(true)}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2 text-xs text-muted-foreground transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
-        >
-          <Users className="h-3.5 w-3.5" />
-          导入酒馆角色（角色卡 / 预设）
-        </button>
+        {/* 酒馆角色接入（dsh-tavern）：固定导入到聊天环境，仅聊天标签显示 */}
+        {viewEnv === TAVERN_MEMBER_ENV ? (
+          <button
+            onClick={() => setTavernOpen(true)}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2 text-xs text-muted-foreground transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
+          >
+            <Users className="h-3.5 w-3.5" />
+            导入酒馆角色（角色库 / 预设 / 角色卡）
+          </button>
+        ) : (
+          <p className="mt-2 text-center text-[10px] text-muted-foreground/70">
+            酒馆角色固定导入到「聊天」环境的团队（切到聊天标签后可见导入入口）
+          </p>
+        )}
       </div>
 
       {tavernOpen && <TavernImportDialog onClose={() => setTavernOpen(false)} onImported={refresh} />}
@@ -2591,6 +2598,9 @@ function MemorySection() {
 // ================================================================
 
 function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onImported?: () => void }) {
+  // 三个来源：角色库（前端内置，无需文件）/ 酒馆预设（dsh-tavern 插件目录）/
+  // 角色卡文件（SillyTavern V2/V3 JSON）。统一导入为聊天环境成员（幂等 upsert）。
+  const [tab, setTab] = useState<"gallery" | "presets" | "file">("gallery");
   // 已导入标记从聊天环境分片读取（酒馆成员固定放聊天环境，与当前激活环境无关）
   const [importedIds, setImportedIds] = useState<Set<string>>(
     () => new Set(loadAgentsOf(TAVERN_MEMBER_ENV).filter((a) => a.source === "tavern").map((a) => a.id)),
@@ -2599,6 +2609,8 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   const [rootPath, setRootPath] = useState("");
   const [note, setNote] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // 角色库人设编辑草稿：key → 草稿（存在 = 展开编辑态）
+  const [editing, setEditing] = useState<Record<string, string>>({});
 
   const afterImport = useCallback(
     (key: string) => {
@@ -2622,17 +2634,21 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
     };
   }, []);
 
-  const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入");
+  const mark = (key: string) => (importedIds.has(`tavern-${key}`) ? "已导入" : "导入角色");
+
+  const importMember = (key: string, name: string, systemPrompt: string, desc: string): void => {
+    upsertTavernMember({ key, name, systemPrompt, desc });
+    afterImport(key);
+    setNote("已导入「" + name + "」（聊天环境成员），到左栏「成员」开聊");
+  };
 
   const importPreset = (p: TavernPreset): void => {
-    upsertTavernMember({
-      key: p.key,
-      name: p.name,
-      systemPrompt: presetToPersona(p),
-      desc: p.description || "酒馆角色 · 预设 " + p.key,
-    });
-    afterImport(p.key);
-    setNote("已导入「" + p.name + "」（聊天环境），到左栏「成员」开聊");
+    importMember(
+      p.key,
+      p.name,
+      presetToPersona(p),
+      p.description || "酒馆角色 · 预设 " + p.key,
+    );
   };
 
   const importCardFiles = (files: FileList | null): void => {
@@ -2643,12 +2659,12 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
         const text = await file.text();
         const card = parseCharacterCard(text);
         if (!card) continue;
-        upsertTavernMember({
-          key: card.name,
-          name: card.name,
-          systemPrompt: cardToPersona(card),
-          desc: "酒馆角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
-        });
+        importMember(
+          card.name,
+          card.name,
+          cardToPersona(card),
+          "酒馆角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+        );
         ok += 1;
       }
       setNote(ok > 0 ? "已导入 " + ok + " 个角色卡成员（聊天环境）" : "没有可识别的角色卡（需 SillyTavern V2/V3 JSON）");
@@ -2658,70 +2674,175 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40" onClick={onClose}>
       <div
-        className="max-h-[85vh] w-[480px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="max-h-[85vh] w-[500px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-base font-semibold text-[#303030]">导入酒馆角色</h3>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          角色会以成员身份进入左侧栏成员列表，人设作为系统提示词注入对话；同名重导只更新不重复。
+          角色以成员身份进入<b>聊天环境</b>的成员列表，人设作为系统提示词注入对话；同名重导只更新不重复，导入后可随时在成员「编辑」里再改。
         </p>
 
-        {/* 来源一：角色卡 JSON 直导 */}
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".json,application/json"
-          multiple
-          className="hidden"
-          onChange={(e) => {
-            importCardFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <button
-          onClick={() => fileRef.current?.click()}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2.5 text-xs text-[#464646] transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
-        >
-          <Upload className="h-4 w-4" />
-          选择角色卡 JSON 文件（SillyTavern 格式，可多选）
-        </button>
-
-        {/* 来源二：酒馆预设目录 */}
-        <div className="mt-4">
-          <p className="text-[11px] font-medium text-[#303030]">酒馆预设（dsh-tavern 插件目录）</p>
-          {presets === null ? (
-            <p className="mt-2 text-[11px] text-muted-foreground">读取中…</p>
-          ) : presets.length === 0 ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              未找到预设{rootPath ? "（" + rootPath + "）" : ""}。
-              可在官方 DSH「酒馆管理」导入角色卡后回来导入，或直接用上方按钮导入角色卡 JSON。
-            </p>
-          ) : (
-            <div className="mt-2 space-y-1.5">
-              {presets.map((p) => (
-                <div
-                  key={p.key}
-                  className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12px] font-semibold text-[#303030]">{p.name}</p>
-                    <p className="truncate text-[10px] text-muted-foreground">
-                      {p.persona
-                        ? "persona 已就绪 · " + p.persona.slice(0, 40)
-                        : "无 persona（导入后为通用角色扮演提示词）"}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => importPreset(p)}
-                    className="shrink-0 rounded-md bg-[#8B5CF6] px-2.5 py-1 text-[11px] text-white hover:bg-[#8B5CF6]/90"
-                  >
-                    {mark(p.key)}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+        {/* 来源切换：角色库 / 酒馆预设 / 角色卡文件 */}
+        <div className="mt-3 flex gap-1 rounded-lg bg-muted/60 p-1 text-[11px]">
+          {(
+            [
+              ["gallery", "角色库"],
+              ["presets", "酒馆预设"],
+              ["file", "角色卡文件"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "flex-1 rounded-md py-1 transition-colors",
+                tab === id ? "bg-white font-medium text-[#303030] shadow-sm" : "text-muted-foreground hover:text-[#303030]",
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
+
+        {/* 来源一：角色库（前端内置，点选导入，人设可先改） */}
+        {tab === "gallery" && (
+          <div className="mt-3 max-h-[46vh] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {BUILTIN_CHARACTERS.map((c) => {
+              const draft = editing[c.key] ?? c.persona;
+              const expanded = editing[c.key] !== undefined;
+              const imported = importedIds.has(`tavern-${c.key}`);
+              return (
+                <div key={c.key} className="rounded-lg border border-black/10 bg-white p-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                      style={{ backgroundColor: c.avatarBg }}
+                    >
+                      {c.name.slice(0, 1)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-semibold text-[#303030]">{c.name}</p>
+                      <p className="truncate text-[10px] text-muted-foreground">{c.desc}</p>
+                    </div>
+                    <button
+                      onClick={() =>
+                        setEditing((s) => {
+                          const next = { ...s };
+                          if (next[c.key] !== undefined) delete next[c.key];
+                          else next[c.key] = c.persona;
+                          return next;
+                        })
+                      }
+                      className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
+                    >
+                      {expanded ? "收起" : "修改"}
+                    </button>
+                    <button
+                      onClick={() => importMember(c.key, c.name, draft, c.desc)}
+                      className={cn(
+                        "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
+                        imported ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
+                      )}
+                    >
+                      {mark(c.key)}
+                    </button>
+                  </div>
+                  {expanded && (
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setEditing((s) => ({ ...s, [c.key]: e.target.value }))}
+                      rows={7}
+                      className="mt-2 w-full resize-y rounded-md border border-border bg-white px-2.5 py-2 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 来源二：酒馆预设目录（dsh-tavern 插件 ~/.dsh/.agent-presets） */}
+        {tab === "presets" && (
+          <div className="mt-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              读取 dsh-tavern 插件的预设目录（每个预设 = 一份角色卡注入文本）。
+              <span className="ml-1 font-mono">{rootPath || "…"}</span>
+            </p>
+            {presets === null ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">读取中…</p>
+            ) : presets.length === 0 ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                未找到预设。可在官方 DSH「酒馆管理」导入角色卡后回来导入，或用「角色库 / 角色卡文件」导入。
+              </p>
+            ) : (
+              <div className="mt-2 max-h-[46vh] space-y-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {presets.map((p) => (
+                  <div key={p.key} className="flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-semibold text-[#303030]">
+                        {p.name}
+                        {p.key === "tavern-lite" && (
+                          <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">
+                            酒馆基础预设（无角色的空白扮演底座）
+                          </span>
+                        )}
+                      </p>
+                      <p className="truncate text-[10px] text-muted-foreground">
+                        {p.persona ? "persona 已就绪 · " + p.persona.slice(0, 40) : "无 persona（导入后为通用角色扮演提示词）"}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => importPreset(p)}
+                      className={cn(
+                        "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
+                        importedIds.has(`tavern-${p.key}`) ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
+                      )}
+                    >
+                      {mark(p.key)}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 来源三：角色卡文件（SillyTavern V2/V3 JSON） */}
+        {tab === "file" && (
+          <div className="mt-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              导入 SillyTavern 格式的角色卡 JSON（V2/V3）。文件从哪来：SillyTavern 里导出的角色、
+              角色分享社区/网站下载的卡，或照下面的最小结构自己写一份（字段都可以只填想要的）：
+            </p>
+            <pre className="mt-1.5 overflow-x-auto rounded-md bg-black/5 p-2.5 font-mono text-[10px] leading-relaxed text-[#303030]">
+              {`{
+  "name": "角色名",
+  "description": "人设描述（是谁、说话方式）",
+  "personality": "性格",
+  "scenario": "场景/世界观",
+  "first_mes": "开场白"
+}`}
+            </pre>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".json,application/json"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                importCardFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2.5 text-xs text-[#464646] transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
+            >
+              <Upload className="h-4 w-4" />
+              选择角色卡 JSON 文件（可多选）
+            </button>
+          </div>
+        )}
 
         {note && <p className="mt-3 text-[11px] text-[#10B981]">{note}</p>}
 
