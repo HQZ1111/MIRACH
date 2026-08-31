@@ -26,7 +26,7 @@ import {
   type ConvItem,
 } from "@/store/agents";
 import { listTavernPresets, parseCharacterCard, presetToPersona, cardToPersona, tavernPresetsRoot, type TavernPreset } from "@/lib/tavern";
-import { BUILTIN_CHARACTERS } from "@/lib/tavern-characters";
+import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES } from "@/lib/tavern-characters";
 import { $engineEnv } from "@/store/engine-session";
 import { userHomeDir } from "@/lib/paths";
 import { $usage, resetUsage } from "@/store/usage";
@@ -71,6 +71,7 @@ import {
   Upload,
   Users,
   Brain,
+  X,
   type LucideIcon,
   Layers,
 } from "lucide-react";
@@ -1932,7 +1933,7 @@ function AgentSection() {
         </div>
 
         {/* 酒馆角色接入（dsh-tavern）：固定导入到聊天环境，仅聊天标签显示 */}
-        {viewEnv === TAVERN_MEMBER_ENV ? (
+        {viewEnv === TAVERN_MEMBER_ENV && (
           <button
             onClick={() => setTavernOpen(true)}
             className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2 text-xs text-muted-foreground transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
@@ -1940,10 +1941,6 @@ function AgentSection() {
             <Users className="h-3.5 w-3.5" />
             导入酒馆角色（角色库 / 预设 / 角色卡）
           </button>
-        ) : (
-          <p className="mt-2 text-center text-[10px] text-muted-foreground/70">
-            酒馆角色固定导入到「聊天」环境的团队（切到聊天标签后可见导入入口）
-          </p>
         )}
       </div>
 
@@ -2608,9 +2605,11 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   const [presets, setPresets] = useState<TavernPreset[] | null>(null);
   const [rootPath, setRootPath] = useState("");
   const [note, setNote] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
   // 角色库人设编辑草稿：key → 草稿（存在 = 展开编辑态）
   const [editing, setEditing] = useState<Record<string, string>>({});
+  // 角色库筛选：分类 + 搜索
+  const [cat, setCat] = useState<string>("全部");
+  const [query, setQuery] = useState("");
 
   const afterImport = useCallback(
     (key: string) => {
@@ -2651,24 +2650,40 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
     );
   };
 
-  const importCardFiles = (files: FileList | null): void => {
-    if (!files || files.length === 0) return;
-    void (async () => {
+  /** 原生文件对话框选角色卡 JSON（默认打开用户主目录；Tauri dialog 插件） */
+  const pickCardFiles = async (): Promise<void> => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const home = await userHomeDir();
+      const picked = await open({
+        multiple: true,
+        title: "选择角色卡 JSON 文件",
+        filters: [{ name: "角色卡 JSON", extensions: ["json"] }],
+        defaultPath: home ?? undefined,
+      });
+      if (!picked) return;
+      const paths = Array.isArray(picked) ? picked : [picked];
       let ok = 0;
-      for (const file of Array.from(files)) {
-        const text = await file.text();
-        const card = parseCharacterCard(text);
-        if (!card) continue;
-        importMember(
-          card.name,
-          card.name,
-          cardToPersona(card),
-          "酒馆角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
-        );
-        ok += 1;
+      for (const path of paths) {
+        try {
+          const text = await invoke<string>("read_file", { path });
+          const card = parseCharacterCard(text);
+          if (!card) continue;
+          importMember(
+            card.name,
+            card.name,
+            cardToPersona(card),
+            "酒馆角色卡" + (card.scenario ? " · " + card.scenario.slice(0, 24) : ""),
+          );
+          ok += 1;
+        } catch {
+          /* 单个文件读取失败：跳过 */
+        }
       }
       setNote(ok > 0 ? "已导入 " + ok + " 个角色卡成员（聊天环境）" : "没有可识别的角色卡（需 SillyTavern V2/V3 JSON）");
-    })();
+    } catch (e) {
+      setNote("无法打开文件选择器：" + String(e));
+    }
   };
 
   return (
@@ -2677,10 +2692,21 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
         className="max-h-[85vh] w-[500px] overflow-y-auto rounded-xl bg-white p-4 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-base font-semibold text-[#303030]">导入酒馆角色</h3>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          角色以成员身份进入<b>聊天环境</b>的成员列表，人设作为系统提示词注入对话；同名重导只更新不重复，导入后可随时在成员「编辑」里再改。
-        </p>
+        <div className="flex items-start justify-between">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-[#303030]">导入酒馆角色</h3>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              角色以成员身份进入<b>聊天环境</b>的成员列表，人设作为系统提示词注入对话；同名重导只更新不重复，导入后可随时在成员「编辑」里再改。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#303030]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* 来源切换：角色库 / 酒馆预设 / 角色卡文件 */}
         <div className="mt-3 flex gap-1 rounded-lg bg-muted/60 p-1 text-[11px]">
@@ -2704,60 +2730,93 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           ))}
         </div>
 
-        {/* 来源一：角色库（前端内置，点选导入，人设可先改） */}
+        {/* 来源一：角色库（前端内置，分类筛选 + 搜索，人设可先改） */}
         {tab === "gallery" && (
-          <div className="mt-3 max-h-[46vh] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {BUILTIN_CHARACTERS.map((c) => {
-              const draft = editing[c.key] ?? c.persona;
-              const expanded = editing[c.key] !== undefined;
-              const imported = importedIds.has(`tavern-${c.key}`);
-              return (
-                <div key={c.key} className="rounded-lg border border-black/10 bg-white p-2.5">
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                      style={{ backgroundColor: c.avatarBg }}
-                    >
-                      {c.name.slice(0, 1)}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] font-semibold text-[#303030]">{c.name}</p>
-                      <p className="truncate text-[10px] text-muted-foreground">{c.desc}</p>
-                    </div>
-                    <button
-                      onClick={() =>
-                        setEditing((s) => {
-                          const next = { ...s };
-                          if (next[c.key] !== undefined) delete next[c.key];
-                          else next[c.key] = c.persona;
-                          return next;
-                        })
-                      }
-                      className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
-                    >
-                      {expanded ? "收起" : "修改"}
-                    </button>
-                    <button
-                      onClick={() => importMember(c.key, c.name, draft, c.desc)}
-                      className={cn(
-                        "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
-                        imported ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
-                      )}
-                    >
-                      {mark(c.key)}
-                    </button>
-                  </div>
-                  {expanded && (
-                    <textarea
-                      value={draft}
-                      onChange={(e) => setEditing((s) => ({ ...s, [c.key]: e.target.value }))}
-                      rows={7}
-                      className="mt-2 w-full resize-y rounded-md border border-border bg-white px-2.5 py-2 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
-                    />
+          <div className="mt-3">
+            <div className="flex flex-wrap items-center gap-1">
+              {["全部", ...CHARACTER_CATEGORIES].map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCat(c)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+                    cat === c
+                      ? "border-[#8B5CF6] bg-[#8B5CF6]/10 text-[#8B5CF6]"
+                      : "border-border text-muted-foreground hover:bg-muted",
                   )}
-                </div>
-              );
-            })}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+            <div className="relative mt-2">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索角色…"
+                className="w-full rounded-md border border-border bg-white py-1.5 pl-7 pr-2 text-[12px] text-[#303030] outline-none focus:border-[#8B5CF6]"
+              />
+            </div>
+            <div className="mt-2 max-h-[40vh] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {BUILTIN_CHARACTERS.filter((c) => (cat === "全部" || c.category === cat) && (!query.trim() || c.name.includes(query.trim()) || c.desc.includes(query.trim()))).map((c) => {
+                const draft = editing[c.key] ?? c.persona;
+                const expanded = editing[c.key] !== undefined;
+                const imported = importedIds.has(`tavern-${c.key}`);
+                return (
+                  <div key={c.key} className="rounded-lg border border-black/10 bg-white p-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                        style={{ backgroundColor: c.avatarBg }}
+                      >
+                        {c.name.slice(0, 1)}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[12px] font-semibold text-[#303030]">
+                          {c.name}
+                          <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">{c.category}</span>
+                        </p>
+                        <p className="truncate text-[10px] text-muted-foreground">{c.desc}</p>
+                      </div>
+                      <button
+                        onClick={() =>
+                          setEditing((s) => {
+                            const next = { ...s };
+                            if (next[c.key] !== undefined) delete next[c.key];
+                            else next[c.key] = c.persona;
+                            return next;
+                          })
+                        }
+                        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-[#464646] hover:bg-muted"
+                      >
+                        {expanded ? "收起" : "修改"}
+                      </button>
+                      <button
+                        onClick={() => importMember(c.key, c.name, draft, c.desc)}
+                        className={cn(
+                          "shrink-0 rounded-md px-2.5 py-1 text-[11px] text-white",
+                          imported ? "bg-[#10B981]" : "bg-[#8B5CF6] hover:bg-[#8B5CF6]/90",
+                        )}
+                      >
+                        {mark(c.key)}
+                      </button>
+                    </div>
+                    {expanded && (
+                      <textarea
+                        value={draft}
+                        onChange={(e) => setEditing((s) => ({ ...s, [c.key]: e.target.value }))}
+                        rows={6}
+                        className="mt-2 w-full resize-y rounded-md border border-border bg-white px-2.5 py-2 text-[11px] leading-relaxed text-[#303030] outline-none focus:border-[#8B5CF6]"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+              {BUILTIN_CHARACTERS.filter((c) => (cat === "全部" || c.category === cat) && (!query.trim() || c.name.includes(query.trim()) || c.desc.includes(query.trim()))).length === 0 && (
+                <p className="py-6 text-center text-[11px] text-muted-foreground">没有匹配的角色</p>
+              )}
+            </div>
           </div>
         )}
 
@@ -2783,12 +2842,16 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
                         {p.name}
                         {p.key === "tavern-lite" && (
                           <span className="ml-1.5 rounded bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">
-                            酒馆基础预设（无角色的空白扮演底座）
+                            酒馆基础预设
                           </span>
                         )}
                       </p>
                       <p className="truncate text-[10px] text-muted-foreground">
-                        {p.persona ? "persona 已就绪 · " + p.persona.slice(0, 40) : "无 persona（导入后为通用角色扮演提示词）"}
+                        {p.persona
+                          ? "persona 已就绪 · " + p.persona.slice(0, 40)
+                          : p.key === "tavern-lite"
+                            ? "没有任何角色人设——导入只是一个「通用角色扮演」空壳成员，一般不用导入它"
+                            : "无 persona（导入后为通用角色扮演提示词）"}
                       </p>
                     </div>
                     <button
@@ -2807,7 +2870,7 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
           </div>
         )}
 
-        {/* 来源三：角色卡文件（SillyTavern V2/V3 JSON） */}
+        {/* 来源三：角色卡文件（SillyTavern V2/V3 JSON，原生文件对话框） */}
         {tab === "file" && (
           <div className="mt-3">
             <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -2823,23 +2886,12 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   "first_mes": "开场白"
 }`}
             </pre>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".json,application/json"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                importCardFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
             <button
-              onClick={() => fileRef.current?.click()}
+              onClick={() => void pickCardFiles()}
               className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#8B5CF6]/40 py-2.5 text-xs text-[#464646] transition-colors hover:border-[#8B5CF6] hover:text-[#8B5CF6]"
             >
               <Upload className="h-4 w-4" />
-              选择角色卡 JSON 文件（可多选）
+              选择角色卡 JSON 文件（可多选，默认打开主目录）
             </button>
           </div>
         )}

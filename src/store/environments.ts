@@ -50,20 +50,28 @@ const VIEW_ENV_SEEDS: EnvProfile[] = [
   { id: "chat", name: "聊天", cwd: "~/Mirach/chat", icon: "ph:chat", visible: true },
   { id: "code", name: "代码", cwd: "G:\\Workspaces\\code", icon: "ph:code", visible: true },
   { id: "work", name: "工作", cwd: "G:\\Workspaces\\work", icon: "ph:briefcase", visible: true },
-  { id: "finance", name: "金融写作", cwd: "G:\\Workspaces\\finance-writing", icon: "ph:chart", visible: true },
+  { id: "finance", name: "金融", cwd: "G:\\Workspaces\\finance", icon: "ph:chart", visible: true },
   { id: "write", name: "写作", cwd: "G:\\Workspaces\\writing", icon: "ph:pen", visible: true },
 ];
+
+/** 旧种子名迁移：改名后存量持久化数据同步（仅精确匹配旧名才改，不动用户自定义名） */
+const ENV_NAME_RENAMES: Record<string, string> = {
+  "金融写作": "金融",
+};
 
 function defaultEnvs(): EnvProfile[] {
   if (MOCK) return [{ id: "main", name: "主环境", cwd: "", icon: "ph:bot", visible: true, builtIn: true }];
   return VIEW_ENV_SEEDS.map((e) => ({ ...e }));
 }
 
-/** 存量记录补默认字段（迁移：icon/visible/builtIn）。 */
+/** 存量记录补默认字段（迁移：icon/visible/builtIn + 旧种子名改名）。 */
 function migrate(e: EnvProfile): EnvProfile {
   const seed = VIEW_ENV_SEEDS.find((s) => s.id === e.id);
+  const renamed = e.name && ENV_NAME_RENAMES[e.name] ? ENV_NAME_RENAMES[e.name] : e.name;
   return {
     ...e,
+    name: renamed,
+    cwd: e.id === "finance" && e.cwd === "G:\\Workspaces\\finance-writing" ? "G:\\Workspaces\\finance" : e.cwd,
     icon: e.icon ?? seed?.icon ?? "ph:bot",
     visible: e.visible ?? true,
     builtIn: e.id === "main",
