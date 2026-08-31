@@ -523,6 +523,24 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第二十批：引擎切 npm 全局安装（更新=一条 npm 命令）✅（2026-09-01）
+
+用户问"npm 不能直接更新吗"。落地：
+
+- **引擎切到 npm 全局安装的 dsh CLI**（@deepseek-ai/dsh@alpha = 0.1.2-alpha.3）：
+  - `npm i -g @deepseek-ai/dsh@alpha` 已装，`dsh --version` 验证 ✓
+  - dsh.ts 启动优先 `%APPDATA%\npm\dsh.cmd`（npm 全局），cwd = profile 目录；
+    无全局安装时回退 workspace 源码（tsx bin.ts）
+  - **更新 = `npm i -g @deepseek-ai/dsh@alpha` 一条命令 + 重启应用**
+- **官方 npm 最新版**：alpha 通道 0.1.2-alpha.3（8-31 发布），stable 通道
+  0.1.1-rc.2；本地已升到 alpha.3
+- **profile 已补官方契约**：pnpm-workspace.yaml（hoisted）、dependencies
+  （workgroup/voice/tavern 三件）、bundles 含三件——官方 `dsh plugin` 语义
+  完全适用，安装器/升级走官方 reconcile
+- **启动链变化**：tsx 编译源码 → npm 产物的 .cmd 入口；启动更快，不再依赖
+  workspace 源码存在
+- tsc 双通过；需重启应用验证 runtime 启动
+
 # 第十九批：手机接入诊断 + 跨网（Tailscale/ZeroTier）支持（2026-09-01）
 
 用户反馈：扫码打不开 + 问"不同网络为什么不能用"。落地：

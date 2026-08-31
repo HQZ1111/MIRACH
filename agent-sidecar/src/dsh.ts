@@ -326,17 +326,21 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
     log("launching dsh runtime: node=%s env=%s cwd=%s profile=%s", paths.nodeBin, ws.envId, cwdNow, paths.profileMode);
     logDebug("entry=%s config=%s sessionRoot=%s", paths.entry, configPath, paths.sessionRoot);
 
-    // profile 模式启动参数：官方 launcher 合成 base + sdk-app + web-app 三层
-    // （stdio JSON-RPC + HTTP/WS 双面）；profile 内 node_modules 负责插件解析。
+    // profile 模式启动：优先用全局 npm 安装的 dsh CLI（更新 = npm i -g @deepseek-ai/dsh@alpha
+    // 一条命令），无全局安装时回退 workspace 源码（tsx bin.ts）。
+    const npmDsh = process.env.APPDATA ? join(process.env.APPDATA, "npm", "dsh.cmd") : "";
+    const hasNpmDsh = npmDsh && existsSync(npmDsh);
     const launchArgs = paths.profileMode
-      ? ["--import", "tsx", paths.entry, "--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
+      ? hasNpmDsh
+        ? ["--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
+        : ["--import", "tsx", paths.entry, "--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
       : ["--import", "tsx", paths.entry, configPath];
 
     const harness = new DeepSeekHarness({
       launch: {
-        command: paths.nodeBin,
+        command: paths.profileMode && hasNpmDsh ? npmDsh : paths.nodeBin,
         args: launchArgs,
-        cwd: paths.harnessRoot,
+        cwd: paths.profileMode && hasNpmDsh ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", process.env.MIRACH_PROFILE_NAME ?? "mirach") : paths.harnessRoot,
         env: {
           ...runtimeEnv(paths, model),
           // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）
