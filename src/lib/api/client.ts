@@ -82,6 +82,10 @@ export interface MirachClient {
   installCommunityPlugin(name: string): Promise<string[]>;
   /** 卸载社区插件（返回步骤日志，重启应用后生效） */
   uninstallCommunityPlugin(name: string): Promise<string[]>;
+  /** 引擎更新检查（npm alpha 通道 vs 当前全局安装版本） */
+  checkEngineUpdate(): Promise<{ current: string; latest: string; hasUpdate: boolean }>;
+  /** 一键更新引擎（npm i -g @deepseek-ai/dsh@alpha；返回步骤日志） */
+  updateEngine(): Promise<string[]>;
   /** 绑定酒馆预设到空白会话（agentPresets.select：世界书/记忆/关系网/剧情选项随挂载激活）。
    *  会话已有回合时引擎拒绝（locked）→ 返回 false；成功返回 true。 */
   selectAgentPreset(sessionId: string, presetId: string): Promise<boolean>;
@@ -273,6 +277,14 @@ class MockClient implements MirachClient {
 
   async sendMessageFeedback(_messageId: string, _rating: "positive" | "negative"): Promise<boolean> {
     return true; // mock：本地赞踩即可
+  }
+
+  async checkEngineUpdate(): Promise<{ current: string; latest: string; hasUpdate: boolean }> {
+    return { current: "0.1.2-alpha.3", latest: "0.1.2-alpha.3", hasUpdate: false };
+  }
+
+  async updateEngine(): Promise<string[]> {
+    return ["（mock）无需更新"];
   }
 
   async selectAgentPreset(_sessionId: string, _presetId: string): Promise<boolean> {
@@ -848,6 +860,16 @@ class RealClient implements MirachClient {
       // 会话已有回合（locked）/ 预设不存在：绑定失败
       return false;
     }
+  }
+
+  async checkEngineUpdate(): Promise<{ current: string; latest: string; hasUpdate: boolean }> {
+    const raw = await invoke<{ current: string; latest: string; hasUpdate: boolean }>("dsh_rpc", { method: "update.check", params: null });
+    return raw ?? { current: "", latest: "", hasUpdate: false };
+  }
+
+  async updateEngine(): Promise<string[]> {
+    const raw = await invoke<unknown>("dsh_rpc", { method: "update.engine", params: null });
+    return ((raw as { logs?: string[] } | null)?.logs ?? []).map(String);
   }
 
   subscribe(onEvent: (e: MirachEvent) => void): () => void {

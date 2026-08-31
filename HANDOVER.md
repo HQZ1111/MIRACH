@@ -523,6 +523,19 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第二十一批：真实更新检查 + 一键更新引擎（2026-09-01）
+
+用户指出"关于"页的检查更新/自动更新都是假的。已替换为真实现：
+
+- **sidecar** 新增 `update.check`（npm view dist-tags.alpha vs 当前全局版本）
+  和 `update.engine`（npm i -g @deepseek-ai/dsh@alpha）两个 RPC 方法。
+- **前端**（AboutContent）替换假检查为真：进"关于"自动查 npm，显示
+  当前版本/最新版本/有无更新；有更新时显示"一键更新"按钮（调 sidecar
+  update.engine → npm i -g → 日志展示 → 提示重启）。
+- 插件管理器（PluginsOverlay）位置：**右工具栏 → 拓展(SquaresFour) → 插件**
+  ——含"已安装/安装（npm 发现）/引擎插件"三个标签。
+- tsc 双通过；sidecar 变更需重启应用。
+
 # 第二十批：引擎切 npm 全局安装（更新=一条 npm 命令）✅（2026-09-01）
 
 用户问"npm 不能直接更新吗"。落地：

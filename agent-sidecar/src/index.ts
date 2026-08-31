@@ -33,7 +33,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSy
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
-import { listPlugins, installPlugin, uninstallPlugin, netAccessInfo } from "./plugins.js";
+import { listPlugins, installPlugin, uninstallPlugin, netAccessInfo, checkEngineUpdate, updateEngine } from "./plugins.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
@@ -616,6 +616,19 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       // 手机接入：网卡枚举（分类）+ 核心 web 面连通性探测（设置页「手机接入」用）
       if (method === "net.info") {
         send({ type: "result", id, data: await netAccessInfo() });
+        return;
+      }
+      // 引擎版本检查 + 一键更新
+      if (method === "update.check" || method === "update.engine") {
+        try {
+          if (method === "update.check") {
+            send({ type: "result", id, data: await checkEngineUpdate() });
+          } else {
+            send({ type: "result", id, data: { logs: await updateEngine() } });
+          }
+        } catch (err) {
+          send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
       // 引擎 ctx.sessions.fork（最近完成回合边界）产出子会话，

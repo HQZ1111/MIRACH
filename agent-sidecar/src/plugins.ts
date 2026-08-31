@@ -240,6 +240,60 @@ export async function uninstallPlugin(pkgName: string): Promise<string[]> {
 
 // ── 手机接入（net.access）：局域网/虚拟网 IP + 连通性探测 ──
 
+// ── 手机接入（net.access）：局域网/虚拟网 IP + 连通性探测 + 引擎版本检查/更新 ──
+
+export interface EngineUpdateInfo {
+  current: string;
+  latest: string;
+  hasUpdate: boolean;
+}
+
+function npmView(pkg: string, field: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execP(`npm view ${pkg} ${field} --json`, { windowsHide: true, timeout: 30_000 })
+      .then((r) => resolve(String(r.stdout).trim().replace(/^"|"$/g, "")))
+      .catch((e) => reject(new Error(String(e))));
+  });
+}
+
+/** 检查引擎更新：npm alpha 通道最新版 vs 当前全局安装版本 */
+export async function checkEngineUpdate(): Promise<EngineUpdateInfo> {
+  const latest = await npmView("@deepseek-ai/dsh", "dist-tags.alpha");
+  // 当前版本：全局 npm 包的 package.json
+  const npmRoot = process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh") : "";
+  let current = "";
+  try {
+    current = JSON.parse(readFileSync(join(npmRoot, "package.json"), "utf8")).version ?? "";
+  } catch {
+    // 回退：dsh --version
+    try {
+      const { stdout } = await execP("dsh --version", { windowsHide: true, timeout: 15_000 });
+      current = stdout.trim();
+    } catch {
+      current = "";
+    }
+  }
+  return {
+    current: current || "未知",
+    latest: latest || "未知",
+    hasUpdate: current !== latest && latest !== "未知",
+  };
+}
+
+/** 一键更新引擎：npm i -g @deepseek-ai/dsh@alpha */
+export async function updateEngine(): Promise<string[]> {
+  const lines: string[] = [];
+  lines.push("npm i -g @deepseek-ai/dsh@alpha …");
+  const { stderr } = await execP("npm install -g @deepseek-ai/dsh@alpha --no-audit --no-fund", {
+    windowsHide: true,
+    timeout: 300_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (stderr && stderr.trim()) lines.push("npm: " + stderr.trim().split(/\r?\n/).slice(-2).join(" / "));
+  lines.push("引擎更新完成 —— 重启应用生效");
+  return lines;
+}
+
 export interface NetAccessIface {
   /** 网卡名（Windows 上 Tailscale 网卡就叫 "Tailscale"） */
   name: string;

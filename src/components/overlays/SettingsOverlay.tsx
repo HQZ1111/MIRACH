@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
+import { getApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
 import { useI18n, type Lang } from "@/lib/i18n";
@@ -1800,6 +1801,10 @@ function AboutContent() {
   const { t } = useI18n();
   const [uninstallMode, setUninstallMode] = useState("gui");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateLogs, setUpdateLogs] = useState<string[]>([]);
+  useEffect(() => { void getApi().checkEngineUpdate().then(setUpdateInfo).catch(() => {}); }, []);
   return (
     <div className="space-y-4 px-5 py-6">
       <div className="flex flex-col items-center gap-2">
@@ -1811,19 +1816,41 @@ function AboutContent() {
       <div className="rounded-lg border border-border p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#10B981]" />
-            <span className="text-body-sm font-medium text-[#303030]">{t("settings.latestVersion")}</span>
+            <span className={cn("h-2.5 w-2.5 rounded-full", updateInfo?.hasUpdate ? "bg-[#F59E0B]" : "bg-[#10B981]")} />
+            <span className="text-body-sm font-medium text-[#303030]">
+              {updateInfo === null
+                ? "引擎版本"
+                : updateInfo.hasUpdate
+                  ? `有新版本 ${updateInfo.latest}（当前 ${updateInfo.current}）`
+                  : `已是最新 ${updateInfo.current}`}
+            </span>
           </div>
-          <span className="text-[11px] text-muted-foreground">{t("settings.lastChecked")}: today 09:00</span>
+          <button
+            onClick={() => { setUpdateBusy(true); void getApi().checkEngineUpdate().then(setUpdateInfo).finally(() => setUpdateBusy(false)); }}
+            disabled={updateBusy}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+          >
+            {updateBusy ? "检查中…" : "检查更新"}
+          </button>
         </div>
-        <div className="mt-3 flex gap-2">
-          <button className="rounded-md bg-[#303030] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#464646]">{t("settings.checkNow")}</button>
-          <button className="rounded-md border border-border px-3 py-1.5 text-xs text-[#464646] transition-colors hover:bg-muted">{t("settings.seeWhatsNew")}</button>
-        </div>
+        {updateInfo?.hasUpdate && (
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className="text-[11px] text-[#B45309]">npm i -g @deepseek-ai/dsh@{updateInfo.latest}</p>
+            <button
+              onClick={() => { setUpdateBusy(true); void getApi().updateEngine().then((l) => { setUpdateLogs(l); }).finally(() => setUpdateBusy(false)); }}
+              disabled={updateBusy}
+              className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+            >
+              {updateBusy ? "更新中…" : "一键更新"}
+            </button>
+          </div>
+        )}
+        {updateLogs.length > 0 && (
+          <pre className="mt-2 max-h-24 overflow-y-auto rounded-md bg-black/5 p-2 font-mono text-[10px] leading-relaxed text-[#303030] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {updateLogs.join("\n")}
+          </pre>
+        )}
       </div>
-      <FieldRow label={t("settings.automaticUpdates")} hint="Branch main · Commit 8f3a2c1">
-        <SwitchInput defaultOn />
-      </FieldRow>
 
       {/* 卸载 */}
       <div className="rounded-lg border border-red-200 p-4">
