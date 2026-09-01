@@ -2,7 +2,7 @@
  * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Component, type ReactNode } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
@@ -66,6 +66,31 @@ import {
 interface SettingsSection {
   id: string;
   icon: LucideIcon;
+}
+
+/** 官方分区渲染边界：官方组件抛错只降级本分区，不炸整个设置页 */
+class OfficialSectionBoundary extends Component<
+  { children: ReactNode; msg?: string | null },
+  { failed: string | null }
+> {
+  state: { failed: string | null } = { failed: this.props.msg ?? null };
+  static getDerivedStateFromError(err: unknown) {
+    return { failed: String(err).slice(0, 160) };
+  }
+  componentDidCatch(err: unknown) {
+    // 错误已入 state（getDerivedStateFromError），这里仅兜底记录
+    console.warn("[settings] official section crashed:", err);
+  }
+  render() {
+    if (this.state.failed !== null) {
+      return (
+        <p className="px-2 py-3 text-[11px] leading-relaxed text-[#EF4444]">
+          官方分区渲染失败：{this.state.failed}
+        </p>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 const SECTIONS: SettingsSection[] = [
@@ -2019,13 +2044,21 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
   const { reload } = useAppConfig();
   const [active, setActive] = useState(initialSection);
   const fileRef = useRef<HTMLInputElement>(null);
-  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件如酒馆管理）
+  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件如酒馆管理）。
+  // 内核声明链需要官方根树挂载后才 live（KernelMirrorHost 挂载在 App 树里，
+  // 但可能晚于设置页打开，这里持续轮询直到非空或超时）。
   const [officialSections, setOfficialSections] = useState(() => nativeSettingsSections());
   useEffect(() => {
-    if (officialSections.length === 0) {
-      const t = window.setTimeout(() => { setOfficialSections(nativeSettingsSections()); }, 1500);
-      return () => window.clearTimeout(t);
-    }
+    if (officialSections.length > 0) return;
+    let left = 24;
+    const timer = (): void => {
+      const next = nativeSettingsSections();
+      setOfficialSections(next);
+      left -= 1;
+      if (next.length === 0 && left > 0) window.setTimeout(timer, 1500);
+    };
+    const t = window.setTimeout(timer, 1500);
+    return () => window.clearTimeout(t);
   }, [officialSections.length]);
 
   // 导出配置 → 下载 config.json
@@ -2081,31 +2114,36 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
     // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
     const official = nativeSettingsSections().find((s) => s.id === active);
     if (official) {
-      // 优先走官方 renderSlot（正确绑定 t/inject/store 席位）；失败回退直调
+      // 官方分区条目经条目级 render 绑定渲染（注入面随条目绑定）；
+      // 用边界隔离渲染错误（官方组件缺绑定/连接未就绪时降级提示，不炸设置页）
+      let el: unknown = null;
+      let failMsg: string | null = null;
       try {
         const slots = (kernelContext() as unknown as Record<string, unknown>).slots as
           | { renderSlot?: (key: string, props?: unknown, opts?: { only?: string }) => React.ReactElement }
           | undefined;
-        const el = slots?.renderSlot?.("settings.section", { close: onClose }, { only: active });
-        if (el) {
-          return (
-            <div className="official-section-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
-              <style>{`
-                .official-section-host button { border-radius: 8px; border: 1px solid #E5E7EB; padding: 5px 12px; font-size: 12px; color: #303030; background: #fff; cursor: pointer; transition: all .15s; font-family: inherit; }
-                .official-section-host button:hover { background: #F5F6F8; }
-                .official-section-host input, .official-section-host select, .official-section-host textarea { border-radius: 8px; border: 1px solid #E5E7EB; padding: 5px 8px; font-size: 12px; color: #303030; background: #fff; outline: none; font-family: inherit; }
-                .official-section-host input:focus, .official-section-host select:focus, .official-section-host textarea:focus { border-color: #6366F1; }
-                .official-section-host h2, .official-section-host h3 { font-size: 14px; font-weight: 600; color: #303030; margin: 0 0 8px; }
-                .official-section-host table { width: 100%; border-collapse: collapse; font-size: 12px; }
-                .official-section-host th, .official-section-host td { padding: 4px 6px; border-bottom: 1px solid #F0F0F0; text-align: left; }
-              `}</style>
-              {el}
-            </div>
-          );
+        // ctx.renderSlot 仅允许 'root'（官方 Shell 契约）；条目级渲染走 official.render
+        el = slots?.renderSlot?.("settings.section", { close: onClose }, { only: active }) ?? null;
+      } catch { /* ctx 级 renderSlot 仅 root，条目级渲染走 official.render */ }
+      if (el === null) {
+        try {
+          el = official.render({ close: onClose });
+        } catch (err) {
+          failMsg = err instanceof Error ? err.message : String(err);
+          el = null;
         }
-      } catch { /* renderSlot 不可用，回退直调 */ }
-      const el = official.render({ close: onClose });
-      return <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>{el as React.ReactElement}</div>;
+      }
+      return (
+        <OfficialSectionBoundary msg={failMsg ?? el === null ? failMsg : null}>
+          <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
+            {el as React.ReactElement ?? (
+              <p className="text-[12px] text-muted-foreground">
+                官方分区暂不可用：请确认引擎已连接（设置页顶部"引擎已连接"）后重试。
+              </p>
+            )}
+          </div>
+        </OfficialSectionBoundary>
+      );
     }
     switch (active) {
       case "chat-style": return <GeneralContent />;

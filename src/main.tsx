@@ -30,7 +30,11 @@ const kernelEnabled =
   import.meta.env.VITE_KERNEL === "1"
   || (import.meta.env.VITE_KERNEL === undefined && import.meta.env.VITE_MOCK !== "1");
 if (kernelEnabled && !isOverlay && !isQuickEntry) {
-  void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => console.warn(String(e)));
+  void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => {
+    console.warn(String(e));
+    // 内核失败诊断信号：标题末尾标注原因（默认标题 "Mirach Dashboard"）
+    try { document.title = `Mirach Dashboard · Kernel Fail: ${String(e).slice(0, 140)}`; } catch { /* 忽略 */ }
+  });
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

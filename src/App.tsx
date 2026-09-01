@@ -4,6 +4,7 @@ import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { TerminalStatusProvider } from "@/hooks/useTerminalStatus";
 import { AppLayout } from "@/components/layout";
+import { KernelMirrorHost } from "@/components/layout/KernelMirrorHost";
 import { MOCK } from "@/lib/mock";
 import { getApi } from "@/lib/api";
 import { appendAiMessage, appendSystemMessage, appendUserMessage, SESSION_ID } from "@/store/chat";
@@ -18,7 +19,7 @@ import { ResizeHandles } from "@/components/window/ResizeHandles";
 import "@/plugins/samples/hello";
 
 /**
- * RelayBridge — 订阅引擎事件流（仅 VITE_MOCK=0）
+ * RelayBridge — 订阅引擎事件流（仅 VITE_MOCK=0）：
  * relay:reply（引擎整段回复）→ 追加到实时聊天 store + 桌面通知
  */
 function RelayBridge() {
@@ -72,7 +73,7 @@ function handleQuickSubmit(text: string): void {
   } else {
     void getApi()
       .submitPrompt(SESSION_ID, text)
-      .catch((e: unknown) => appendSystemMessage(`提交失败：${String(e)}`));
+      .catch(() => appendSystemMessage("提交失败"));
   }
 }
 
@@ -100,7 +101,7 @@ function App() {
     } catch {
       /* 插件不可用 */
     }
-    // ⌘⇧N / Ctrl+Shift+N：打开新实例窗口
+    // ⌘N / Ctrl+Shift+N：打开新实例窗口
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
@@ -120,6 +121,7 @@ function App() {
         <RelayBridge />
         <NotifyBridge />
         <ResizeHandles />
+        <KernelMirrorHost />
         <AppLayout />
       </TerminalStatusProvider>
     </ThemeProvider>

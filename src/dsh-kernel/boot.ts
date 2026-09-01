@@ -30,6 +30,9 @@ import "@deepseek-ai/dsh-client-ui-session/client";
 import "@deepseek-ai/dsh-client-ui-workspace/client";
 import "@deepseek-ai/dsh-client-ui-theme/client";
 import "@deepseek-ai/dsh-client-ui-layout/client";
+// ui-sidebar：声明 sidebar 槽位链（sidebar.settings 声明在此）——ui-settings
+// 分区包的 inject 是 lazy 的（key 未声明不执行），缺它官方设置分区不注册
+import "@deepseek-ai/dsh-client-ui-sidebar/client";
 import "@deepseek-ai/dsh-client-ui-conversation/client";
 import "@deepseek-ai/dsh-client-ui-chat/client";
 // ── 输入框 composer seat 官方栈（模型选型/斜杠命令/计划模式/权限预设） ──
@@ -76,6 +79,9 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-workspace/client",
   "@deepseek-ai/dsh-client-ui-theme/client",
   "@deepseek-ai/dsh-client-ui-layout/client",
+  // ui-sidebar：sidebar 槽位链起点（sidebar.settings 声明）——缺它官方设置
+  // 分区的 inject 永远不注册（lazy 声明）
+  "@deepseek-ai/dsh-client-ui-sidebar/client",
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
   // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
@@ -100,6 +106,65 @@ let activeCoreSessionId: string | null = null;
 
 export function kernelContext(): Context | null {
   return kernelCtx;
+}
+
+/** 失败插件清单（仪表盘诊断） */
+export function kernelPluginFails(): string[] {
+  return lastPluginFails;
+}
+let lastPluginFails: string[] = [];
+let deliveryLog = "";
+/** 声明骨架交付结果（仪表盘读） */
+export function kernelDeliveryLog(): string {
+  return deliveryLog;
+}
+
+/**
+ * mirach 侧补登记官方 slot 声明骨架（sidebar → sidebar.settings →
+ * settings.section）。必须在官方根树挂载之后调用（KernelMirrorHost）：
+ * 官方 SlotCore 的 children 声明是嵌套 effect——父条目被渲染时声明才写入
+ * ledger。官方 web 由 ui-sidebar 提供整套，但其 cordis inject 回调在
+ * mirach 内核中静默未达。此处注册骨架条目，且占位组件渲染自己的子槽
+ * （renderSlot）——子条目随之被渲染、声明链逐级 live，官方设置分区包
+ * （settings-general/models/plugins/…）随即回应声明注册分区条目。
+ */
+export function deliverSlotDeclarations(ctx: Context): string {
+  try {
+    const slots = (ctx as unknown as { slots?: unknown }).slots as
+      | { register?: (entry: Record<string, unknown>, component?: unknown) => unknown }
+      | undefined;
+    if (typeof slots?.register !== "function") return "ERR: register missing";
+    function EmptySlot(props: { renderSlot?: (key: string, owner: object) => unknown }) {
+      return typeof props.renderSlot === "function" ? props.renderSlot("sidebar.settings", {}) : null;
+    }
+    function EmptySettings(props: { renderSlot?: (key: string, owner: object) => unknown }) {
+      return typeof props.renderSlot === "function" ? props.renderSlot("settings.section", {}) : null;
+    }
+    slots.register(
+      {
+        name: "sidebar",
+        id: "mirach-sidebar",
+        locale: "sidebar",
+        children: { "sidebar.settings": { kind: "single", scope: "root" } },
+      },
+      EmptySlot,
+    );
+    slots.register(
+      {
+        name: "sidebar.settings",
+        id: "mirach-sidebar-settings",
+        locale: "sidebar",
+        children: { "settings.section": { kind: "list", scope: "root" } },
+      },
+      EmptySettings,
+    );
+    logInfo("slot declarations delivered (sidebar/sidebar.settings/settings.section)");
+    return "DONE";
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logWarn("slot declarations failed: %s", msg);
+    return `ERR: ${msg}`;
+  }
 }
 
 /** 读取官方 settings.section 槽位全量（含第三方插件注册的分区） */
@@ -273,6 +338,7 @@ export function nativeCollapsePanels(): void {
 
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
 export async function bootKernelMirror(): Promise<void> {
+  const pluginFails: string[] = [];
   try {
     const ctx = new Context();
     for (const id of KERNEL_PLUGINS) {
@@ -282,9 +348,12 @@ export async function bootKernelMirror(): Promise<void> {
       try {
         await ctx.plugin(mod);
       } catch (err) {
+        pluginFails.push(`${id}: ${err instanceof Error ? err.message : String(err)}`);
         logWarn("kernel plugin %s failed (degraded): %s", id, err instanceof Error ? err.message : String(err));
       }
     }
+    // 诊断信号：失败插件清单（日志/仪表盘用）
+    lastPluginFails = pluginFails;
     // typert 客户端反射根：bundle 注册实测不稳定，直接实例化主类（与 client apply 等价）
     new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     kernelCtx = ctx;

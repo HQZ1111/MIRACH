@@ -33,6 +33,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSy
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
+import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
 import { listPlugins, installPlugin, uninstallPlugin, netAccessInfo, checkEngineUpdate, updateEngine } from "./plugins.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
@@ -632,7 +633,7 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         return;
       }
       // 引擎 ctx.sessions.fork（最近完成回合边界）产出子会话，
-      // 新前端会话 id → 子 dsh 会话的映射即刻落盘
+      // 新前端会话 id → 子 dsh 会话的映射即刻落盘。经 web 面 /api。
       if (method === "session/fork") {
         const p = (params ?? {}) as { sourceSessionId?: string; newSessionId?: string };
         if (typeof p.sourceSessionId !== "string" || typeof p.newSessionId !== "string") {
@@ -646,14 +647,15 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
           return;
         }
         const childDsh = `dsh-${p.newSessionId}-${randomUUID().replaceAll("-", "").slice(0, 8)}`;
-        const rt = await ensureRuntime(activeModel);
         try {
-          const result = await rt.harness.client.request(
-            "session/fork",
-            { sessionId: src, childSessionId: childDsh },
-            30_000,
-          );
-          const childEngineId = String((result as Record<string, unknown>)?.sessionId ?? childDsh);
+          const result = await remoteCall("session/fork", {
+            request: { sessionId: src, childSessionId: childDsh },
+          }, 30_000);
+          if (!result.ok) {
+            send({ type: "error", id, message: `${result.error!.code}: ${result.error!.message}` });
+            return;
+          }
+          const childEngineId = String((result.value as Record<string, unknown>)?.sessionId ?? childDsh);
           sessionMap.set(envSessionKey(p.newSessionId), childEngineId);
           saveSessionMap();
           currentFrontendId = p.newSessionId;
@@ -669,7 +671,7 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       // 酒馆预设绑定（agentPresets.select）：空白会话把 agent 组成切换到目标预设
       // ——世界书智能注入/记忆总结/关系网/剧情选项等服务随预设挂载激活。
       // params = { sessionId(前端 id), agentPreset(预设 id=目录名) }。
-      // wire 形态 { agentId, agentPreset }（typert lookup），编码被拒时回退位置数组。
+      // 经引擎 web 面 /api（SDK stdio 无此方法），wire { agentId, agentPreset }。
       if (method === "agentPresets.select") {
         try {
           const p = (params ?? {}) as { sessionId?: string; agentPreset?: string };
@@ -679,16 +681,16 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
             send({ type: "error", id, message: "agentPresets.select 需要 sessionId 与 agentPreset" });
             return;
           }
-          const rt = await ensureRuntime(activeModel);
-          let result: unknown;
-          try {
-            result = await rt.harness.client.request(method, { agentId: dshId, agentPreset: p.agentPreset }, 30_000);
-          } catch (encErr) {
-            logWarn("agentPresets.select object-encode rejected, retry positional: %s", encErr instanceof Error ? encErr.message : String(encErr));
-            result = await rt.harness.client.request(method, [dshId, p.agentPreset], 30_000);
+          const result = await remoteCall("agentPresets/select", {
+            agentId: dshId,
+            agentPreset: p.agentPreset,
+          }, 30_000);
+          if (result.ok) {
+            log("agentPresets.select ok: %s -> %s", dshId, p.agentPreset);
+            send({ type: "result", id, data: result.value ?? null });
+          } else {
+            send({ type: "error", id, message: `${result.error!.code}: ${result.error!.message}` });
           }
-          log("agentPresets.select ok: %s -> %s", dshId, p.agentPreset);
-          send({ type: "result", id, data: result });
         } catch (err) {
           logWarn("agentPresets.select failed: %s", err instanceof Error ? err.message : String(err));
           send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
@@ -704,9 +706,8 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         return;
       }
       // 斜杠命令执行（commands.execute）：/plan、/permission、/model 等官方命令。
-      // 前端传 { sessionId(前端 id), line("/plan on") }；会话 id 映射到 dsh 后，
-      // wire 形态 { agent, line, images }（typert 对象编码），被拒时回退位置数组
-      // ——与官方 client 的 session.command(line) = commands.execute(sid, line, []) 同形。
+      // 前端传 { sessionId(前端 id), line("/plan on") }；会话 id 映射到 dsh 后经
+      // 引擎 web 面 /api（SDK stdio 无此方法，2026-09 实测）。
       if (method === "commands.execute") {
         try {
           const p = (params ?? {}) as { sessionId?: string; line?: string };
@@ -716,16 +717,16 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
             send({ type: "error", id, message: "commands.execute 需要 sessionId 与以 / 开头的命令行" });
             return;
           }
-          const rt = await ensureRuntime(activeModel);
-          let result: unknown;
-          try {
-            result = await rt.harness.client.request(method, { agent: dshId, line: p.line, images: [] }, 30_000);
-          } catch (encErr) {
-            logWarn("commands.execute object-encode rejected, retry positional: %s", encErr instanceof Error ? encErr.message : String(encErr));
-            result = await rt.harness.client.request(method, [dshId, p.line, []], 30_000);
+          const result = await remoteCall("commands/execute", {
+            agentId: dshId,
+            line: p.line,
+            images: [],
+          }, 30_000);
+          if (result.ok) {
+            send({ type: "result", id, data: result.value ?? null });
+          } else {
+            send({ type: "error", id, message: `${result.error!.code}: ${result.error!.message}` });
           }
-          log("commands.execute ok: %s %s", dshId, p.line);
-          send({ type: "result", id, data: result });
         } catch (err) {
           logWarn("commands.execute failed: %s", err instanceof Error ? err.message : String(err));
           send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
@@ -749,10 +750,11 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         return;
       }
       try {
-        const rt = await ensureRuntime(activeModel);
+        // typert remote 只走引擎 web 面 /api（SDK stdio 白名单只有
+        // initialize/session/prompt/shutdown——旧 harness.client.request
+        // 通道全部不可达，2026-09 实测定案）。见 rpc-http.ts。
         let callParams: Record<string, unknown> | undefined = params;
-        // 通用 sessionId 映射：前端会话 id → dsh 会话 id（模型目录/选型、反馈、
-        // 命令执行等所有带 sessionId 的 RPC 都走这里）。映射不到就用原值：
+        // 通用 sessionId 映射：前端会话 id → dsh 会话 id。映射不到就用原值：
         // 宁可落在无映射的会话上，也不能错归到另一个正打开的会话。
         if (callParams && typeof callParams.sessionId === "string") {
           const dshId = sessionMap.get(envSessionKey(callParams.sessionId)) ?? callParams.sessionId;
@@ -760,9 +762,13 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         }
         // 长任务（workflow.* 等）放宽超时，其余 30s
         const rpcTimeoutMs = /^workflow\./.test(method) || method.includes("workflow") ? 300_000 : 30_000;
-        const result = await rt.harness.client.request(method, callParams ?? {}, rpcTimeoutMs);
-        log("rpc %s ok: %j", method, (result as { ok?: unknown }) ?? null);
-        send({ type: "result", id, data: result });
+        const { endpoint, args } = adaptRpcArgs(method, callParams ?? {});
+        const result = await remoteCallAny(endpoint, args, rpcTimeoutMs);
+        if (result.ok) {
+          send({ type: "result", id, data: result.value ?? null });
+        } else {
+          send({ type: "error", id, message: `${result.error!.code}: ${result.error!.message}` });
+        }
       } catch (err) {
         logError("rpc %s failed: %s", method, err instanceof Error ? err.message : String(err));
         send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
@@ -780,6 +786,70 @@ function startWorker(): void {
     logError("worker crashed: %s", err instanceof Error ? err.message : String(err));
     runPromise = null;
   });
+}
+
+// ── typert wire 适配（2026-09 实测定案：web 面 /api + 按参数名 args） ──────
+// 端点 = <ns>/<method>（斜杠）。wire 参数名：单对象参数 = `request`；
+// 无参 = `_request:{}`；agent 参数 = `agentId`；commands 三参 =
+// {agentId, line, images}；goals 三参 = {agentId, ref, request?}。
+
+/** 前端 method（点分/斜杠）→ 端点 + wire args。 */
+export function adaptRpcArgs(
+  method: string,
+  params: Record<string, unknown>,
+): { endpoint: string; args: Record<string, unknown> } {
+  const endpoint = method.includes("/") ? method : method.replaceAll(".", "/");
+  switch (endpoint) {
+    // 无参端点：占位 _request（实测 session/list 需要；modelCatalog/describe
+    // 的 args={} 也过——两形态都试，._request 优先）
+    case "session/modelCatalog":
+    case "settings/describe":
+      return { endpoint, args: {} };
+    case "session/selectModel":
+      return { endpoint, args: { request: params } };
+    // 命令执行：前端传 { sessionId(前端), line } → agentId 已映射
+    case "commands/execute":
+      return {
+        endpoint,
+        args: {
+          agentId: params.agentId ?? params.sessionId ?? "",
+          line: typeof params.line === "string" ? params.line : "",
+          images: Array.isArray(params.images) ? params.images : [],
+        },
+      };
+    // goals 动词：{ agentId, ref, request? }——request 只在 edit 需要
+    case "goals/edit":
+      return { endpoint, args: { agentId: params.sessionId ?? "", ref: params.ref ?? null, request: params.request ?? { objective: String(params.objective ?? "") } } };
+    case "goals/pause":
+    case "goals/resume":
+    case "goals/clear":
+      return { endpoint, args: { agentId: params.sessionId ?? "", ref: params.ref ?? null } };
+    // 预设绑定：{ agentId, agentPreset }
+    case "agentPresets/select":
+      return { endpoint, args: { agentId: params.sessionId ?? "", agentPreset: params.agentPreset ?? "" } };
+    default:
+      // 兜底：先按原样对象试单对象 -> 参数层报错时回退 { request: params }
+      return { endpoint, args: params as Record<string, unknown> };
+  }
+}
+
+/** remoteCall 的一次尝试 + 报错驱动的单对象回退（{request: params}）。 */
+async function remoteCallAny(
+  endpoint: string,
+  args: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<RemoteCallResult> {
+  const first = await remoteCall(endpoint, args, timeoutMs);
+  if (first.ok) return first;
+  const code = first.error?.code ?? "";
+  // 参数名不匹配（unknown/arguments-invalid/missing）且原样参数是对象：
+  // 回退为 { request: params } 单对象形态再试一次（覆盖 request 型端点）
+  if (code.includes("arguments") || code.includes("missing") || code.includes("unexpected")) {
+    const second = await remoteCall(endpoint, { request: args }, timeoutMs);
+    if (second.ok) return second;
+    return second;
+  }
+  return first;
 }
 
 // ── 启动 ───────────────────────────────────────────────────────────────────
