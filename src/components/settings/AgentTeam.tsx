@@ -64,8 +64,8 @@ import type { EnvProfile } from "@/store/environments";
 // 插件 CSS 依赖官方 --dsw-alias-* 令牌 → 宿主容器补齐变量；否则颜色错乱。
 // ================================================================
 
-/** 官方 dsw alias 令牌 → mirach 浅色值（原生面板样式依赖） */
-const DSW_ALIAS_VARS = {
+/** 官方 dsw alias 令牌 → mirach 浅色值（原生面板样式依赖；导出供设置页官方分区复用） */
+export const DSW_ALIAS_VARS = {
   "--dsw-alias-label-primary": "#303030",
   "--dsw-alias-label-secondary": "#6B7280",
   "--dsw-alias-label-caption": "#8B8C8F",

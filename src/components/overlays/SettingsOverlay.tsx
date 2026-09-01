@@ -7,6 +7,8 @@ import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
+import { nativeSettingsSections } from "@/dsh-kernel/boot";
+import { DSW_ALIAS_VARS } from "@/components/settings/AgentTeam";
 import { cn } from "@/lib/utils";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
 import { useI18n, type Lang } from "@/lib/i18n";
@@ -2019,6 +2021,14 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
   const { reload } = useAppConfig();
   const [active, setActive] = useState(initialSection);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件如酒馆管理）
+  const [officialSections, setOfficialSections] = useState(() => nativeSettingsSections());
+  useEffect(() => {
+    if (officialSections.length === 0) {
+      const t = window.setTimeout(() => { setOfficialSections(nativeSettingsSections()); }, 1500);
+      return () => window.clearTimeout(t);
+    }
+  }, [officialSections.length]);
 
   // 导出配置 → 下载 config.json
   const exportConfig = async () => {
@@ -2070,6 +2080,12 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
   };
 
   const renderContent = () => {
+    // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
+    const official = nativeSettingsSections().find((s) => s.id === active);
+    if (official) {
+      const el = official.render({ close: onClose });
+      return <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>{el as React.ReactElement}</div>;
+    }
     switch (active) {
       case "general": return <GeneralContent />;
       case "model": return <ModelContent onDone={onClose} />;
@@ -2092,9 +2108,29 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
     <div className="settings-dropdown flex h-full">
       <div className="flex w-56 shrink-0 flex-col border-r border-border">
         <div className="min-h-0 flex-1 overflow-y-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {SECTIONS.map((s) => (
+          {SECTIONS.filter((s) => s.id !== "envs").map((s) => (
             <NavItem key={s.id} id={s.id} icon={s.icon} active={active === s.id} onClick={() => setActive(s.id)} />
           ))}
+          {/* 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件） */}
+          {officialSections.length > 0 && (
+            <>
+              <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-muted-foreground/60">官方 / 插件</p>
+              {officialSections.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setActive(s.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 px-4 py-1.5 text-left text-body-sm transition-colors",
+                    active === s.id ? "bg-muted font-medium text-[#303030]" : "text-[#464646] hover:bg-muted/60",
+                  )}
+                >
+                  <Package className="h-4 w-4 shrink-0" strokeWidth={2} />
+                  <span className="truncate">{s.label}</span>
+                </button>
+              ))}
+            </>
+          )}
+          <NavItem id="envs" icon={Layers} active={active === "envs"} onClick={() => setActive("envs")} />
         </div>
         <div className="flex shrink-0 items-center justify-center gap-1 border-t border-border py-2">
           <input

@@ -65,20 +65,29 @@ export function kernelContext(): Context | null {
   return kernelCtx;
 }
 
-/** 酒馆原生面板入口（内核 slots 系统注册的 settings.section）；未加载返回 null */
-export function nativeTavernSection(): { id: string; label: string; render: (props: unknown) => unknown } | null {
-  if (!kernelCtx) return null;
+/** 读取官方 settings.section 槽位全量（含第三方插件注册的分区） */
+export function nativeSettingsSections(): { id: string; label: string; render: (props: unknown) => unknown }[] {
+  if (!kernelCtx) return [];
   try {
     const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
-      | { getSlots?: (name: string) => { meta: { id?: string; label?: () => string }; render: (props: unknown) => unknown }[] }
+      | { entries?: (name: string) => { options: { id?: string; label?: unknown }; render: (props: unknown) => unknown }[] }
       | undefined;
-    const list = slots?.getSlots?.("settings.section");
-    const hit = list?.find((e) => e.meta?.id === "tavern-manager");
-    if (!hit) return null;
-    return { id: "tavern-manager", label: hit.meta.label?.() ?? "酒馆管理", render: hit.render };
+    const entries = slots?.entries?.("settings.section") ?? [];
+    return entries
+      .filter((e) => e.options?.id)
+      .map((e) => ({
+        id: e.options.id!,
+        label: typeof e.options.label === "function" ? (e.options.label as () => string)() : String(e.options.label ?? e.options.id),
+        render: e.render,
+      }));
   } catch {
-    return null;
+    return [];
   }
+}
+
+/** 酒馆原生面板入口（内核 slots 系统注册的 settings.section）；未加载返回 null */
+export function nativeTavernSection(): { id: string; label: string; render: (props: unknown) => unknown } | null {
+  return nativeSettingsSections().find((s) => s.id === "tavern-manager") ?? null;
 }
 
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
