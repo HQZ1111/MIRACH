@@ -34,6 +34,11 @@ import "@deepseek-ai/dsh-client-ui-commands/client";
 import "@deepseek-ai/dsh-client-ui-model-selection/client";
 import "@deepseek-ai/dsh-client-ui-plan/client";
 import "@deepseek-ai/dsh-client-ui-permission-presets/client";
+// ── 对话区专属官方栈（dsh 风格官方树内原生提供：目标栏/消息反馈/轨迹/任务） ──
+import "@deepseek-ai/dsh-client-ui-goal/client";
+import "@deepseek-ai/dsh-client-ui-message-feedback/client";
+import "@deepseek-ai/dsh-client-ui-trajectory/client";
+import "@deepseek-ai/dsh-client-ui-jobs/client";
 // 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
 // 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
 import "dsh-tavern/client";
@@ -67,6 +72,11 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-model-selection/client",
   "@deepseek-ai/dsh-client-ui-plan/client",
   "@deepseek-ai/dsh-client-ui-permission-presets/client",
+  // ── 对话区专属官方栈（目标栏/消息反馈/轨迹/任务；失败仅降级该包） ──
+  "@deepseek-ai/dsh-client-ui-goal/client",
+  "@deepseek-ai/dsh-client-ui-message-feedback/client",
+  "@deepseek-ai/dsh-client-ui-trajectory/client",
+  "@deepseek-ai/dsh-client-ui-jobs/client",
 ];
 
 /** 鍐呮牳 Cordis 涓婁笅鏂囷紙闀滃儚灞備笌闃舵 3 鍐欎晶鍏辩敤锛夈€?*/
@@ -186,6 +196,40 @@ export async function nativeOpenSession(dshId: string): Promise<void> {
   if (sessions === null || !dshId) return;
   await sessions.refresh().catch(() => {});
   sessions.open(dshId);
+}
+
+/**
+ * 官方 goal 投影面（binding.session.projections.faceOf('goal')）：
+ * ObservableSnapshot<GoalProjection | null | undefined>，GoalBar 用。
+ * 会话未打开/内核不可用 → null。
+ */
+export function nativeGoalProjection(dshId: string): {
+  getSnapshot: () => unknown;
+  subscribe: (fn: () => void) => () => void;
+} | null {
+  const sessions = nativeSessions();
+  if (sessions === null) return null;
+  try {
+    const binding = sessions.binding(dshId) as
+      | { session?: { projections?: { faceOf?: (key: string) => { getSnapshot: () => unknown; subscribe: (fn: () => void) => () => void } } } }
+      | undefined;
+    return binding?.session?.projections?.faceOf?.("goal") ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 官方 remote.goals 动词面（edit/pause/resume/clear；CAS ref 由调用方从投影取） */
+export function nativeGoalsRemote(): Record<string, (...args: unknown[]) => Promise<unknown>> | null {
+  const ctx = kernelCtx;
+  if (ctx === null) return null;
+  try {
+    const remote = (ctx as unknown as { remote?: Record<string, unknown> }).remote;
+    const goals = remote?.goals;
+    return typeof goals === "object" && goals !== null ? (goals as Record<string, (...args: unknown[]) => Promise<unknown>>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

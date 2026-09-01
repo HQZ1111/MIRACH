@@ -68,6 +68,7 @@ import { $chatBackdrop, $chatStyle, $chatWidth, $defaultAgent } from "@/store/ui
 import { $agents, setAgentsEnv, DEFAULT_TEAM_ID } from "@/store/agents";
 import { ZosmaChat } from "@/components/zosma/ZosmaChat";
 import { NativeChatArea } from "@/components/chat/NativeChatArea";
+import { NativeGoalBar, NativeReasoningRow, NativeTurnNavigator } from "@/components/chat/NativeStyled";
 import { speak, stopSpeaking, isSpeaking } from "@/lib/tts";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $lastFailedPrompt, setLastFailedPrompt } from "@/store/retry";
@@ -1148,7 +1149,7 @@ const ChatSection = memo(function ChatSection({
             </button>
           )}
           {planMode && <span className="text-[11px] text-muted-foreground">仅做分析与规划，不修改文件</span>}
-          <GoalBar />
+          <NativeGoalBar sessionId={activeId} fallback={<GoalBar />} />
           <JobsAction />
         </div>
       {/* 滚动容器包裹层（relative）：官方 TurnNavigator 的绝对定位参照系，
@@ -1225,8 +1226,13 @@ const ChatSection = memo(function ChatSection({
         )}
         </div>
 
-        {/* 消息定位器（官方 TurnNavigator：右侧回合导航轨，悬停预览，点击跳转） */}
-        <TurnNavigator items={navItems} activeTurn={activeTurn} onNavigate={onNavNavigate} t={navT} />
+        {/* 消息定位器（官方 TurnNavigator：右侧回合导航轨；内核不可用时回退 mirach 端口） */}
+        <NativeTurnNavigator
+          items={navItems}
+          activeTurn={activeTurn}
+          onNavigate={onNavNavigate}
+          fallback={<TurnNavigator items={navItems} activeTurn={activeTurn} onNavigate={onNavNavigate} t={navT} />}
+        />
       </div>
 
       {/* 自定义滚动条（统一组件：细线 + 空心圆）；绑定 Virtuoso scroller */}
@@ -1624,13 +1630,19 @@ const MessageList = memo(function MessageList({
                     )}
                   </div>
 
-                  {/* 思考（dsh 自带 Think 行：ReasoningRow，自带展开/收起） */}
+                  {/* 思考（官方 ReasoningRow：自带展开/收起；内核不可用时回退 mirach 端口） */}
                   {(m as LiveChatMessage).thinking && (
                     <div className="mb-2">
-                      <ReasoningRow
+                      <NativeReasoningRow
                         text={(m as LiveChatMessage).thinking ?? ""}
                         running={streaming && i === lastAiIdx}
-                        t={t}
+                        fallback={
+                          <ReasoningRow
+                            text={(m as LiveChatMessage).thinking ?? ""}
+                            running={streaming && i === lastAiIdx}
+                            t={t}
+                          />
+                        }
                       />
                     </div>
                   )}

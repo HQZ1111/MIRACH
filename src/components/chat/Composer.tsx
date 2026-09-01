@@ -34,6 +34,7 @@ import { $assemblyProjections } from "@/dsh-assembly/store";
 import { $enterBehavior } from "@/store/ui-settings";
 import { enqueue, parkQueuedPrompts, drainFirst, $queueState } from "@/store/queue";
 import { NativeModelSeat, useNativeModelSeat } from "./NativeModelSeat";
+import { NativeContextMeter } from "./NativeStyled";
 import { $planActive, $permissionPreset, applyNativeMode, warmNativeModes, FULL_ACCESS_PRESET } from "@/lib/native-mode";
 import { QueueBar } from "./QueueBar";
 import {
@@ -1441,7 +1442,9 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
 
           {/* ---- 右：用量 / 思考级别 / 模型 / 朗读回复 / 唤醒词 / 听写 / 主按钮 ---- */}
           <div className="ml-auto flex items-center gap-0.5">
-            {/* 用量（悬停显示详情，原上下文容量；颜色与右侧栏用量面板一致） */}
+            {/* 用量：官方 ContextMeter（上下文占用环 + 组成面板；内核不可用时回退 mirach 悬停面板） */}
+            <NativeContextMeter
+              fallback={(
             <div className="group relative">
               <button className={GHOST_ICON_BTN} title="用量">
                 <ContextGaugeIcon pct={ctxPct} />
@@ -1528,6 +1531,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                 </div>
               </div>
             </div>
+              )}
+            />
 
             {/* 思考级别（宽度充足时显示级别文字；点击弹出滑动选择器） */}
             <div className="relative">
