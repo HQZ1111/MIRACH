@@ -2093,14 +2093,14 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       // 官方条目没有可直调的 render()——内容经 OfficialEntry 渲染
       // （官方组件 + mirach 令牌 UI；条目级错误边界兜底，不炸设置页）
       return (
-        <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
+        <div key={`official-${active}`} className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
           <OfficialEntry entry={official} onClose={onClose} />
         </div>
       );
     }
     switch (active) {
-      case "chat-style": return <GeneralContent />;
-      case "memory": return <MemorySection />;
+      case "chat-style": return <GeneralContent key="chat-style" />;
+      case "memory": return <MemorySection key="memory" />;
       case "mobile": return <MobileAccessSection />;
       case "sessions": return <SessionsContent />;
       case "safety": return <SafetyContent />;
