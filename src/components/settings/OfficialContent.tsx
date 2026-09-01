@@ -78,6 +78,9 @@ function usePermissionShim(_key?: unknown): unknown {
 function useSettingsShim<T>(selector?: (state: unknown) => T): T | undefined {
   return selector === undefined ? (undefined as T) : selector(safeFace());
 }
+function useAgentPresetShim<T>(selector?: (state: unknown) => T): T | undefined {
+  return selector === undefined ? (undefined as T) : selector(safeFace());
+}
 
 /** 子槽渲染（key → 条目列表 → SlotRow） */
 function SlotList({ slotKey, only, owner }: { slotKey: string; only?: string; owner: object }) {
@@ -142,6 +145,7 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
         useProjection={useProjectionShim}
         usePermission={usePermissionShim}
         useSettings={useSettingsShim}
+        useAgentPreset={useAgentPresetShim}
       />
     </MiniBoundary>
   );

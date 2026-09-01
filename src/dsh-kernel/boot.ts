@@ -24,13 +24,14 @@ import "@deepseek-ai/dsh-api-session-controller/client";
 import "@deepseek-ai/dsh-client-ui-renderer/client";
 import "@deepseek-ai/dsh-client-ui-settings/client";
 import "@deepseek-ai/dsh-client-locale/client";
-// ── 官方设置分区包（settings.section 条目注册者：通用/模型/插件/插件清单） ──
+// ── 官方设置分区包（settings.section 条目注册者：通用/模型/插件/插件清单/预设） ──
 // 注意：只有 ui-settings 框架包不注册任何分区；这些包才注册条目——此前
 // KERNEL_PLUGINS 缺这 4 包，官方设置分区从未出现过（用户"官方设置项呢"）。
 import "@deepseek-ai/dsh-client-ui-settings-general/client";
 import "@deepseek-ai/dsh-client-ui-settings-models/client";
 import "@deepseek-ai/dsh-client-ui-settings-plugins/client";
 import "@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client";
+import "@deepseek-ai/dsh-client-ui-agent-preset/client";
 import "@deepseek-ai/dsh-client-ui-session/client";
 import "@deepseek-ai/dsh-client-ui-workspace/client";
 import "@deepseek-ai/dsh-client-ui-theme/client";
@@ -75,11 +76,12 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-renderer/client",
   "@deepseek-ai/dsh-client-ui-settings/client",
   "@deepseek-ai/dsh-client-locale/client",
-  // ── 官方设置分区（settings.section 条目：通用/模型/插件/插件清单） ──
+  // ── 官方设置分区（settings.section 条目：通用/模型/插件/插件清单/预设） ──
   "@deepseek-ai/dsh-client-ui-settings-general/client",
   "@deepseek-ai/dsh-client-ui-settings-models/client",
   "@deepseek-ai/dsh-client-ui-settings-plugins/client",
   "@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client",
+  "@deepseek-ai/dsh-client-ui-agent-preset/client",
   "@deepseek-ai/dsh-client-ui-session/client",
   "@deepseek-ai/dsh-client-ui-workspace/client",
   "@deepseek-ai/dsh-client-ui-theme/client",
