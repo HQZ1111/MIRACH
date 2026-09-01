@@ -695,6 +695,14 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         }
         return;
       }
+      // 前端会话 id → dsh 会话 id 查询（官方原生渲染层同步内核 current 会话用）
+      if (method === "session.map.get") {
+        const p = (params ?? {}) as { sessionId?: string };
+        loadSessionMap();
+        const dshId = p.sessionId ? (sessionMap.get(envSessionKey(p.sessionId)) ?? null) : null;
+        send({ type: "result", id, data: { dshId } });
+        return;
+      }
       // 斜杠命令执行（commands.execute）：/plan、/permission、/model 等官方命令。
       // 前端传 { sessionId(前端 id), line("/plan on") }；会话 id 映射到 dsh 后，
       // wire 形态 { agent, line, images }（typert 对象编码），被拒时回退位置数组

@@ -140,6 +140,81 @@ export function nativeModelSeat(): {
   }
 }
 
+// ---- 官方对话根树（dsh 风格原生融合：AppFrame/conversation/ChatView/Composer） ----
+
+/** 官方根树是否可渲染（内核 slots + renderer 均就绪） */
+export function nativeRootTree(): React.ReactNode | null {
+  const ctx = kernelCtx;
+  if (ctx === null) return null;
+  try {
+    const slots = (ctx as unknown as {
+      slots?: { renderSlot?: (key: string, owner: object) => React.ReactNode };
+    }).slots;
+    const tree = slots?.renderSlot?.("root", {});
+    return tree ?? null;
+  } catch {
+    return null; // renderer 未安装（boot 未完成/失败）→ 回退 mirach UI
+  }
+}
+
+/** 内核 sessions 服务是否可用 */
+export function nativeSessions(): KernelSessions | null {
+  const ctx = kernelCtx;
+  if (ctx === null) return null;
+  const ctxAny = ctx as unknown as { sessions?: KernelSessions; get?: (k: string) => unknown };
+  return (ctxAny.sessions ?? (typeof ctxAny.get === "function" ? (ctxAny.get("sessions") as KernelSessions | undefined) : undefined)) ?? null;
+}
+
+/** 官方渲染就绪检查（slots.renderSlot + sessions 服务存在；不含 build 树开销） */
+export function nativeRenderReady(): boolean {
+  const ctx = kernelCtx;
+  if (ctx === null || nativeSessions() === null) return false;
+  try {
+    const slots = (ctx as unknown as { slots?: { renderSlot?: unknown } }).slots;
+    return typeof slots?.renderSlot === "function";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 同步官方 current 会话到目标 dsh 会话：refresh 引擎列表后 open 目标。
+ * 官方 ConversationRoot 按 current 会话渲染；打开即成为官方渲染对象。
+ */
+export async function nativeOpenSession(dshId: string): Promise<void> {
+  const sessions = nativeSessions();
+  if (sessions === null || !dshId) return;
+  await sessions.refresh().catch(() => {});
+  sessions.open(dshId);
+}
+
+/**
+ * 折叠官方三栏的 sidebar/details 列（只留中间对话列）。
+ * AppFrame 的 layout store 实例经 storeOf 取 bound actions（draft 已被剥离）。
+ */
+export function nativeCollapsePanels(): void {
+  const ctx = kernelCtx;
+  if (ctx === null) return;
+  try {
+    const slots = ctx as unknown as {
+      slots?: {
+        entries?: (key: string) => { options?: { store?: unknown } }[];
+        entriesOf?: (key: string) => unknown[];
+        storeOf?: (entry: unknown, scope: unknown) => { actions?: Record<string, (...args: never[]) => void> } | undefined;
+      };
+    };
+    const entry = (slots.slots?.entries?.("root") ?? slots.slots?.entriesOf?.("root") ?? [])[0];
+    const store = entry === undefined ? undefined : slots.slots?.storeOf?.(entry, undefined);
+    const actions = store?.actions as
+      | { setSidebar?: (px: number) => void; setDetails?: (px: number) => void }
+      | undefined;
+    actions?.setSidebar?.(0);
+    actions?.setDetails?.(0);
+  } catch {
+    /* 布局列折叠失败不阻塞渲染 */
+  }
+}
+
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
 export async function bootKernelMirror(): Promise<void> {
   try {

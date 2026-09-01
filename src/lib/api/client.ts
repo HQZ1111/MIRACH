@@ -97,6 +97,8 @@ export interface MirachClient {
   nativeExecuteCommand(sessionId: string, line: string): Promise<boolean>;
   /** 官方设置描述（settings.describe：命名空间清单 + schema + 当前值） */
   describeSettings(): Promise<{ namespaces: { ns: string; schema: unknown; value: unknown }[] } | null>;
+  /** 前端会话 id → dsh 会话 id（官方原生渲染层同步内核 current 会话用） */
+  getDshSessionId(sessionId: string): Promise<string | null>;
   /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
   listEnginePlugins(): Promise<{ id: string; name: string }[]>;
   /** 订阅服务端事件流；返回取消订阅函数 */
@@ -337,6 +339,10 @@ class MockClient implements MirachClient {
 
   async describeSettings(): Promise<{ namespaces: { ns: string; schema: unknown; value: unknown }[] } | null> {
     return null; // mock 无设置 schema
+  }
+
+  async getDshSessionId(_sessionId: string): Promise<string | null> {
+    return null; // mock 无引擎映射
   }
 
   async listCommunityPlugins(): Promise<InstalledPluginInfo[]> {
@@ -953,6 +959,16 @@ class RealClient implements MirachClient {
       const namespaces = desc?.namespaces;
       if (!Array.isArray(namespaces)) return null;
       return { namespaces: namespaces.filter((n) => n && typeof n.ns === "string") };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 前端会话 id → dsh 会话 id（sidecar session.map.get） */
+  async getDshSessionId(sessionId: string): Promise<string | null> {
+    try {
+      const raw = await invoke<{ dshId?: string | null }>("dsh_rpc", { method: "session.map.get", params: { sessionId } });
+      return raw?.dshId ?? null;
     } catch {
       return null;
     }

@@ -67,6 +67,7 @@ import { CHAT_WIDTH_PX } from "@/lib/chat-width";
 import { $chatBackdrop, $chatStyle, $chatWidth, $defaultAgent } from "@/store/ui-settings";
 import { $agents, setAgentsEnv, DEFAULT_TEAM_ID } from "@/store/agents";
 import { ZosmaChat } from "@/components/zosma/ZosmaChat";
+import { NativeChatArea } from "@/components/chat/NativeChatArea";
 import { speak, stopSpeaking, isSpeaking } from "@/lib/tts";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $lastFailedPrompt, setLastFailedPrompt } from "@/store/retry";
@@ -1776,6 +1777,8 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
   const [terminalOpen, setTerminalOpen] = useState(false);
   // ---- 终端高度（手柄拖拽调整；对话区 flex-1 自动吸收变化）----
   const [terminalH, setTerminalH] = useState(MIN_TERMINAL);
+  // ---- dsh 风格官方原生融合就绪（内核 boot + 会话映射成功 → 渲染官方根树）----
+  const [nativeDshOk, setNativeDshOk] = useState(false);
   // Ctrl+O 全局详细/简洁双档（参考 zosma：工具详情/思考一键切换技术视图）。
   // 状态放 MainPanel：ChatSection 卸载（工具类视图）时快捷键仍生效。
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -1987,9 +1990,14 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
             )}
             {/* 简约对话档：zosma ChatView 全套（自带 MessageInput），
                替换现有消息区 + Composer + 终端（终端仅默认/dsh 档使用）。
-               dsh 档走自己的渲染（ChatSection flat 行式 + dsh ReasoningRow），
-               不再复用 zosma。 */}
-            {chatStyle === "minimal" ? (
+               dsh 档：内核就绪时渲染官方根树（官方 ChatView + 官方 Composer
+               原生融合，官方更新即跟随）；否则回退紧凑行式。 */}
+            {chatStyle === "dsh" && nativeDshOk ? (
+              <NativeChatArea
+                sessionId={activeId}
+                onReady={setNativeDshOk}
+              />
+            ) : chatStyle === "minimal" ? (
               <ZosmaChat sessionId={activeId} sessionTitle={activeTitle} />
             ) : (
               <div className="relative flex min-h-0 flex-1 flex-col">
