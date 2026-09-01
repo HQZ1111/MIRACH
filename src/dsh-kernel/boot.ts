@@ -54,6 +54,13 @@ import "@deepseek-ai/dsh-client-ui-goal/client";
 import "@deepseek-ai/dsh-client-ui-message-feedback/client";
 import "@deepseek-ai/dsh-client-ui-trajectory/client";
 import "@deepseek-ai/dsh-client-ui-jobs/client";
+// ── 能力面官方包（技能/子代理/审批/提问/交付物/工作流运行） ──
+import "@deepseek-ai/dsh-client-ui-skill/client";
+import "@deepseek-ai/dsh-client-ui-subagent/client";
+import "@deepseek-ai/dsh-client-ui-approval/client";
+import "@deepseek-ai/dsh-client-ui-user-questions/client";
+import "@deepseek-ai/dsh-client-ui-deliverables/client";
+import "@deepseek-ai/dsh-client-ui-workflow-run/client";
 // 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
 // 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
 import "dsh-tavern/client";
@@ -100,6 +107,13 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-message-feedback/client",
   "@deepseek-ai/dsh-client-ui-trajectory/client",
   "@deepseek-ai/dsh-client-ui-jobs/client",
+  // ── 能力面官方包（技能/子代理/审批/提问/交付物/工作流运行） ──
+  "@deepseek-ai/dsh-client-ui-skill/client",
+  "@deepseek-ai/dsh-client-ui-subagent/client",
+  "@deepseek-ai/dsh-client-ui-approval/client",
+  "@deepseek-ai/dsh-client-ui-user-questions/client",
+  "@deepseek-ai/dsh-client-ui-deliverables/client",
+  "@deepseek-ai/dsh-client-ui-workflow-run/client",
 ];
 
 /** 鍐呮牳 Cordis 涓婁笅鏂囷紙闀滃儚灞備笌闃舵 3 鍐欎晶鍏辩敤锛夈€?*/

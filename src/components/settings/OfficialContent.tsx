@@ -14,7 +14,7 @@
  * 渲染，正是"官方组件 + 我们软件的令牌 ui"。
  */
 
-import { Component, useMemo, type ReactNode } from "react";
+import { Component, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { nativeLocaleTranslate, nativeSlotEntries } from "@/dsh-kernel/boot";
 import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
 
@@ -110,6 +110,22 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
       return {};
     }
   }, [entry]);
+  // 官方条目声明的 store 实例（如 ui-theme 的主题/字号快照）：useStore 直接
+  // 订阅真实数据（显示真实值；交互走条目 inject 的官方逻辑）。
+  const storeHandle = entry.options.store as
+    | { getSnapshot?: () => unknown; subscribe?: (fn: () => void) => () => void }
+    | undefined;
+  const snapshot = useSyncExternalStore(
+    (cb: () => void) => (typeof storeHandle?.subscribe === "function" ? storeHandle.subscribe(cb) : () => {}),
+    () => (storeHandle ? storeHandle.getSnapshot?.() : undefined),
+    () => undefined,
+  );
+  const useStorePassed = useMemo(
+    () =>
+      ((selector?: (state: unknown) => unknown) =>
+        selector === undefined ? snapshot : selector(snapshot)) as typeof useStoreShim,
+    [snapshot],
+  );
   if (typeof Comp !== "function") return null;
   return (
     <MiniBoundary>
@@ -120,7 +136,7 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
         renderSlot={(childKey: string, childOwner: object, opts?: { only?: string }) => (
           <SlotList slotKey={childKey} owner={childOwner ?? owner} only={opts?.only} />
         )}
-        useStore={useStoreShim}
+        useStore={storeHandle ? useStorePassed : useStoreShim}
         useSessions={useSessionsShim}
         useSession={useSessionShim}
         useProjection={useProjectionShim}

@@ -3,15 +3,19 @@
 ## 规则（必须遵守）
 
 1. **所有源码文件 = UTF-8（无 BOM）**，行尾统一 LF（或仓库既有风格）。
-2. **禁止用 Windows PowerShell 的 `Get-Content` / `Set-Content` 读写仓库文件**，
-   无论是修复还是替换——PowerShell 5.1 默认按系统 ANSI(GBK) 解码 UTF-8 文件，
-   `Set-Content -Encoding UTF8` 写回会产生不可逆乱码（含 U+FFFD 信息丢失）。
+2. **禁止用 Windows PowerShell 5.1（`powershell.exe`）的 `Get-Content` / `Set-Content`
+   读写仓库文件**——它默认按系统 ANSI(GBK) 解码 UTF-8，写回产生不可逆乱码（含
+   U+FFFD 信息丢失）。**本机已装 PowerShell 7（`pwsh`，7.6.5）**：pwsh 7 的
+   `Get-Content`/`Set-Content` 默认 UTF-8 无 BOM，可用；但无论如何，仓库文件
+   修改首选 IDE / node / git（见第 3 条）。
 3. **修改文件只允许以下方式**：
    - 编辑器/IDE（VS Code：右下角编码必须显示 UTF-8；保存保持 UTF-8）
-   - `node` 脚本（`writeFileSync(path, text, "utf8")`）
+   - `pwsh`（7.x）或 `node` 脚本（`writeFileSync(path, text, "utf8")`）
    - `git apply` / `git checkout` / 前端项目工具链（vite/tsc 不改写源码）
-4. **批处理（.cmd/.bat）本身也要 UTF-8**（`-Encoding` 同规则）；任何脚本若必须写
-   文件，一律用 `node` 实现。
+   - **不要调用 `powershell`（5.1）**——引入乱码的全部历史记录都来自它。
+4. **批处理（.cmd/.bat）本身也要 UTF-8**；任何脚本若必须写文件，优先 `node`。
+5. 排查乱码时**不要用 `findstr` 匹配中文**（findstr 按 GBK 匹配 UTF-8 会全仓
+   误报）——用 `node` 级扫描（`scripts/fix-encoding.js --check`）。
 
 ## 乱码修复工具
 
