@@ -15,6 +15,16 @@ import "@deepseek-ai/dsh-client-connection/client";
 import "@deepseek-ai/dsh-api-gateway/client";
 import "@deepseek-ai/dsh-api-remotes/client";
 import "@deepseek-ai/dsh-api-session-controller/client";
+// ── 官方 client UI 栈（完整加载，dsh 风格渲染 + 原生面板全走官方组件） ──
+import "@deepseek-ai/dsh-client-ui-renderer/client";
+import "@deepseek-ai/dsh-client-ui-settings/client";
+import "@deepseek-ai/dsh-client-locale/client";
+import "@deepseek-ai/dsh-client-ui-session/client";
+import "@deepseek-ai/dsh-client-ui-workspace/client";
+import "@deepseek-ai/dsh-client-ui-theme/client";
+import "@deepseek-ai/dsh-client-ui-layout/client";
+import "@deepseek-ai/dsh-client-ui-conversation/client";
+import "@deepseek-ai/dsh-client-ui-chat/client";
 // 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
 // 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
 import "dsh-tavern/client";
@@ -32,6 +42,16 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-api-gateway/client",
   "@deepseek-ai/dsh-api-remotes/client",
   "@deepseek-ai/dsh-api-session-controller/client",
+  // ── 官方 client UI 栈（slots/locale/uiSession/uiConversation/ChatView） ──
+  "@deepseek-ai/dsh-client-ui-renderer/client",
+  "@deepseek-ai/dsh-client-ui-settings/client",
+  "@deepseek-ai/dsh-client-locale/client",
+  "@deepseek-ai/dsh-client-ui-session/client",
+  "@deepseek-ai/dsh-client-ui-workspace/client",
+  "@deepseek-ai/dsh-client-ui-theme/client",
+  "@deepseek-ai/dsh-client-ui-layout/client",
+  "@deepseek-ai/dsh-client-ui-conversation/client",
+  "@deepseek-ai/dsh-client-ui-chat/client",
 ];
 
 /** 鍐呮牳 Cordis 涓婁笅鏂囷紙闀滃儚灞備笌闃舵 3 鍐欎晶鍏辩敤锛夈€?*/
@@ -45,56 +65,20 @@ export function kernelContext(): Context | null {
   return kernelCtx;
 }
 
-// ── 酒馆原生面板（client bundle 的 settings.section 槽位） ──
-
-interface NativeSlotEntry {
-  meta: { id?: string; name?: string; label?: () => string };
-  render: (props: unknown) => unknown;
-}
-
-const nativeSlotRegistry = new Map<string, NativeSlotEntry[]>();
-
-/** 官方 client 侧 slots/locale 的最小 shim（酒馆 bundle 依赖这两个服务） */
-function installClientShims(ctx: Context): void {
-  const host = ctx as unknown as Record<string, unknown>;
-  const dicts = new Map<string, Record<string, Record<string, string>>>();
-  host.locale = {
-    register: (ns: string, dict: Record<string, Record<string, string>>): void => {
-      dicts.set(ns, dict);
-    },
-    bind: (ns: string) =>
-      (key: string, vars?: Record<string, unknown>): string => {
-        const lang = typeof localStorage !== "undefined" && localStorage.getItem("mirach.lang") === "en" ? "en" : "zh";
-        const d = dicts.get(ns)?.[lang] ?? dicts.get(ns)?.zh ?? {};
-        let s = d[key] ?? key;
-        if (vars) for (const [k, v] of Object.entries(vars)) s = s.split("{" + k + "}").join(String(v));
-        return s;
-      },
-  };
-  host.slots = {
-    register: (meta: { name?: string }, render: (props: unknown) => unknown): unknown => {
-      const keyName = meta?.name ?? "";
-      const list = nativeSlotRegistry.get(keyName) ?? [];
-      list.push({ meta: meta as NativeSlotEntry["meta"], render });
-      nativeSlotRegistry.set(keyName, list);
-      return { meta, render };
-    },
-    inject: (_name: string, factory: () => unknown): unknown => factory(),
-  };
-}
-
-export interface NativeSection {
-  id: string;
-  label: string;
-  render: (props: unknown) => unknown;
-}
-
-/** 酒馆原生"酒馆管理"设置面板（bundle 注册进 settings.section 槽位）；未加载返回 null */
-export function nativeTavernSection(): NativeSection | null {
-  const list = nativeSlotRegistry.get("settings.section");
-  const hit = list?.find((e) => e.meta.id === "tavern-manager");
-  if (!hit) return null;
-  return { id: "tavern-manager", label: hit.meta.label?.() ?? "酒馆管理", render: hit.render };
+/** 酒馆原生面板入口（内核 slots 系统注册的 settings.section）；未加载返回 null */
+export function nativeTavernSection(): { id: string; label: string; render: (props: unknown) => unknown } | null {
+  if (!kernelCtx) return null;
+  try {
+    const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
+      | { getSlots?: (name: string) => { meta: { id?: string; label?: () => string }; render: (props: unknown) => unknown }[] }
+      | undefined;
+    const list = slots?.getSlots?.("settings.section");
+    const hit = list?.find((e) => e.meta?.id === "tavern-manager");
+    if (!hit) return null;
+    return { id: "tavern-manager", label: hit.meta.label?.() ?? "酒馆管理", render: hit.render };
+  } catch {
+    return null;
+  }
 }
 
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
@@ -109,11 +93,8 @@ export async function bootKernelMirror(): Promise<void> {
     // typert 客户端反射根：bundle 注册实测不稳定，直接实例化主类（与 client apply 等价）
     new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     kernelCtx = ctx;
-    // ── 酒馆原生面板挂载 ──
-    // 官方 client 侧 slots/locale 服务由 client-runtime 提供，mirach 内核镜像
-    // 不加载完整 client-runtime —— 这里装最小 shim（register/inject、locale
-    // 字典），让酒馆 client bundle 的 apply(ctx) 能注册 settings.section。
-    installClientShims(ctx);
+    // ── 酒馆原生面板：ctx.slots/ctx.locale 由上面官方 ui-renderer/locale 提供，
+    // 不再需要 shim。直接调 apply(ctx) 注册 settings.section。
     try {
       const tavern = bundleRequire("dsh-tavern") as { apply?: (c: Context) => void };
       tavern?.apply?.(ctx);

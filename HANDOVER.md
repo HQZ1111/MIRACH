@@ -523,6 +523,26 @@ store 层 enforceMain 回填)；可见性开关 = 左栏按钮显隐 + 隐藏正
    save 对话框 + write_user_file（{version,env,members} JSON）；导入 = 按 id
    合并进当前标签环境（不覆盖已有）。
 
+# 第二十二批：内核加载完整官方 client 栈 ✅（2026-09-01）
+
+**做了什么**：apps/mirach/package.json 增加 12 个官方 client 包 workspace 依赖
+（ui-renderer/locale/ui-settings/ui-session/ui-workspace/ui-theme/ui-layout/
+ui-conversation/ui-chat/modules/ui-slots/ui-primitives），pnpm install 链接。
+boot.ts 加载全部 client 插件到 KERNEL_PLUGINS（cordis 自动解析 inject 依赖序）。
+删除 slots/locale shim（官方 ui-renderer/locale 真实现接管）。
+nativeTavernSection 改读 ctx.slots 的 settings.section 槽位。
+
+**效果**：内核现在运行完整官方 client 栈——connection/gateway/remotes/
+session-controller + ui-renderer/locale/settings/session/workspace/theme/layout/
+conversation/chat + tavern。dsh 风格的对话区可以渲染官方 ChatView 组件，
+官方更新 ui-chat 包后 dsh 风格自动获得所有新功能。
+
+**关于页**：双标签（Mirach/引擎），引擎标签有真实版本检查 + 一键更新 +
+自动更新开关 + 更新内容展示（GitHub release notes）。
+
+**需重启应用验证**：引擎启动（三件社区插件 + 官方 UI 栈全部激活）、
+原生酒馆面板、手机接入。
+
 # 第二十一批：真实更新检查 + 一键更新引擎（2026-09-01）
 
 用户指出"关于"页的检查更新/自动更新都是假的。已替换为真实现：
