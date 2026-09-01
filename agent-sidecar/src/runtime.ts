@@ -16,7 +16,8 @@
  */
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { log, logError } from "./protocol.js";
 
 /**
@@ -24,15 +25,30 @@ import { log, logError } from "./protocol.js";
  * 永远最高优先）：
  *  1. `<repo>/vendor/deepseek-harness` —— 软件文件夹内的规范位置（本机是
  *     junction 指向真实 checkout，其他机器直接 clone 到这里即可）
- *  2. I:\deepseek-harness（本机旧位置，junction 缺失时兜底）
- *  3. D:\deepseek-harness-master（家里机器的 checkout）
+ *  2. 当前 workspace 根（从 sidecar 目录向上探测 pnpm-workspace.yaml——
+ *     开发机就是这个 checkout，避免误选旧机器残留的 D 盘拷贝）
+ *  3. I:\deepseek-harness（本机旧位置，junction 缺失时兜底）
+ *  4. D:\deepseek-harness-master（旧机器 checkout，仅作最后兜底）
  */
+function workspaceRoot(): string {
+  try {
+    let dir = dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 6; i++) {
+      if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* 探测失败走下方静态候选 */ }
+  return "";
+}
 const HARNESS_ROOT_CANDIDATES = [
   join(process.cwd(), "..", "vendor", "deepseek-harness"),
   join(process.cwd(), "vendor", "deepseek-harness"),
+  workspaceRoot(),
   "I:\\deepseek-harness",
   "D:\\deepseek-harness-master",
-];
+].filter((p: string) => p.length > 0);
 /** dsh 运行时要求 Node ≥22.23.2（node:zlib createZstdDecompress）；独立安装，不走系统 PATH。 */
 const NODE_BIN_CANDIDATES = [
   process.env.DSH_NODE_BIN,
