@@ -7,7 +7,7 @@ import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
-import { nativeSettingsSections } from "@/dsh-kernel/boot";
+import { nativeSettingsSections, kernelContext } from "@/dsh-kernel/boot";
 import { DSW_ALIAS_VARS } from "@/components/settings/AgentTeam";
 import { cn } from "@/lib/utils";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
@@ -2083,6 +2083,29 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
     // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
     const official = nativeSettingsSections().find((s) => s.id === active);
     if (official) {
+      // 优先走官方 renderSlot（正确绑定 t/inject/store 席位）；失败回退直调
+      try {
+        const slots = (kernelContext() as unknown as Record<string, unknown>).slots as
+          | { renderSlot?: (key: string, props?: unknown, opts?: { only?: string }) => React.ReactElement }
+          | undefined;
+        const el = slots?.renderSlot?.("settings.section", { close: onClose }, { only: active });
+        if (el) {
+          return (
+            <div className="official-section-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
+              <style>{`
+                .official-section-host button { border-radius: 8px; border: 1px solid #E5E7EB; padding: 5px 12px; font-size: 12px; color: #303030; background: #fff; cursor: pointer; transition: all .15s; font-family: inherit; }
+                .official-section-host button:hover { background: #F5F6F8; }
+                .official-section-host input, .official-section-host select, .official-section-host textarea { border-radius: 8px; border: 1px solid #E5E7EB; padding: 5px 8px; font-size: 12px; color: #303030; background: #fff; outline: none; font-family: inherit; }
+                .official-section-host input:focus, .official-section-host select:focus, .official-section-host textarea:focus { border-color: #6366F1; }
+                .official-section-host h2, .official-section-host h3 { font-size: 14px; font-weight: 600; color: #303030; margin: 0 0 8px; }
+                .official-section-host table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                .official-section-host th, .official-section-host td { padding: 4px 6px; border-bottom: 1px solid #F0F0F0; text-align: left; }
+              `}</style>
+              {el}
+            </div>
+          );
+        }
+      } catch { /* renderSlot 不可用，回退直调 */ }
       const el = official.render({ close: onClose });
       return <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>{el as React.ReactElement}</div>;
     }

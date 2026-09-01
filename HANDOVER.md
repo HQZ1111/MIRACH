@@ -1,5 +1,19 @@
 # Mirach（奎木狼）— DSH 桌面版交接文档
 
+## 第二十三批：设置页接入官方 settings.section 槽位 + 样式适配层
+
+- 设置侧栏动态读取 `ctx.slots.entries("settings.section")`——官方 5 个内置分区
+  （general/models/plugins/agent-presets/tavern-manager）+ 任何第三方插件注册的
+  分区自动出现在设置侧栏「官方 / 插件」分组下。
+- renderContent 优先匹配官方分区：走 `ctx.slots.renderSlot` 正确绑定 locale/inject
+  席位，失败回退直调组件；宿主容器补齐 DSW_ALIAS_VARS + CSS 适配层
+  （按钮/输入框/表格/字体对齐 mirach 视觉）。
+- 官方更新设置面板内容时重启自动对齐（slot 系统随版本更新）。
+- 修复 nativeTavernSection 的 getSlots 不存在 bug → 改用 entries API。
+- tsc 通过；sidecar 变更需重启应用。
+
+---
+
 ## 1. 项目是什么
 
 Mirach = DeepSeek Harness (dsh) 引擎的桌面前端。Tauri 2 + React 19 自定义 UI + sidecar（Node stdio JSON-RPC）+ 官方引擎核心。
