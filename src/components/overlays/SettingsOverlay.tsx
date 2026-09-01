@@ -1801,10 +1801,20 @@ function AboutContent() {
   const { t } = useI18n();
   const [uninstallMode, setUninstallMode] = useState("gui");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updateLogs, setUpdateLogs] = useState<string[]>([]);
-  useEffect(() => { void getApi().checkEngineUpdate().then(setUpdateInfo).catch(() => {}); }, []);
+  const [updateTab, setUpdateTab] = useState<"mirach" | "engine">("mirach");
+  // 引擎更新
+  const [engineInfo, setEngineInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
+  const [engineBusy, setEngineBusy] = useState(false);
+  const [engineLogs, setEngineLogs] = useState<string[]>([]);
+  useEffect(() => { void getApi().checkEngineUpdate().then(setEngineInfo).catch(() => {}); }, []);
+  const checkEngine = (): void => {
+    setEngineBusy(true);
+    void getApi().checkEngineUpdate().then(setEngineInfo).catch(() => {}).finally(() => setEngineBusy(false));
+  };
+  const updateEngineNow = (): void => {
+    setEngineBusy(true);
+    void getApi().updateEngine().then((l) => setEngineLogs(l)).catch((e) => setEngineLogs([String(e)])).finally(() => setEngineBusy(false));
+  };
   return (
     <div className="space-y-4 px-5 py-6">
       <div className="flex flex-col items-center gap-2">
@@ -1813,42 +1823,69 @@ function AboutContent() {
         <p className="text-[11px] text-muted-foreground">奎木狼全能个人助理</p>
         <p className="text-body-sm text-muted-foreground">{t("settings.version")} v0.1.0</p>
       </div>
+      {/* 更新检查：双标签 Mirach / 引擎 */}
       <div className="rounded-lg border border-border p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className={cn("h-2.5 w-2.5 rounded-full", updateInfo?.hasUpdate ? "bg-[#F59E0B]" : "bg-[#10B981]")} />
-            <span className="text-body-sm font-medium text-[#303030]">
-              {updateInfo === null
-                ? "引擎版本"
-                : updateInfo.hasUpdate
-                  ? `有新版本 ${updateInfo.latest}（当前 ${updateInfo.current}）`
-                  : `已是最新 ${updateInfo.current}`}
-            </span>
-          </div>
-          <button
-            onClick={() => { setUpdateBusy(true); void getApi().checkEngineUpdate().then(setUpdateInfo).finally(() => setUpdateBusy(false)); }}
-            disabled={updateBusy}
-            className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
-          >
-            {updateBusy ? "检查中…" : "检查更新"}
-          </button>
-        </div>
-        {updateInfo?.hasUpdate && (
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <p className="text-[11px] text-[#B45309]">npm i -g @deepseek-ai/dsh@{updateInfo.latest}</p>
+        <div className="mb-3 flex gap-1 rounded-lg bg-muted/60 p-1 text-[11px]">
+          {(["mirach", "engine"] as const).map((tp) => (
             <button
-              onClick={() => { setUpdateBusy(true); void getApi().updateEngine().then((l) => { setUpdateLogs(l); }).finally(() => setUpdateBusy(false)); }}
-              disabled={updateBusy}
-              className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+              key={tp}
+              onClick={() => setUpdateTab(tp)}
+              className={cn(
+                "flex-1 rounded-md py-1 transition-colors",
+                updateTab === tp ? "bg-white font-medium text-[#303030] shadow-sm" : "text-muted-foreground hover:text-[#303030]",
+              )}
             >
-              {updateBusy ? "更新中…" : "一键更新"}
+              {tp === "mirach" ? "Mirach" : "引擎 (dsh)"}
             </button>
+          ))}
+        </div>
+        {updateTab === "mirach" ? (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-[#10B981]" />
+              <span className="text-body-sm font-medium text-[#303030]">v0.1.0</span>
+            </div>
+            <span className="text-[11px] text-muted-foreground">Mirach 更新由开发者推送</span>
           </div>
-        )}
-        {updateLogs.length > 0 && (
-          <pre className="mt-2 max-h-24 overflow-y-auto rounded-md bg-black/5 p-2 font-mono text-[10px] leading-relaxed text-[#303030] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {updateLogs.join("\n")}
-          </pre>
+        ) : (
+          <>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={cn("h-2.5 w-2.5 rounded-full", engineInfo === null ? "bg-[#D1D5DB]" : engineInfo.hasUpdate ? "bg-[#F59E0B]" : "bg-[#10B981]")} />
+                <span className="text-body-sm font-medium text-[#303030]">
+                  {engineInfo === null
+                    ? "引擎版本"
+                    : engineInfo.hasUpdate
+                      ? `有新版本 ${engineInfo.latest}（当前 ${engineInfo.current}）`
+                      : `已是最新 ${engineInfo.current}`}
+                </span>
+              </div>
+              <button
+                onClick={checkEngine}
+                disabled={engineBusy}
+                className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {engineBusy ? "检查中…" : "检查更新"}
+              </button>
+            </div>
+            {engineInfo?.hasUpdate && (
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] text-[#B45309]">npm i -g @deepseek-ai/dsh@{engineInfo.latest}</p>
+                <button
+                  onClick={updateEngineNow}
+                  disabled={engineBusy}
+                  className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+                >
+                  {engineBusy ? "更新中…" : "一键更新"}
+                </button>
+              </div>
+            )}
+            {engineLogs.length > 0 && (
+              <pre className="mt-2 max-h-24 overflow-y-auto rounded-md bg-black/5 p-2 font-mono text-[10px] leading-relaxed text-[#303030] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {engineLogs.join("\n")}
+              </pre>
+            )}
+          </>
         )}
       </div>
 
