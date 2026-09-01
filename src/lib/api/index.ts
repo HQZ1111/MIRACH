@@ -1,5 +1,5 @@
 ﻿/**
- * api 鍗曚緥 鈥?鎸?VITE_MOCK 閫夋嫨 Mock / Real 瀹㈡埛绔?
+ * api 单例 — 按 VITE_MOCK 选择 Mock / Real 客户端
  *
  * import { getApi } from "@/lib/api";
  * const api = getApi();

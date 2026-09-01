@@ -1,7 +1,10 @@
 ﻿/**
- * dsh-kernel/dsh-bridge 鈥?鍐呮牳 dsh 浜嬩欢 鈫?pi 浜嬩欢 鈫?MirachEvent 妗? *
- * 澶嶇敤 sidecar 鐨?adapter锛坴ite alias 鎶?protocol.js 鎸囧悜娴忚鍣?shim锛夛紝
- * 杞崲娈电Щ妞嶈嚜 RealClient.submitPromptStream 鐨?onmessage锛坧i 浜嬩欢 鈫? * MirachEvent锛夈€傚唴鏍告ā寮忎笅 adapter.handle(瀹樻柟 SessionEvent) 鐨勪骇鍑虹粡姝? * 鍐欏叆 $chat锛屼笌 sidecar 绠￠亾浜у嚭鍚屽舰銆? */
+ * dsh-kernel/dsh-bridge — 内核 dsh 事件 → pi 事件 → MirachEvent 桥
+ * 复用 sidecar 的 adapter（vite alias 把 protocol.js 指向浏览器 shim），
+ * 转换段拷贝自 RealClient.submitPromptStream 的 onmessage（pi 事件 →
+ * MirachEvent）。内核模式下 adapter.handle(官方 SessionEvent) 的输出经此
+ * 写入 $chat，与 sidecar 管道产出同形。
+ */
 
 import { createDshAdapter } from "./adapter";
 import { addTodo, updateTodoStatus, removeTodo } from "@/store/todos";

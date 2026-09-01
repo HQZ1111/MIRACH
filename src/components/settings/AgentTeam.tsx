@@ -14,7 +14,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@nanostores/react";
 import { cn } from "@/lib/utils";
 import { Pencil, Plus, Search, Trash2, Upload, Users, X } from "lucide-react";
-import { nativeTavernSection, kernelContext } from "@/dsh-kernel/boot";
+import { nativeTavernSection } from "@/dsh-kernel/boot";
+import { OfficialEntry, type OfficialEntryLike } from "@/components/settings/OfficialContent";
 import { userHomeDir } from "@/lib/paths";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -92,7 +93,7 @@ const NATIVE_HOST_CSS = `
 `;
 
 function NativeTavernPanel() {
-  const [entry, setEntry] = useState<{ id: string; label: string; render: (props: unknown) => unknown } | null>(() =>
+  const [entry, setEntry] = useState<OfficialEntryLike | null>(() =>
     nativeTavernSection(),
   );
   const [tick, setTick] = useState(0);
@@ -114,12 +115,11 @@ function NativeTavernPanel() {
       </div>
     );
   }
-  const el = entry.render({ ctx: kernelContext() });
   return (
     <div>
       <style>{NATIVE_HOST_CSS}</style>
       <div className="tavern-native-host rounded-lg border border-black/10 bg-white px-3 py-3" style={DSW_ALIAS_VARS}>
-        {el as React.ReactElement}
+        <OfficialEntry entry={entry} />
       </div>
     </div>
   );

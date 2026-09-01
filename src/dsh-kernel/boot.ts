@@ -1,13 +1,18 @@
-﻿/**
- * dsh-kernel/boot 鈥?瀹樻柟瀹㈡埛绔唴鏍告縺娲伙紙B 闃舵 2锛? *
- * 鍥涗釜 cordis apply 鎸変緷璧栧簭婵€娲伙紙璺宠繃 modules bundle 绯荤粺锛寁ite 鐩存帴鎵撳寘
- * 鍚勫寘鐨?lib 浜х墿锛夛細
- *   1. typert-registry/client  鈥?瀹㈡埛绔弽灏勬牴锛坕nject: []锛? *   2. client-connection/client 鈥?ctx.connection锛圚TTP POST + /api/remote.mux WS锛? *      dev 鏈熺粡 vite 浠ｇ悊鍚屾簮鍖栵級
- *   3. api-gateway/client       鈥?ctx.remote 涓?remote.<ns>锛坕nject: typert+connection锛? *   4. api-session-controller/client 鈥?ctx.sessions锛圛Sessions锛氬垪琛?浜嬩欢婧?鎶曞奖/
- *      prompt/cancel锛夛紝inject 鍚?remote.commands/session/subagents锛堢綉鍏?apply 鎻愪緵锛? *
- * 闀滃儚绛栫暐锛堝閲忔帴绠★紝鍥炴粴瀹夊叏锛夛細鍐呮牳浜嬩欢涓?sidecar raw_session_event 鍚屼竴
- * seq 绌洪棿 鈫?鍏ㄩ儴鍠?$rawEvents锛坰eq 鍘婚噸锛夛紝sidecar 绠￠亾鐓у父骞惰锛沀I 缁勪欢
- * 锛圫tatsLine/杞ㄨ抗/鍗犵敤鐜級鍥犳寮€濮嬫秷璐瑰唴鏍告暟鎹紝娑堟伅绠￠亾鍒囨崲鐣欑粰闃舵 3銆? * 寮€鍏筹細VITE_KERNEL=1锛坢ain.tsx 鍒ゅ畾锛夈€? */
+/**
+ * dsh-kernel/boot — 官方客户端内核激活（B 阶段 2）
+ * 多个 cordis apply 按依赖序激活（跳过 modules bundle 系统；vite 直接打包
+ * 各包的 lib 产物）：
+ *   1. typert-registry/client — 客户端反射根（inject: []）
+ *   2. client-connection/client — ctx.connection（HTTP POST + /api/remote.mux WS；
+ *      dev 期经 vite 代理同源化）
+ *   3. api-gateway/client — ctx.remote 与 remote.<ns>（inject: typert+connection）
+ *   4. api-session-controller/client — ctx.sessions（ISessions：列表/事件源/投影/
+ *      prompt/cancel），inject 后 remote.commands/session/subagents（网关 apply 提供）
+ * 镜像策略（增量接管，回滚安全）：内核事件与 sidecar raw_session_event 同一
+ * seq 空间 → 全部进 $rawEvents（seq 去重），sidecar 管道照常并行；UI 组件
+ * （StatsLine/轨迹/占用环）因此开始消费内核数据，消息管道切换留给阶段 3。
+ * 开关：VITE_KERNEL=1（main.tsx 判定；VITE_MOCK=0 真实模式默认开启）。
+ */
 
 import "./module-loader-shim";
 import TypertRegistry from "@deepseek-ai/dsh-typert-registry";
@@ -168,27 +173,64 @@ export function deliverSlotDeclarations(ctx: Context): string {
 }
 
 /** 读取官方 settings.section 槽位全量（含第三方插件注册的分区） */
-export function nativeSettingsSections(): { id: string; label: string; render: (props: unknown) => unknown }[] {
+export function nativeSettingsSections(): {
+  id: string;
+  label: string;
+  component: unknown;
+  inject?: (...args: never[]) => unknown;
+  options: Record<string, unknown>;
+}[] {
   if (!kernelCtx) return [];
   try {
     const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
-      | { entries?: (name: string) => { options: { id?: string; label?: unknown }; render: (props: unknown) => unknown }[] }
+      | { entries?: (name: string) => { options?: Record<string, unknown>; component?: unknown; inject?: (...args: never[]) => unknown; children?: unknown }[] }
       | undefined;
     const entries = slots?.entries?.("settings.section") ?? [];
     return entries
-      .filter((e) => e.options?.id)
+      .filter((e) => typeof e.options?.id === "string")
       .map((e) => ({
-        id: e.options.id!,
-        label: typeof e.options.label === "function" ? (e.options.label as () => string)() : String(e.options.label ?? e.options.id),
-        render: e.render,
+        id: e.options!.id as string,
+        label:
+          typeof e.options!.label === "function"
+            ? (e.options!.label as () => string)()
+            : String(e.options!.label ?? e.options!.id),
+        component: e.component,
+        ...(typeof e.inject === "function" ? { inject: e.inject } : {}),
+        options: e.options ?? {},
       }));
   } catch {
     return [];
   }
 }
 
+/** 读取任意槽位的当前条目（winners 形态；官方组件 renderSlot shim 用） */
+export function nativeSlotEntries(key: string): {
+  id?: string;
+  component: unknown;
+  inject?: (...args: never[]) => unknown;
+  options: Record<string, unknown>;
+}[] {
+  if (!kernelCtx) return [];
+  try {
+    const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
+      | { entriesOfSlot?: (name: string) => { options?: Record<string, unknown>; component?: unknown; inject?: (...args: never[]) => unknown }[] }
+      | undefined;
+    const entries = slots?.entriesOfSlot?.(key) ?? [];
+    return entries.map((e) => ({
+      id: typeof e.options?.id === "string" ? e.options.id : undefined,
+      component: e.component,
+      ...(typeof e.inject === "function" ? { inject: e.inject } : {}),
+      options: e.options ?? {},
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** 酒馆原生面板入口（内核 slots 系统注册的 settings.section）；未加载返回 null */
-export function nativeTavernSection(): { id: string; label: string; render: (props: unknown) => unknown } | null {
+export function nativeTavernSection(): Extract<ReturnType<typeof nativeSettingsSections>, unknown[]> extends infer T
+  ? T extends (infer E)[] ? E | null : never
+  : never {
   return nativeSettingsSections().find((s) => s.id === "tavern-manager") ?? null;
 }
 

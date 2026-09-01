@@ -2,12 +2,13 @@
  * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, Component, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
-import { nativeSettingsSections, kernelContext } from "@/dsh-kernel/boot";
+import { nativeSettingsSections } from "@/dsh-kernel/boot";
+import { OfficialEntry } from "@/components/settings/OfficialContent";
 import { DSW_ALIAS_VARS } from "@/components/settings/AgentTeam";
 import { cn } from "@/lib/utils";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
@@ -66,31 +67,6 @@ import {
 interface SettingsSection {
   id: string;
   icon: LucideIcon;
-}
-
-/** 官方分区渲染边界：官方组件抛错只降级本分区，不炸整个设置页 */
-class OfficialSectionBoundary extends Component<
-  { children: ReactNode; msg?: string | null },
-  { failed: string | null }
-> {
-  state: { failed: string | null } = { failed: this.props.msg ?? null };
-  static getDerivedStateFromError(err: unknown) {
-    return { failed: String(err).slice(0, 160) };
-  }
-  componentDidCatch(err: unknown) {
-    // 错误已入 state（getDerivedStateFromError），这里仅兜底记录
-    console.warn("[settings] official section crashed:", err);
-  }
-  render() {
-    if (this.state.failed !== null) {
-      return (
-        <p className="px-2 py-3 text-[11px] leading-relaxed text-[#EF4444]">
-          官方分区渲染失败：{this.state.failed}
-        </p>
-      );
-    }
-    return this.props.children;
-  }
 }
 
 const SECTIONS: SettingsSection[] = [
@@ -2114,35 +2090,12 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
     // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
     const official = nativeSettingsSections().find((s) => s.id === active);
     if (official) {
-      // 官方分区条目经条目级 render 绑定渲染（注入面随条目绑定）；
-      // 用边界隔离渲染错误（官方组件缺绑定/连接未就绪时降级提示，不炸设置页）
-      let el: unknown = null;
-      let failMsg: string | null = null;
-      try {
-        const slots = (kernelContext() as unknown as Record<string, unknown>).slots as
-          | { renderSlot?: (key: string, props?: unknown, opts?: { only?: string }) => React.ReactElement }
-          | undefined;
-        // ctx.renderSlot 仅允许 'root'（官方 Shell 契约）；条目级渲染走 official.render
-        el = slots?.renderSlot?.("settings.section", { close: onClose }, { only: active }) ?? null;
-      } catch { /* ctx 级 renderSlot 仅 root，条目级渲染走 official.render */ }
-      if (el === null) {
-        try {
-          el = official.render({ close: onClose });
-        } catch (err) {
-          failMsg = err instanceof Error ? err.message : String(err);
-          el = null;
-        }
-      }
+      // 官方条目没有可直调的 render()——内容经 OfficialEntry 渲染
+      // （官方组件 + mirach 令牌 UI；条目级错误边界兜底，不炸设置页）
       return (
-        <OfficialSectionBoundary msg={failMsg ?? el === null ? failMsg : null}>
-          <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
-            {el as React.ReactElement ?? (
-              <p className="text-[12px] text-muted-foreground">
-                官方分区暂不可用：请确认引擎已连接（设置页顶部"引擎已连接"）后重试。
-              </p>
-            )}
-          </div>
-        </OfficialSectionBoundary>
+        <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
+          <OfficialEntry entry={official} onClose={onClose} />
+        </div>
       );
     }
     switch (active) {
