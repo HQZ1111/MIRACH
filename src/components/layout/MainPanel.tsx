@@ -1129,20 +1129,6 @@ const ChatSection = memo(function ChatSection({
     [waiting, agentBusy, streaming, toolCalls],
   );
 
-  // dsh 风格 = 官方 web UI 直接嵌入（核心 3212 端口已在跑完整官方 web 应用，
-  // 官方加什么功能这里自动出现，零移植成本）。非 MOCK 且 dsh 风格时启用。
-  if (chatStyle === "dsh" && !MOCK) {
-    return (
-      <div className="flex min-h-[150px] flex-1 flex-col">
-        <iframe
-          src="http://127.0.0.1:3212"
-          className="min-h-0 w-full flex-1 border-0"
-          title="dsh 官方界面"
-        />
-      </div>
-    );
-  }
-
   return (
     // 无外层 padding：滚动容器从对话区顶部开始，顶部不再有固定的 padding 灰带；
     // 左右 padding 在滚动容器上（固定），垂直 padding 在内容上（随滚动）
