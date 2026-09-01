@@ -1806,7 +1806,30 @@ function AboutContent() {
   const [engineInfo, setEngineInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
   const [engineBusy, setEngineBusy] = useState(false);
   const [engineLogs, setEngineLogs] = useState<string[]>([]);
+  const [releaseNotes, setReleaseNotes] = useState("");
+  const [autoUpdate, setAutoUpdate] = useState(() => localStorage.getItem("mirach.autoUpdateEngine") === "1");
   useEffect(() => { void getApi().checkEngineUpdate().then(setEngineInfo).catch(() => {}); }, []);
+  // 自动更新：检测到新版本时自动触发
+  useEffect(() => {
+    if (autoUpdate && engineInfo?.hasUpdate && !engineBusy) {
+      updateEngineNow();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineInfo?.hasUpdate, autoUpdate]);
+  // 拉取官方 release notes
+  useEffect(() => {
+    if (!engineInfo?.latest) return;
+    void (async () => {
+      try {
+        const r = await fetch(`https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/tags/dsh-v${engineInfo.latest}`, {
+          headers: { "User-Agent": "mirach" },
+        });
+        if (!r.ok) return;
+        const data = (await r.json()) as { body?: string };
+        if (data.body) setReleaseNotes(data.body.slice(0, 800));
+      } catch { /* 网络不可达静默 */ }
+    })();
+  }, [engineInfo?.latest]);
   const checkEngine = (): void => {
     setEngineBusy(true);
     void getApi().checkEngineUpdate().then(setEngineInfo).catch(() => {}).finally(() => setEngineBusy(false));
@@ -1814,6 +1837,11 @@ function AboutContent() {
   const updateEngineNow = (): void => {
     setEngineBusy(true);
     void getApi().updateEngine().then((l) => setEngineLogs(l)).catch((e) => setEngineLogs([String(e)])).finally(() => setEngineBusy(false));
+  };
+  const toggleAutoUpdate = (): void => {
+    const next = !autoUpdate;
+    setAutoUpdate(next);
+    localStorage.setItem("mirach.autoUpdateEngine", next ? "1" : "0");
   };
   return (
     <div className="space-y-4 px-5 py-6">
@@ -1884,6 +1912,28 @@ function AboutContent() {
               <pre className="mt-2 max-h-24 overflow-y-auto rounded-md bg-black/5 p-2 font-mono text-[10px] leading-relaxed text-[#303030] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 {engineLogs.join("\n")}
               </pre>
+            )}
+            {/* 自动更新开关 */}
+            <div className="mt-3 flex items-center justify-between rounded-md border border-border px-3 py-2">
+              <span className="text-[11px] text-[#303030]">自动更新引擎</span>
+              <button
+                role="switch"
+                aria-checked={autoUpdate}
+                onClick={toggleAutoUpdate}
+                className={cn(
+                  "flex h-[18px] w-8 shrink-0 items-center rounded-full px-[2px] transition-colors",
+                  autoUpdate ? "justify-end bg-[#10B981]" : "justify-start bg-[#D1D5DB]",
+                )}
+              >
+                <span className="h-[14px] w-[14px] rounded-full bg-white shadow-sm" />
+              </button>
+            </div>
+            {/* 更新内容 */}
+            {releaseNotes && (
+              <div className="mt-2 rounded-md border border-black/10 p-2.5">
+                <p className="text-[10px] font-semibold text-[#8B5CF6]">更新内容（{engineInfo?.latest}）</p>
+                <pre className="mt-1 whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-[#464646]">{releaseNotes}</pre>
+              </div>
             )}
           </>
         )}
