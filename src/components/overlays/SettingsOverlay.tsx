@@ -50,6 +50,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Settings2,
   FolderOpen,
   Package,
   Rocket,
@@ -68,8 +69,8 @@ interface SettingsSection {
 }
 
 const SECTIONS: SettingsSection[] = [
-  // 通用/模型/插件/预设 = 官方 settings.section（内核 slot 系统自动注册）
-  // mirach 独有分区
+  // mirach 独有分区（对话风格/环境/团队/记忆等）
+  { id: "chat-style", icon: Settings2 },
   { id: "agents", icon: Users },
   { id: "memory", icon: Brain },
   { id: "mobile", icon: Smartphone },
@@ -2107,6 +2108,7 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       return <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>{el as React.ReactElement}</div>;
     }
     switch (active) {
+      case "chat-style": return <GeneralContent />;
       case "memory": return <MemorySection />;
       case "mobile": return <MobileAccessSection />;
       case "sessions": return <SessionsContent />;
