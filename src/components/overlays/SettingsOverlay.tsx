@@ -39,27 +39,25 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ProviderConnectPanel, EditProviderForm } from "@/components/layout/ProviderConnectPanel";
 import {
   Archive,
-  Bot,
-  Box,
   ChartBar,
   ChevronDown,
   Copy,
   Download,
-  FolderOpen,
   GitBranch,
   Info,
   Keyboard,
   Lock,
-  Package,
   Pencil,
   RefreshCw,
-  Rocket,
   Search,
-  Settings2,
+  FolderOpen,
+  Package,
+  Rocket,
   Trash2,
   Upload,
   Smartphone,
   Brain,
+  Users,
   type LucideIcon,
   Layers,
 } from "lucide-react";
@@ -70,10 +68,9 @@ interface SettingsSection {
 }
 
 const SECTIONS: SettingsSection[] = [
-  { id: "general", icon: Settings2 },
-  { id: "model", icon: Box },
-  { id: "plugins", icon: Package },
-  { id: "presets", icon: Bot },
+  // 通用/模型/插件/预设 = 官方 settings.section（内核 slot 系统自动注册）
+  // mirach 独有分区
+  { id: "agents", icon: Users },
   { id: "memory", icon: Brain },
   { id: "mobile", icon: Smartphone },
   { id: "sessions", icon: Archive },
@@ -81,8 +78,8 @@ const SECTIONS: SettingsSection[] = [
   { id: "git", icon: GitBranch },
   { id: "keybinds", icon: Keyboard },
   { id: "usage", icon: ChartBar },
-  { id: "about", icon: Info },
   { id: "envs", icon: Layers },
+  { id: "about", icon: Info },
 ];
 
 // ---- 表单控件 ----
@@ -347,7 +344,7 @@ function TokenSelect({
 
 // ---- Model ----
 
-function ModelContent({ onDone }: { onDone?: () => void }) {
+export function ModelContent({ onDone }: { onDone?: () => void }) {
   const configs = useStore($providerConfig);
   const [editing, setEditing] = useState<ProviderConfig | null>(null);
   const [deleting, setDeleting] = useState<ProviderConfig | null>(null);
@@ -443,7 +440,7 @@ const AGENT_PRESETS: { value: string; label: string; desc: string }[] = [
   { value: "cordis", label: "创造模式", desc: "用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导" },
 ];
 
-function GeneralContent() {
+export function GeneralContent() {
   const { t, lang, setLang } = useI18n();
   const { theme, setTheme } = useTheme();
   const chatWidth = useStore($chatWidth);
@@ -1237,7 +1234,7 @@ function moduleShortName(moduleName: string): string {
   return moduleName.replace(/^@[^/]+\//, "").replace(/^(cordis-plugin-|dsh-)/, "");
 }
 
-function PluginsContent() {
+export function PluginsContent() {
   const [tab, setTab] = useState<"config" | "list">("config");
   const [query, setQuery] = useState("");
   const [openEntries, setOpenEntries] = useState<ReadonlySet<string>>(new Set());
@@ -1517,7 +1514,7 @@ function CopyPresetDialog({
   );
 }
 
-function PresetsContent() {
+export function PresetsContent() {
   const defaultAgent = useStore($defaultAgent);
   const [custom, setCustom] = useState<CustomPreset[]>(readCustomPresets());
   const [copyFrom, setCopyFrom] = useState<{ id: string; name: string } | null>(null);
@@ -2110,10 +2107,6 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       return <div className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>{el as React.ReactElement}</div>;
     }
     switch (active) {
-      case "general": return <GeneralContent />;
-      case "model": return <ModelContent onDone={onClose} />;
-      case "plugins": return <PluginsContent />;
-      case "presets": return <PresetsContent />;
       case "memory": return <MemorySection />;
       case "mobile": return <MobileAccessSection />;
       case "sessions": return <SessionsContent />;
