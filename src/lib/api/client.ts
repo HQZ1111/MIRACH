@@ -89,6 +89,14 @@ export interface MirachClient {
   /** 绑定酒馆预设到空白会话（agentPresets.select：世界书/记忆/关系网/剧情选项随挂载激活）。
    *  会话已有回合时引擎拒绝（locked）→ 返回 false；成功返回 true。 */
   selectAgentPreset(sessionId: string, presetId: string): Promise<boolean>;
+  /** 官方模型目录（session.modelCatalog：引擎真实可路由模型，按提供商分组） */
+  getNativeModelCatalog(): Promise<NativeModelCatalog | null>;
+  /** 官方会话选型（session.selectModel：provider/model/reasoningEffort 写入会话持久投影） */
+  nativeSelectModel(sessionId: string, provider: string, model: string, reasoningEffort?: string): Promise<boolean>;
+  /** 官方斜杠命令执行（commands.execute：/plan、/permission 等；会话 id 前端→dsh 映射） */
+  nativeExecuteCommand(sessionId: string, line: string): Promise<boolean>;
+  /** 官方设置描述（settings.describe：命名空间清单 + schema + 当前值） */
+  describeSettings(): Promise<{ namespaces: { ns: string; schema: unknown; value: unknown }[] } | null>;
   /** 引擎插件清单（sidecar 生成 cordis.yml 的装配镜像，config.pluginEntries） */
   listEnginePlugins(): Promise<{ id: string; name: string }[]>;
   /** 订阅服务端事件流；返回取消订阅函数 */
@@ -98,6 +106,30 @@ export interface MirachClient {
 // ================================================================
 // Mock 实现（VITE_MOCK=1：演示数据）
 // ================================================================
+
+/** 官方模型目录（session.modelCatalog 返回值；与 dsh-api-session-controller/types 对齐） */
+export interface NativeModelCatalogModel {
+  id: string;
+  name: string;
+  description?: string;
+  /** 适配器自带的思考档位（低/中/高…） */
+  reasoning?: { efforts: { id: string; name: string; description?: string }[]; defaultEffort?: string };
+}
+
+/** 一个提供商及其可路由模型 */
+export interface NativeModelCatalogGroup {
+  id: string;
+  name: string;
+  models: NativeModelCatalogModel[];
+}
+
+/** 官方模型目录：默认选型 + 分组 + 各提供商加载失败信息 */
+export interface NativeModelCatalog {
+  default: { provider: string; model: string; reasoningEffort?: string };
+  routableProviders: readonly string[];
+  groups: readonly NativeModelCatalogGroup[];
+  failures: readonly { id: string; name: string; message: string }[];
+}
 
 /** 社区插件（dsh-plugins 目录里已安装的包） */
 export interface InstalledPluginInfo {
@@ -289,6 +321,22 @@ class MockClient implements MirachClient {
 
   async selectAgentPreset(_sessionId: string, _presetId: string): Promise<boolean> {
     return false; // mock 无引擎预设
+  }
+
+  async getNativeModelCatalog(): Promise<NativeModelCatalog | null> {
+    return null; // mock 无官方目录
+  }
+
+  async nativeSelectModel(_sessionId: string, _provider: string, _model: string): Promise<boolean> {
+    return false; // mock 无官方选型
+  }
+
+  async nativeExecuteCommand(_sessionId: string, _line: string): Promise<boolean> {
+    return false; // mock 无命令执行
+  }
+
+  async describeSettings(): Promise<{ namespaces: { ns: string; schema: unknown; value: unknown }[] } | null> {
+    return null; // mock 无设置 schema
   }
 
   async listCommunityPlugins(): Promise<InstalledPluginInfo[]> {
@@ -859,6 +907,54 @@ class RealClient implements MirachClient {
     } catch {
       // 会话已有回合（locked）/ 预设不存在：绑定失败
       return false;
+    }
+  }
+
+  /** 官方模型目录（session.modelCatalog；sidecar 直通，无会话 id） */
+  async getNativeModelCatalog(): Promise<NativeModelCatalog | null> {
+    try {
+      const raw = await invoke<unknown>("dsh_rpc", { method: "session.modelCatalog", params: {} });
+      const cat = raw as NativeModelCatalog | null;
+      if (!cat || !Array.isArray(cat.groups)) return null;
+      return cat;
+    } catch {
+      return null; // 内核未装 session-controller remote / 引擎未启动
+    }
+  }
+
+  /** 官方会话选型（session.selectModel；sidecar 通用映射：前端 id → dsh id） */
+  async nativeSelectModel(sessionId: string, provider: string, model: string, reasoningEffort?: string): Promise<boolean> {
+    try {
+      await invoke("dsh_rpc", {
+        method: "session.selectModel",
+        params: { sessionId, provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 官方斜杠命令执行（commands.execute；sidecar 映射 + 对象/位置编码回退） */
+  async nativeExecuteCommand(sessionId: string, line: string): Promise<boolean> {
+    try {
+      await invoke("dsh_rpc", { method: "commands.execute", params: { sessionId, line } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 官方设置描述（settings.describe 直通；sidecar 无会话 id） */
+  async describeSettings(): Promise<{ namespaces: { ns: string; schema: unknown; value: unknown }[] } | null> {
+    try {
+      const raw = await invoke<unknown>("dsh_rpc", { method: "settings.describe", params: {} });
+      const desc = raw as { namespaces?: { ns: string; schema: unknown; value: unknown }[] } | null;
+      const namespaces = desc?.namespaces;
+      if (!Array.isArray(namespaces)) return null;
+      return { namespaces: namespaces.filter((n) => n && typeof n.ns === "string") };
+    } catch {
+      return null;
     }
   }
 

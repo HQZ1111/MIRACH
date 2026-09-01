@@ -65,23 +65,8 @@ import type { EnvProfile } from "@/store/environments";
 // ================================================================
 
 /** 官方 dsw alias 令牌 → mirach 浅色值（原生面板样式依赖；导出供设置页官方分区复用） */
-export const DSW_ALIAS_VARS = {
-  "--dsw-alias-label-primary": "#303030",
-  "--dsw-alias-label-secondary": "#6B7280",
-  "--dsw-alias-label-caption": "#8B8C8F",
-  "--dsw-alias-label-tertiary": "#8B8C8F",
-  "--dsw-alias-border-l1": "#E5E7EB",
-  "--dsw-alias-border-l2": "#E5E7EB",
-  "--dsw-alias-border-default": "#D1D5DB",
-  "--dsw-alias-bg-base": "#1A1A1A",
-  "--dsw-alias-bg-layer-1": "#FFFFFF",
-  "--dsw-alias-bg-layer-2": "#F5F6F8",
-  "--dsw-alias-brand-primary": "#017CF3",
-  "--dsw-alias-state-business-primary": "#017CF3",
-  "--dsw-alias-state-error-primary": "#EF4444",
-  "--dsw-alias-state-success-primary": "#10B981",
-  "--dsw-font-base": '13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif',
-} as React.CSSProperties;
+export { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
+import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
 
 /** 原生面板控件的对齐样式（按钮/输入框与 mirach 设置页一致） */
 const NATIVE_HOST_CSS = `

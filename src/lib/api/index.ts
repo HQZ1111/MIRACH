@@ -1,5 +1,5 @@
-/**
- * api 单例 — 按 VITE_MOCK 选择 Mock / Real 客户端
+﻿/**
+ * api 鍗曚緥 鈥?鎸?VITE_MOCK 閫夋嫨 Mock / Real 瀹㈡埛绔?
  *
  * import { getApi } from "@/lib/api";
  * const api = getApi();
@@ -11,7 +11,7 @@ import { createClient, type MirachClient } from "./client";
 
 let singleton: MirachClient | null = null;
 
-/** 获取后端客户端单例（mock 模式返回演示实现，真实模式返回 JSON-RPC 实现） */
+/** 鑾峰彇鍚庣瀹㈡埛绔崟渚嬶紙mock 妯″紡杩斿洖婕旂ず瀹炵幇锛岀湡瀹炴ā寮忚繑鍥?JSON-RPC 瀹炵幇锛?*/
 export function getApi(): MirachClient {
   if (!singleton) {
     singleton = createClient(MOCK);
@@ -20,4 +20,6 @@ export function getApi(): MirachClient {
 }
 
 export type { MirachClient } from "./client";
+export type { InstalledPluginInfo, NativeModelCatalog } from "./client";
 export type * from "./types";
+

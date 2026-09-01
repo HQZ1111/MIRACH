@@ -33,6 +33,8 @@ import { $usage } from "@/store/usage";
 import { $assemblyProjections } from "@/dsh-assembly/store";
 import { $enterBehavior } from "@/store/ui-settings";
 import { enqueue, parkQueuedPrompts, drainFirst, $queueState } from "@/store/queue";
+import { NativeModelSeat, useNativeModelSeat } from "./NativeModelSeat";
+import { $planActive, $permissionPreset, applyNativeMode, warmNativeModes, FULL_ACCESS_PRESET } from "@/lib/native-mode";
 import { QueueBar } from "./QueueBar";
 import {
   ArrowUp,
@@ -316,10 +318,12 @@ interface ComposerProps {
   standalone?: boolean;
   /** 简约档：输入外壳套用 zosma 玻璃样式（composer-glass），图标与逻辑不变，只换 ui */
   glass?: boolean;
+  /** 官方模型/模式接线的目标会话（成员会话 member-<id> 等；缺省 = 活跃会话） */
+  sessionScope?: string;
 }
 
 // memo：props 不变时跳过重渲染（列拖拽等父级宽度变化不应重渲染这个很重的组件）
-export const Composer = memo(function Composer({ terminalOpen = false, onToggleTerminal, onSend, standalone = false, glass = false }: ComposerProps) {
+export const Composer = memo(function Composer({ terminalOpen = false, onToggleTerminal, onSend, standalone = false, glass = false, sessionScope }: ComposerProps) {
   const { trigger } = useHaptics();
   // 流式回复消费（真实模式经 Tauri Channel；事件 → 聊天区增量写入）
   const streamReply = useStreamingReply();
@@ -361,6 +365,18 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     return () => setSendHandler(null);
   }, [onSend, standalone]);
   const [mode, setMode] = useState<AgentMode>("workspace");
+  // ── 官方接线：模型 seat（VITE_KERNEL=1 时官方 ModelSelect 组件）+ 模式命令 ──
+  // 模式状态官方推导：plan/mode 投影事件 > 权限预设（danger-full-access=完全访问）
+  // > 标准；内核不可用（mock/VITE_KERNEL=0）回退本地 mode 状态。
+  const seat = useNativeModelSeat();
+  const planActive = useStore($planActive);
+  const permPreset = useStore($permissionPreset);
+  const effMode: AgentMode = seat
+    ? planActive ? "plan" : permPreset === FULL_ACCESS_PRESET ? "full" : "workspace"
+    : mode;
+  useEffect(() => {
+    if (!MOCK) warmNativeModes();
+  }, []);
   const [addOpen, setAddOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
   const [snippetOpen, setSnippetOpen] = useState(false);
@@ -668,7 +684,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     setHasTextState(v.trim().length > 0);
   };
   const hasText = hasTextState;
-  const modeCfg = MODES.find((m) => m.id === mode)!;
+  const modeCfg = MODES.find((m) => m.id === effMode)!;
   const ModeIcon = modeCfg.icon;
 
   // 上下文占用：优先官方 contextPressure 投影（dsh-assembly 折叠 = 最新请求
@@ -1357,7 +1373,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
               className={cn(
                 GHOST_ICON_BTN,
                 showLabels && "w-auto gap-1 px-1.5",
-                mode === "full" && "bg-[#F59E0B]/10 text-[#F59E0B]",
+                effMode === "full" && "bg-[#F59E0B]/10 text-[#F59E0B]",
               )}
               title={`模式：${modeCfg.label}（${modeCfg.desc}）`}
               onClick={() => { setModeOpen((v) => !v); setAddOpen(false); }}
@@ -1382,11 +1398,19 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                 <div className="panel-glass menu-anim absolute bottom-full left-0 z-40 mb-1 w-60 rounded-xl py-1">
                   {MODES.map((m) => {
                     const Icon = m.icon;
-                    const active = m.id === mode;
+                    const active = m.id === effMode;
                     return (
                       <button
                         key={m.id}
-                        onClick={() => { setMode(m.id); setModeOpen(false); }}
+                        onClick={() => {
+                          setModeOpen(false);
+                          if (seat) {
+                            // 官方接线：/plan on|off + /permission <preset>（引擎真实生效）
+                            void applyNativeMode(m.id, sessionScope);
+                          } else {
+                            setMode(m.id);
+                          }
+                        }}
                         className={cn(
                           "flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-muted transition-colors",
                           active && "bg-muted",
@@ -1566,7 +1590,11 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
               )}
             </div>
 
-            {/* 模型选择（空间充足时仅显示模型名；不足时仅图标） */}
+            {/* 模型选择：官方 ModelSelect seat（内核可用时，官方目录+官方选型 RPC）；
+                内核不可用回退 mirach 自有菜单（设置页 providerConfig 数据源） */}
+            {seat ? (
+              <NativeModelSeat locked={busy} sessionScope={sessionScope} />
+            ) : (
             <div className="relative">
               <button
                 ref={modelBtnRef}
@@ -1705,6 +1733,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
                 </>
               )}
             </div>
+            )}
 
             {/* 朗读回复 */}
             <button

@@ -695,6 +695,35 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         }
         return;
       }
+      // 斜杠命令执行（commands.execute）：/plan、/permission、/model 等官方命令。
+      // 前端传 { sessionId(前端 id), line("/plan on") }；会话 id 映射到 dsh 后，
+      // wire 形态 { agent, line, images }（typert 对象编码），被拒时回退位置数组
+      // ——与官方 client 的 session.command(line) = commands.execute(sid, line, []) 同形。
+      if (method === "commands.execute") {
+        try {
+          const p = (params ?? {}) as { sessionId?: string; line?: string };
+          loadSessionMap();
+          const dshId = (p.sessionId ? sessionMap.get(envSessionKey(p.sessionId)) : undefined) ?? p.sessionId ?? "";
+          if (!dshId || typeof p.line !== "string" || !p.line.startsWith("/")) {
+            send({ type: "error", id, message: "commands.execute 需要 sessionId 与以 / 开头的命令行" });
+            return;
+          }
+          const rt = await ensureRuntime(activeModel);
+          let result: unknown;
+          try {
+            result = await rt.harness.client.request(method, { agent: dshId, line: p.line, images: [] }, 30_000);
+          } catch (encErr) {
+            logWarn("commands.execute object-encode rejected, retry positional: %s", encErr instanceof Error ? encErr.message : String(encErr));
+            result = await rt.harness.client.request(method, [dshId, p.line, []], 30_000);
+          }
+          log("commands.execute ok: %s %s", dshId, p.line);
+          send({ type: "result", id, data: result });
+        } catch (err) {
+          logWarn("commands.execute failed: %s", err instanceof Error ? err.message : String(err));
+          send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
       // 本地方法：config.pluginEntries（设置页插件列表）——读生成 cordis.yml 的
       // 插件条目（引擎没有对应 RPC，这里是 sidecar 侧真实装配的镜像）
       if (method === "config.pluginEntries") {
@@ -714,9 +743,10 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       try {
         const rt = await ensureRuntime(activeModel);
         let callParams: Record<string, unknown> | undefined = params;
-        if (method === "messageFeedback.put" && callParams && typeof callParams.sessionId === "string") {
-          // 映射不到就用原值：宁可反馈落在无映射的会话上，也不能错归到
-          // 另一个正打开的会话（currentSessionId 兜底已移除）
+        // 通用 sessionId 映射：前端会话 id → dsh 会话 id（模型目录/选型、反馈、
+        // 命令执行等所有带 sessionId 的 RPC 都走这里）。映射不到就用原值：
+        // 宁可落在无映射的会话上，也不能错归到另一个正打开的会话。
+        if (callParams && typeof callParams.sessionId === "string") {
           const dshId = sessionMap.get(envSessionKey(callParams.sessionId)) ?? callParams.sessionId;
           callParams = { ...callParams, sessionId: dshId };
         }

@@ -278,6 +278,7 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
         terminalOpen={terminalOpen}
         onToggleTerminal={() => setTerminalOpen((v) => !v)}
         onSend={(text) => onSend(member.id, text)}
+        sessionScope={`member-${member.id}`}
       />
 
       {/* ---- 终端（独立 pty 实例） ---- */}

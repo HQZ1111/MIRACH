@@ -25,6 +25,15 @@ import "@deepseek-ai/dsh-client-ui-theme/client";
 import "@deepseek-ai/dsh-client-ui-layout/client";
 import "@deepseek-ai/dsh-client-ui-conversation/client";
 import "@deepseek-ai/dsh-client-ui-chat/client";
+// ── 输入框 composer seat 官方栈（模型选型/斜杠命令/计划模式/权限预设） ──
+// ui-commands 依赖 inputTriggers（ui-input-trigger 提供）；
+// ui-model-selection 注册 'model' 词典 + ModelSelect seat 组件；
+// ui-plan 注册 'plan' 词典；ui-permission-presets 注册 /permission 弹出选择。
+import "@deepseek-ai/dsh-client-ui-input-trigger/client";
+import "@deepseek-ai/dsh-client-ui-commands/client";
+import "@deepseek-ai/dsh-client-ui-model-selection/client";
+import "@deepseek-ai/dsh-client-ui-plan/client";
+import "@deepseek-ai/dsh-client-ui-permission-presets/client";
 // 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
 // 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
 import "dsh-tavern/client";
@@ -52,6 +61,12 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-layout/client",
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
+  // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
+  "@deepseek-ai/dsh-client-ui-input-trigger/client",
+  "@deepseek-ai/dsh-client-ui-commands/client",
+  "@deepseek-ai/dsh-client-ui-model-selection/client",
+  "@deepseek-ai/dsh-client-ui-plan/client",
+  "@deepseek-ai/dsh-client-ui-permission-presets/client",
 ];
 
 /** 鍐呮牳 Cordis 涓婁笅鏂囷紙闀滃儚灞備笌闃舵 3 鍐欎晶鍏辩敤锛夈€?*/
@@ -90,6 +105,41 @@ export function nativeTavernSection(): { id: string; label: string; render: (pro
   return nativeSettingsSections().find((s) => s.id === "tavern-manager") ?? null;
 }
 
+/**
+ * 官方 locale 词典绑定（ctx.locale.bind(ns)）：输入框 seat 组件的 t 函数。
+ * ns = 官方各插件注册的词典命名空间（'model'/'plan'/'command'…）。
+ * 内核未 boot / 词典未注册时返回 null。
+ */
+export function nativeLocaleTranslate(ns: string): ((key: string, params?: Record<string, unknown>) => string) | null {
+  const ctx = kernelCtx;
+  if (!ctx) return null;
+  try {
+    const locale = (ctx as unknown as { locale?: { bind?: (n: string) => unknown } }).locale;
+    const t = locale?.bind?.(ns);
+    return typeof t === "function" ? (t as (key: string, params?: Record<string, unknown>) => string) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 官方模型选型 seat：ui-model-selection 包的 ModelSelect 组件 + 'model' 词典。
+ * 返回组件本体（mirach 侧注入 directory store / load / select 席位）；
+ * 内核未加载该包时返回 null（Composer 回退 mirach 自有模型菜单）。
+ */
+export function nativeModelSeat(): {
+  ModelSelect: (props: Record<string, unknown>) => React.ReactElement | null;
+} | null {
+  try {
+    const mod = bundleRequire("@deepseek-ai/dsh-client-ui-model-selection/client") as {
+      ModelSelect?: (props: Record<string, unknown>) => React.ReactElement | null;
+    };
+    return mod?.ModelSelect ? { ModelSelect: mod.ModelSelect } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
 export async function bootKernelMirror(): Promise<void> {
   try {
@@ -97,7 +147,12 @@ export async function bootKernelMirror(): Promise<void> {
     for (const id of KERNEL_PLUGINS) {
       const mod = bundleRequire(id) as { inject?: string[]; apply: (c: Context) => unknown };
       if (mod?.apply === undefined) throw new Error(`plugin ${id} has no apply`);
-      await ctx.plugin(mod);
+      // 单插件失败只降级该插件（seat/词典缺失走回退 UI），不拖垮整个内核
+      try {
+        await ctx.plugin(mod);
+      } catch (err) {
+        logWarn("kernel plugin %s failed (degraded): %s", id, err instanceof Error ? err.message : String(err));
+      }
     }
     // typert 客户端反射根：bundle 注册实测不稳定，直接实例化主类（与 client apply 等价）
     new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
