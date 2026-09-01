@@ -328,19 +328,27 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
 
     // profile 模式启动：优先用全局 npm 安装的 dsh CLI（更新 = npm i -g @deepseek-ai/dsh@alpha
     // 一条命令），无全局安装时回退 workspace 源码（tsx bin.ts）。
-    const npmDsh = process.env.APPDATA ? join(process.env.APPDATA, "npm", "dsh.cmd") : "";
-    const hasNpmDsh = npmDsh && existsSync(npmDsh);
-    const launchArgs = paths.profileMode
-      ? hasNpmDsh
-        ? ["--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
-        : ["--import", "tsx", paths.entry, "--profile", process.env.MIRACH_PROFILE_NAME ?? "mirach"]
-      : ["--import", "tsx", paths.entry, configPath];
+    // 注意：不 spawn %APPDATA%\npm\dsh.cmd——Windows 下 .cmd 不能被子进程 spawn
+    // 直接执行（EINVAL 或引号剥壳冲突）；改由 nodeBin 直接执行全局包的
+    // lib/bin.js（与 dsh.cmd 包装的同一入口，行为完全等价）。
+    const npmDshBin = process.env.APPDATA
+      ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
+      : "";
+    const hasNpmDsh = npmDshBin && existsSync(npmDshBin);
+    const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
+    const useNpmDsh = paths.profileMode && hasNpmDsh;
+    const launchCommand = paths.nodeBin;
+    const launchArgs = useNpmDsh
+      ? [npmDshBin, "--profile", profileName]
+      : paths.profileMode
+        ? ["--import", "tsx", paths.entry, "--profile", profileName]
+        : ["--import", "tsx", paths.entry, configPath];
 
     const harness = new DeepSeekHarness({
       launch: {
-        command: paths.profileMode && hasNpmDsh ? npmDsh : paths.nodeBin,
+        command: launchCommand,
         args: launchArgs,
-        cwd: paths.profileMode && hasNpmDsh ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", process.env.MIRACH_PROFILE_NAME ?? "mirach") : paths.harnessRoot,
+        cwd: useNpmDsh ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", profileName) : paths.harnessRoot,
         env: {
           ...runtimeEnv(paths, model),
           // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）

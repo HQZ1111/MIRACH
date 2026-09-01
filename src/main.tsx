@@ -23,9 +23,13 @@ const isQuickEntry =
 const isLogin =
   new URLSearchParams(window.location.search).get("win") === "login";
 
-// B 阶段 2：官方客户端内核（VITE_KERNEL=1）——与 sidecar 管道并行的镜像面，
-// 事件同 seq 空间天然去重；失败只告警，sidecar 管道继续兜底（见 src/dsh-kernel）
-if (import.meta.env.VITE_KERNEL === "1" && !isOverlay && !isQuickEntry) {
+// B 阶段 2：官方客户端内核（VITE_KERNEL=1 显式开启；VITE_MOCK=0 真实模式默认开启）
+// ——与 sidecar 管道并行的镜像面，事件同 seq 空间天然去重；失败只告警，
+// sidecar 管道继续兜底（见 src/dsh-kernel）。不再依赖启动脚本拼环境变量。
+const kernelEnabled =
+  import.meta.env.VITE_KERNEL === "1"
+  || (import.meta.env.VITE_KERNEL === undefined && import.meta.env.VITE_MOCK !== "1");
+if (kernelEnabled && !isOverlay && !isQuickEntry) {
   void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => console.warn(String(e)));
 }
 

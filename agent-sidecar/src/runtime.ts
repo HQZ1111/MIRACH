@@ -71,11 +71,22 @@ export function resolveRuntimePaths(): RuntimePaths {
     ?? HARNESS_ROOT_CANDIDATES.find((p) => existsSync(p))
     ?? HARNESS_ROOT_CANDIDATES[0];
   const nodeBin = NODE_BIN_CANDIDATES.find((p) => existsSync(p)) ?? NODE_BIN_CANDIDATES[0];
-  // profile 模式（MIRACH_PROFILE=1）：B 阶段 1 的核心双面形态——
-  // 官方 profile（$DSH_HOME/profiles/mirach，bundles = base + sdk-app + web-app）
+  // profile 模式（MIRACH_PROFILE=1 显式开启；未显式关闭时自动判定）：
+  // npm 全局 dsh CLI 存在且官方 profile 包已装配（$DSH_HOME/profiles/mirach/
+  // package.json，bundles = base + sdk-app + web-app）即启用——官方 profile
   // 同时提供 stdio JSON-RPC（sdk 面）与 HTTP/WS（web 面），插件经 profile
-  // node_modules 解析；不再走模板+生成 yml 的老链路。
-  const profileMode = process.env.MIRACH_PROFILE === "1";
+  // node_modules 解析；老"模板+生成 yml"链路（jsonrpc-demo）仅作无 profile
+  // 装配时的回退。MIRACH_PROFILE=0 可强制回退。
+  const npmDsh = process.env.APPDATA ? join(process.env.APPDATA, "npm", "dsh.cmd") : "";
+  const profilePackage = join(
+    process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? harnessRoot, ".mirach"),
+    "profiles",
+    process.env.MIRACH_PROFILE_NAME ?? "mirach",
+    "package.json",
+  );
+  const profileMode =
+    process.env.MIRACH_PROFILE === "1"
+    || (process.env.MIRACH_PROFILE !== "0" && existsSync(npmDsh) && existsSync(profilePackage));
   const entry = profileMode
     ? join(harnessRoot, "apps", "cli", "src", "bin.ts")
     : process.env.DSH_RUNTIME_ENTRY
