@@ -233,12 +233,10 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
   const row = useMemo(
     () => (
       <Comp
-        {...injected}
+        // 官方 ContextualEntry 语义：kit 席位 < inject 面 < owner。
+        // inject 自带的 t（如 dsh-pocket 的 ns='pocket' translate）必须覆盖
+        // 标准 t 席位——展开顺序不能颠倒。
         t={t}
-        owner={owner}
-        renderSlot={(childKey: string, childOwner: object, opts?: { only?: string }) => (
-          <SlotList slotKey={childKey} owner={childOwner ?? owner} only={opts?.only} />
-        )}
         useStore={isStoreless ? useStoreShim : useStorePassed}
         useSessions={useSessionsShim}
         useSession={useSessionShim}
@@ -246,6 +244,11 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
         usePermission={usePermissionShim}
         useSettings={useSettingsShim}
         useAgentPreset={useAgentPresetShim}
+        renderSlot={(childKey: string, childOwner: object, opts?: { only?: string }) => (
+          <SlotList slotKey={childKey} owner={childOwner ?? owner} only={opts?.only} />
+        )}
+        {...injected}
+        owner={owner}
       />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps

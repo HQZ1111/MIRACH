@@ -21,6 +21,17 @@ const tavernBundle = path.join(
   "lib",
   "client.manager.bundle.js",
 );
+// dsh-pocket 插件 client bundle（手机扫码访问 DSH；同 tavern 模式侧载）
+// @ts-expect-error process is a nodejs global
+const pocketBundle = path.join(
+  process.env.USERPROFILE ?? "",
+  ".mirach",
+  "dsh-plugins",
+  "node_modules",
+  "dsh-pocket",
+  "client",
+  "client.js",
+);
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -32,6 +43,7 @@ export default defineConfig(async () => ({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "dsh-tavern/client": tavernBundle,
+      "dsh-pocket/client": pocketBundle,
     },
   },
 
@@ -70,6 +82,21 @@ export default defineConfig(async () => ({
             const ck = coreAuthCookie(core);
             if (ck) proxyReq.setHeader("Cookie", ck);
             console.log("[proxy] headers fixed:", proxyReq.path, "cookie=", ck ? "yes" : "NO");
+          };
+          proxy.on("proxyReq", fixHeaders);
+          proxy.on("proxyReqWs", fixHeaders);
+        },
+      },
+      // dsh-pocket 插件的 RPC 通道（手机访问设置页的 status/qr/开关）
+      "/dsh-pocket": {
+        target: core,
+        changeOrigin: true,
+        ws: true,
+        configure: (proxy) => {
+          const fixHeaders = (proxyReq) => {
+            proxyReq.setHeader("Origin", core);
+            const ck = coreAuthCookie(core);
+            if (ck) proxyReq.setHeader("Cookie", ck);
           };
           proxy.on("proxyReq", fixHeaders);
           proxy.on("proxyReqWs", fixHeaders);

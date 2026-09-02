@@ -55,9 +55,19 @@ import "@deepseek-ai/dsh-client-ui-goal/client";
 import "@deepseek-ai/dsh-client-ui-message-feedback/client";
 import "@deepseek-ai/dsh-client-ui-trajectory/client";
 import "@deepseek-ai/dsh-client-ui-jobs/client";
+// ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行）──
+// 之前因"设置页冻结"回退——根因实为 uSES 快照不稳定 + 内核未激活，与包无关
+import "@deepseek-ai/dsh-client-ui-skill/client";
+import "@deepseek-ai/dsh-client-ui-subagent/client";
+import "@deepseek-ai/dsh-client-ui-approval/client";
+import "@deepseek-ai/dsh-client-ui-user-questions/client";
+import "@deepseek-ai/dsh-client-ui-deliverables/client";
+import "@deepseek-ai/dsh-client-ui-workflow-run/client";
 // 酒馆 client bundle（原生"酒馆管理"设置面板，vite 别名指向 dsh-plugins 绝对路径；
 // 依赖 ctx.slots/ctx.locale —— 在 typert 实例化后由下方 shim 提供）
 import "dsh-tavern/client";
+// dsh-pocket client bundle（"手机访问"设置分区：局域网/公网扫码同步访问）
+import "dsh-pocket/client";
 import { Context } from "@deepseek-ai/cordis";
 import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
@@ -102,6 +112,13 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-message-feedback/client",
   "@deepseek-ai/dsh-client-ui-trajectory/client",
   "@deepseek-ai/dsh-client-ui-jobs/client",
+  // ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行） ──
+  "@deepseek-ai/dsh-client-ui-skill/client",
+  "@deepseek-ai/dsh-client-ui-subagent/client",
+  "@deepseek-ai/dsh-client-ui-approval/client",
+  "@deepseek-ai/dsh-client-ui-user-questions/client",
+  "@deepseek-ai/dsh-client-ui-deliverables/client",
+  "@deepseek-ai/dsh-client-ui-workflow-run/client",
 ];
 
 /** 鍐呮牳 Cordis 涓婁笅鏂囷紙闀滃儚灞備笌闃舵 3 鍐欎晶鍏辩敤锛夈€?*/
@@ -524,6 +541,14 @@ async function bootKernelMirrorOnce(): Promise<void> {
       logInfo("tavern native panel registered");
     } catch (err) {
       logWarn("tavern native panel mount failed: %s", err instanceof Error ? err.message : String(err));
+    }
+    // ── dsh-pocket 原生面板（"手机访问"分区；引擎侧代理经 profile bundles 加载）
+    try {
+      const pocket = bundleRequire("dsh-pocket") as { apply?: (c: Context) => void };
+      pocket?.apply?.(ctx);
+      logInfo("dsh-pocket native panel registered");
+    } catch (err) {
+      logWarn("dsh-pocket native panel mount failed: %s", err instanceof Error ? err.message : String(err));
     }
     bridge = createDshBridge();
 
