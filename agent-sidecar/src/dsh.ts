@@ -27,6 +27,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { log, logDebug, logError, logWarn } from "./protocol.js";
 import { resolveRuntimePaths, writeRuntimeConfig, type RuntimePaths } from "./runtime.js";
+import { subagentEnvForEngine } from "./subagent-backends.js";
 
 /** 设置页同步进来的完整 provider 配置（保留协议/端点/密钥/模型目录）。 */
 export interface ProviderConfig {
@@ -270,6 +271,10 @@ export function runtimeEnv(paths: RuntimePaths, model: ActiveModel): Record<stri
     // 自定义端点/API key 优先（llm-deepseek 每个请求从 env 解析）
     ...(model.baseURL ? { DEEPSEEK_BASE_URL: model.baseURL } : {}),
     ...(model.apiKey ? { DEEPSEEK_API_KEY: model.apiKey } : paths.apiKey ? { DEEPSEEK_API_KEY: paths.apiKey } : {}),
+    // 外部子代理后端（Codex / Claude Code）的鉴权 env：mirach 设置页写入
+    // subagent-backends.json，此处组装成 CODEX_ENV / CLAUDE_ENV（cordis patch
+    // 的 !!js 按名读取；仅启用的后端注入）
+    ...subagentEnvForEngine(),
   };
 }
 

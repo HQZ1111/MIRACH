@@ -217,7 +217,7 @@ function SegmentedPill({
   );
 }
 
-function SubHeading({ children }: { children: React.ReactNode }) {
+export function SubHeading({ children }: { children: React.ReactNode }) {
   return (
     <p className="relative px-5 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground after:pointer-events-none after:absolute after:inset-x-5 after:bottom-0 after:h-px after:bg-border/60">
       {children}

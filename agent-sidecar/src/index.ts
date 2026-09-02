@@ -35,6 +35,7 @@ import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
 import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
 import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine } from "./plugins.js";
+import { subagentBackendsStatus, subagentSetEnabled } from "./subagent-backends.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
@@ -610,6 +611,21 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
           }
         } catch (err) {
           logWarn("plugins.%s failed: %s", method.split(".")[1] ?? "", err instanceof Error ? err.message : String(err));
+          send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+      // 子代理后端（Codex / Claude Code）：状态 / 启用停用
+      if (method === "subagent.status") {
+        send({ type: "result", id, data: subagentBackendsStatus() });
+        return;
+      }
+      if (method === "subagent.enable" || method === "subagent.disable") {
+        try {
+          const kind = String((params as { kind?: string } | undefined)?.kind ?? "codex") === "claude" ? "claude" : "codex";
+          const lines = await subagentSetEnabled(kind, method === "subagent.enable");
+          send({ type: "result", id, data: { logs: lines } });
+        } catch (err) {
           send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
         }
         return;

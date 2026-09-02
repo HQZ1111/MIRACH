@@ -23,6 +23,7 @@ import {
   AboutContent,
 } from "@/components/overlays/SettingsOverlay";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
+import { SubagentBackendsSection } from "@/components/settings/SubagentBackendsSection";
 
 interface MirachSectionDef {
   id: string;
@@ -42,6 +43,7 @@ const SECTIONS: MirachSectionDef[] = [
   { id: "keybinds", order: -20, label: "键盘快捷键", component: KeybindsContent },
   { id: "usage", order: -18, label: "使用统计", component: UsageContent },
   { id: "about", order: -16, label: "关于", component: AboutContent },
+  { id: "subagents", order: -15, label: "子代理后端", component: SubagentBackendsSection },
 ];
 
 /**
