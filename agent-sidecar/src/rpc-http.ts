@@ -10,53 +10,21 @@
  *   POST http://127.0.0.1:<MIRACH_WEB_PORT>/api/<ns>/<method>
  *   body: { type:"client-request", rpcId, method:"<ns>/<method>",
  *          payload:{ args:{ <wire参数名>: 值 } } }
- * 鉴权：与 vite-auth-helper 同算法铸造 browser-session cookie
- * （secret 从 DSH_HOME/.credentials.yaml 的 client-connection/browser-session 读）。
+ * 鉴权：browser-session cookie 由 shared/dsh-auth.cjs 统一铸造（与 vite 代理
+ * 同一实现；算法对照官方 browser-auth.ts，升级检查点见该文件头）。
  *
  * 实测确认的 wire 参数名：单对象参数 = `request`；无参 = `_request:{}`；
  * session 类 agent 参数 = `agentId`；goals 三参 = {agentId, ref, request?}；
  * commands/execute = {agentId, line, images}。
  */
 
-import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const COOKIE_PREFIX = "dsh-auth-";
-const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-
-function credentialsFile(): string {
-  return join(
-    process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
-    ".credentials.yaml",
-  );
-}
+import { randomUUID } from "node:crypto";
+import * as dshAuth from "../../shared/dsh-auth.mjs";
 
 /** 引擎 web 面基址（与 dsh.ts 注入的 MIRACH_WEB_PORT 一致）。 */
 export function coreBase(): string {
   const port = process.env.MIRACH_WEB_PORT ?? "3212";
   return `http://127.0.0.1:${port}`;
-}
-
-function readSessionSecret(): Buffer | undefined {
-  try {
-    const raw = readFileSync(credentialsFile(), "utf8");
-    const m = raw.match(/client-connection\/browser-session:[\s\S]*?secret:\s*([^\s]+)/);
-    if (m?.[1] === undefined) return undefined;
-    const buf = Buffer.from(m[1], "base64url");
-    return buf.byteLength === 32 ? buf : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function mintCookie(authority: string, secret: Buffer): string {
-  const name = COOKIE_PREFIX + createHash("sha256").update(authority).digest("base64url");
-  const now = Date.now();
-  const payload = { version: 1, authority, issuedAt: now, expiresAt: now + MAX_AGE_MS };
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const sig = createHmac("sha256", secret).update(body).digest().toString("base64url");
-  return `${name}=v1.${body}.${sig}`;
 }
 
 export interface RemoteCallResult<T = unknown> {
@@ -76,13 +44,13 @@ export async function remoteCall<T = unknown>(
   args: Record<string, unknown>,
   timeoutMs = 60_000,
 ): Promise<RemoteCallResult<T>> {
-  const secret = readSessionSecret();
+  const secret = dshAuth.readSessionSecret();
   if (secret === undefined) {
     return { ok: false, error: { code: "auth/unavailable", message: "browser-session secret 未配置（引擎未初始化）", details: {} } };
   }
   const base = coreBase();
   const authority = new URL(base).host;
-  const cookie = mintCookie(authority, secret);
+  const cookie = dshAuth.mintCookie(authority, secret);
   const rpcId = randomUUID();
   const message = { type: "client-request", rpcId, method: endpoint, payload: { args } };
   const controller = new AbortController();

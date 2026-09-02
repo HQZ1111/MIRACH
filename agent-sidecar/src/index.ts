@@ -34,7 +34,7 @@ import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
 import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
-import { listPlugins, installPlugin, uninstallPlugin, netAccessInfo, checkEngineUpdate, updateEngine } from "./plugins.js";
+import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine } from "./plugins.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
@@ -612,11 +612,6 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
           logWarn("plugins.%s failed: %s", method.split(".")[1] ?? "", err instanceof Error ? err.message : String(err));
           send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
         }
-        return;
-      }
-      // 手机接入：网卡枚举（分类）+ 核心 web 面连通性探测（设置页「手机接入」用）
-      if (method === "net.info") {
-        send({ type: "result", id, data: await netAccessInfo() });
         return;
       }
       // 引擎版本检查 + 一键更新
