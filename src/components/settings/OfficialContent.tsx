@@ -23,6 +23,8 @@ export interface OfficialEntryLike {
   label?: string;
   component: unknown;
   inject?: (...args: never[]) => unknown;
+  /** StoredEntry 顶层 locale 字段（官方渲染器据此合成 t 席位） */
+  locale?: string;
   options: Record<string, unknown>;
 }
 
@@ -178,7 +180,9 @@ function SlotRow({ entry, owner }: { entry: OfficialEntryLike; owner: object }) 
     | undefined;
   const t = useMemo(
     () =>
-      nativeLocaleTranslate(typeof entry.options.locale === "string" ? entry.options.locale : "settings") ??
+      // entry.locale 是 StoredEntry 顶层字段（非 options.locale）——官方渲染器
+      // 据此合成 t 席位；缺失时退 'settings'。
+      nativeLocaleTranslate(typeof entry.locale === "string" ? entry.locale : "settings") ??
       ((key: string) => key),
     [entry],
   );

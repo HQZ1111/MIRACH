@@ -221,6 +221,7 @@ export function nativeSettingsSections(): {
   label: string;
   component: unknown;
   inject?: (...args: never[]) => unknown;
+  locale?: string;
   options: Record<string, unknown>;
 }[] {
   const { version, list } = cachedEntriesOf("settings.section", "entries");
@@ -231,6 +232,7 @@ export function nativeSettingsSections(): {
     options?: { id?: unknown; label?: unknown; order?: unknown; [k: string]: unknown };
     component?: unknown;
     inject?: (...args: never[]) => unknown;
+    locale?: unknown;
   }[];
   const mapped = entries
     .filter((e) => typeof e.options?.id === "string")
@@ -242,6 +244,7 @@ export function nativeSettingsSections(): {
           : String(e.options!.label ?? e.options!.id),
       component: e.component,
       ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
+      ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
       options: e.options ?? {},
     }))
     .sort((a, b) => ((a.options.order as number) ?? 0) - ((b.options.order as number) ?? 0));
@@ -274,6 +277,7 @@ export function nativeSlotEntries(key: string): {
   id?: string;
   component: unknown;
   inject?: (...args: never[]) => unknown;
+  locale?: string;
   options: Record<string, unknown>;
 }[] {
   const { version, list } = cachedEntriesOf(key, "entriesOfSlot");
@@ -285,11 +289,14 @@ export function nativeSlotEntries(key: string): {
     options?: Record<string, unknown>;
     component?: unknown;
     inject?: (...args: never[]) => unknown;
+    locale?: unknown;
   }[];
   const mapped = entries.map((e) => ({
     id: typeof e.options?.id === "string" ? (e.options.id as string) : undefined,
     component: e.component,
     ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
+    // locale 是 StoredEntry 的顶层字段（官方渲染器经 entry.locale 合成 t 席位）
+    ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
     options: e.options ?? {},
   }));
   const listOut = mapped.length === 0 ? (EMPTY_ENTRIES as ReturnType<typeof nativeSlotEntries>) : mapped;
@@ -315,7 +322,12 @@ export function nativeLocaleTranslate(ns: string): ((key: string, params?: Recor
   const ctx = kernelCtx;
   if (!ctx) return null;
   try {
-    const locale = (ctx as unknown as { locale?: { bind?: (n: string) => unknown } }).locale;
+    // 规范读取是 ctx.get：reflect.provide 的服务在本 cordis 版本不保证暴露为
+    // ctx 属性（ctx.locale 属性访问得到 undefined → t 落到 identity 兜底，
+    // 官方行文案显示原始 key）。
+    const ctxAny = ctx as unknown as { locale?: { bind?: (n: string) => unknown }; get?: (k: string) => unknown };
+    const locale = (typeof ctxAny.get === "function" ? (ctxAny.get("locale") as { bind?: (n: string) => unknown } | undefined) : undefined)
+      ?? ctxAny.locale;
     const t = locale?.bind?.(ns);
     return typeof t === "function" ? (t as (key: string, params?: Record<string, unknown>) => string) : null;
   } catch {
@@ -415,7 +427,10 @@ export function nativeGoalsRemote(): Record<string, (...args: unknown[]) => Prom
   const ctx = kernelCtx;
   if (ctx === null) return null;
   try {
-    const remote = (ctx as unknown as { remote?: Record<string, unknown> }).remote;
+    // 规范读取 ctx.get('remote')（属性访问不保证暴露，见 nativeLocaleTranslate）
+    const ctxAny = ctx as unknown as { remote?: Record<string, unknown>; get?: (k: string) => unknown };
+    const remote = (typeof ctxAny.get === "function" ? (ctxAny.get("remote") as Record<string, unknown> | undefined) : undefined)
+      ?? ctxAny.remote;
     const goals = remote?.goals;
     return typeof goals === "object" && goals !== null ? (goals as Record<string, (...args: unknown[]) => Promise<unknown>>) : null;
   } catch {
@@ -497,6 +512,10 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // 诊断信号：失败插件清单（日志/仪表盘用）
     lastPluginFails = pluginFails;
     kernelCtx = ctx;
+    // dev 探针：自动化验证/诊断用（scripts/cdp-*.mjs），生产构建无副作用
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__mirachCtx = ctx;
+    }
     // ── 酒馆原生面板：ctx.slots/ctx.locale 由上面官方 ui-renderer/locale 提供，
     // 不再需要 shim。直接调 apply(ctx) 注册 settings.section。
     try {
