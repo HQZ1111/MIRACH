@@ -14,8 +14,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@nanostores/react";
 import { cn } from "@/lib/utils";
 import { Pencil, Plus, Search, Trash2, Upload, Users, X } from "lucide-react";
-import { nativeTavernSection } from "@/dsh-kernel/boot";
-import { OfficialEntry, type OfficialEntryLike } from "@/components/settings/OfficialContent";
 import { userHomeDir } from "@/lib/paths";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -58,72 +56,6 @@ import {
 } from "@/lib/character-market";
 import type { EnvProfile } from "@/store/environments";
 
-// ================================================================
-// NativeTavernPanel — 酒馆管理（原生）面板
-// 渲染酒馆插件 client bundle 注册进 settings.section 槽位的官方面板
-// （boot.ts 经 kernel 加载 bundle 并提供 slots/locale shim）。
-// 插件 CSS 依赖官方 --dsw-alias-* 令牌 → 宿主容器补齐变量；否则颜色错乱。
-// ================================================================
-
-/** 官方 dsw alias 令牌 → mirach 浅色值（原生面板样式依赖；导出供设置页官方分区复用） */
-export { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
-import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
-
-/** 原生面板控件的对齐样式（按钮/输入框与 mirach 设置页一致） */
-const NATIVE_HOST_CSS = `
-.tavern-native-host #tavern-manager h2 { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
-.tavern-native-host #tavern-manager .t-card { border-radius: 10px; padding: 12px 14px; }
-.tavern-native-host #tavern-manager .t-card-title { font-size: 13px; }
-.tavern-native-host #tavern-manager button { font-size: 12px; padding: 5px 12px; border-radius: 8px; }
-.tavern-native-host #tavern-manager .t-btn-secondary { border-radius: 8px; }
-.tavern-native-host #tavern-manager input[type="text"],
-.tavern-native-host #tavern-manager input:not([type]),
-.tavern-native-host #tavern-manager select,
-.tavern-native-host #tavern-manager textarea {
-  border-radius: 8px; border: 1px solid #E5E7EB; padding: 5px 8px;
-  font-size: 12px; color: #303030; background: #fff; outline: none;
-}
-.tavern-native-host #tavern-manager input:focus,
-.tavern-native-host #tavern-manager select:focus,
-.tavern-native-host #tavern-manager textarea:focus { border-color: #6366F1; }
-.tavern-native-host #tavern-manager table { width: 100%; font-size: 12px; border-collapse: collapse; }
-.tavern-native-host #tavern-manager th, .tavern-native-host #tavern-manager td {
-  padding: 4px 6px; border-bottom: 1px solid #F0F0F0; text-align: left;
-}
-`;
-
-function NativeTavernPanel() {
-  const [entry, setEntry] = useState<OfficialEntryLike | null>(() =>
-    nativeTavernSection(),
-  );
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (entry) return;
-    const t = window.setTimeout(() => {
-      setEntry(nativeTavernSection());
-      setTick((v) => v + 1);
-    }, 1200);
-    return () => window.clearTimeout(t);
-  }, [entry, tick]);
-  if (!entry) {
-    return (
-      <div className="rounded-lg border border-black/10 bg-white p-3">
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          原生面板未加载：需要 VITE_KERNEL=1 启动内核且酒馆插件 client bundle 可用。
-          请重启应用重试。
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div>
-      <style>{NATIVE_HOST_CSS}</style>
-      <div className="tavern-native-host rounded-lg border border-black/10 bg-white px-3 py-3" style={DSW_ALIAS_VARS}>
-        <OfficialEntry entry={entry} />
-      </div>
-    </div>
-  );
-}
 
 // ================================================================
 // CharacterCard — 角色卡行（角色库/在线市场共用）
@@ -1020,13 +952,6 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
           }}
         />
       </div>
-
-      {/* 聊天环境：原生酒馆面板置于智能体上方 */}
-      {isChat && (
-        <div className="mb-3">
-          <NativeTavernPanel />
-        </div>
-      )}
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {list.map((a) => (

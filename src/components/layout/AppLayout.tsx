@@ -16,6 +16,7 @@
 import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useStore } from "@nanostores/react";
 import { MOCK } from "@/lib/mock";
+import { openOfficialSettings } from "@/dsh-kernel/settings-surface";
 import { $gatewayState, pingGateway } from "@/store/gateway";
 import { GatewayConnectingOverlay } from "@/components/overlays/GatewayConnectingOverlay";
 import { StartupGate } from "@/components/layout/StartupGate";
@@ -57,9 +58,7 @@ import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
 
 // 功能弹窗按需加载（减少主包体积，打开时才拉取）
-const SettingsOverlay = lazy(() =>
-  import("@/components/overlays/SettingsOverlay").then((m) => ({ default: m.SettingsOverlay })),
-);
+// 设置页已移交官方（settings-surface 浮出），不再走 SettingsOverlay 浮层
 const MessagingOverlay = lazy(() =>
   import("@/components/overlays/MessagingOverlay").then((m) => ({ default: m.MessagingOverlay })),
 );
@@ -230,8 +229,7 @@ export function AppLayout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   // 命令面板查询（主栏顶部搜索框输入值；搜索框替代弹窗自带搜索）
   const [paletteQuery, setPaletteQuery] = useState("");
-  // 命令面板深链：设置分区 / 命令中心标签
-  const [settingsSection, setSettingsSection] = useState("general");
+  // 命令面板深链：命令中心标签（设置分区深链由 settings-surface 官方面板承接）
   const [ccTab, setCcTab] = useState("sessions");
   // 主题（命令面板"外观"分组用）
   const { toggle: toggleTheme, setTheme } = useTheme();
@@ -606,6 +604,11 @@ export function AppLayout() {
   // ---- 左侧工具栏切换：功能图标打开原型对应 Overlay，其余切换团队视图 ----
   const handleViewChange = useCallback(
     (view: string) => {
+      // 设置页所有权归官方：齿轮 → 浮出镜像树里的官方 SettingsRoot 面板
+      if (view === "settings") {
+        void openOfficialSettings();
+        return;
+      }
       const overlay = OVERLAY_BY_VIEW[view];
       if (overlay) {
         setOverlayView(overlay);
@@ -627,17 +630,16 @@ export function AppLayout() {
   );
 
   // ---- ⌘K 命令面板：跳转动作 ----
-  const openSettings = useCallback((section: string) => {
-    setSettingsSection(section);
-    setOverlayView("settings");
+  const openSettings = useCallback((_section: string) => {
+    // 设置页所有权归官方：浮出镜像树里的官方 SettingsRoot 面板（真数据/真交互）。
+    // _section = 官方面板的默认分区（通用设置），官方导航内切换。
+    void openOfficialSettings();
   }, []);
   // 简约对话档（zosma ChatView）斜杠命令 /settings → 打开设置浮层；
   // detail.section 可指定分区（如 Composer「编辑模型…」→ model）
   useEffect(() => {
-    const onOpenSettings = (e: Event) => {
-      const section = (e as CustomEvent<{ section?: string }>).detail?.section;
-      setSettingsSection(section ?? "general");
-      setOverlayView("settings");
+    const onOpenSettings = () => {
+      void openOfficialSettings();
     };
     window.addEventListener("mirach:open-settings", onOpenSettings);
     return () => window.removeEventListener("mirach:open-settings", onOpenSettings);
@@ -940,18 +942,9 @@ export function AppLayout() {
           />
         )}
 
-        {/* ---- 功能 Overlay（设置/消息平台/命令中心/技能与工具/排程/产物，按需加载） ---- */}
+        {/* ---- 功能 Overlay（消息平台/命令中心/技能与工具/排程/产物，按需加载） ---- */}
+        {/* 设置页所有权已移交官方：入口经 settings-surface 浮出镜像树里的官方 SettingsRoot */}
         <Suspense fallback={null}>
-        {overlayView === "settings" && (
-          <OverlayShell
-            title={t("settings.title")}
-            onClose={() => setOverlayView(null)}
-            closeOnBackdrop={false}
-            closeOnEsc={false}
-          >
-            <SettingsOverlay initialSection={settingsSection} onClose={() => setOverlayView(null)} />
-          </OverlayShell>
-        )}
         {overlayView === "messaging" && (
           <OverlayShell title={t("messaging.title")} onClose={() => setOverlayView(null)}>
             <MessagingOverlay />

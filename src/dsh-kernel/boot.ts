@@ -74,6 +74,7 @@ import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
 import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
+import { registerMirachSections } from "./mirach-sections";
 import { logInfo, logWarn } from "./kernel-log";
 
 /** 鍐呮牳鎻掍欢婵€娲婚『搴忥紙modules 绯荤粺 bundle id 鈫?瀹炰緥鍖?鈫?cordis plugin锛夈€?*/
@@ -550,6 +551,9 @@ async function bootKernelMirrorOnce(): Promise<void> {
     } catch (err) {
       logWarn("dsh-pocket native panel mount failed: %s", err instanceof Error ? err.message : String(err));
     }
+    // ── mirach 自有分区槽位化：注册进官方 settings.section（所有权移交后
+    //    官方面板导航自动混排；slots.inject 等声明落地，时机安全）
+    registerMirachSections(ctx);
     bridge = createDshBridge();
 
     const sessions = (ctx as unknown as { sessions: KernelSessions }).sessions;

@@ -1,19 +1,17 @@
 /**
- * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
+ * SettingsOverlay — mirach 自有设置分区组件库
+ * （对话风格 / 记忆 / 归档会话 / 安全 / Git 账户 / 键盘快捷键 / 使用统计 / 关于；
+ * 设置页 UI 所有权已移交官方——本文件只保留分区组件，供 dsh-kernel/mirach-sections
+ * 以官方 settings.section 条目形态注册进官方面板导航。）
  */
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@nanostores/react";
-import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
-import { nativeSettingsSections, nativeSlotSubscribe } from "@/dsh-kernel/boot";
-import { OfficialEntry, MiniBoundary } from "@/components/settings/OfficialContent";
 import { cn } from "@/lib/utils";
-import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
 import { useI18n, type Lang } from "@/lib/i18n";
 import { useTheme } from "@/hooks/useTheme";
-import { useAppConfig } from "@/hooks/useAppConfig";
 import { $providerConfig, removeProviderConfig, type ProviderConfig } from "@/store/providerConfig";
 import { $environments, envById, $envVersion, saveEnvironments, type EnvProfile } from "@/store/environments";
 import { $passwordEnabled, clearAppPassword, enableAppPassword, hasPasswordData, setAppPassword, verifyAppPassword } from "@/store/password";
@@ -37,49 +35,16 @@ import {
 } from "@/store/ui-settings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ProviderConnectPanel, EditProviderForm } from "@/components/layout/ProviderConnectPanel";
+import { motion, AnimatePresence } from "motion/react";
 import {
-  Archive,
-  ChartBar,
   ChevronDown,
   Copy,
-  Download,
-  GitBranch,
-  Info,
-  Keyboard,
-  Lock,
   Pencil,
-  RefreshCw,
   Search,
-  Settings2,
   FolderOpen,
-  Package,
   Rocket,
   Trash2,
-  Upload,
-  Brain,
-  Users,
-  type LucideIcon,
-  Layers,
 } from "lucide-react";
-
-interface SettingsSection {
-  id: string;
-  icon: LucideIcon;
-}
-
-const SECTIONS: SettingsSection[] = [
-  // mirach 独有分区（对话风格/环境/团队/记忆等）
-  { id: "chat-style", icon: Settings2 },
-  { id: "agents", icon: Users },
-  { id: "memory", icon: Brain },
-  { id: "sessions", icon: Archive },
-  { id: "safety", icon: Lock },
-  { id: "git", icon: GitBranch },
-  { id: "keybinds", icon: Keyboard },
-  { id: "usage", icon: ChartBar },
-  { id: "envs", icon: Layers },
-  { id: "about", icon: Info },
-];
 
 // ---- 表单控件 ----
 
@@ -690,7 +655,7 @@ function WorkEnvironmentsSection() {
 
 // ---- Safety ----
 
-function SafetyContent() {
+export function SafetyContent() {
   const { t } = useI18n();
   const pwEnabled = useStore($passwordEnabled);
   const approvalMode = useStore($approvalMode);
@@ -758,7 +723,7 @@ function SafetyContent() {
 
 // ---- Git 账户 ----
 
-function GitContent() {
+export function GitContent() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -957,7 +922,7 @@ function formatCombo(combo: string): string {
     .join(" ");
 }
 
-function KeybindsContent() {
+export function KeybindsContent() {
   const { t } = useI18n();
   const [map, setMap] = useState<Record<string, string>>(bindings);
   const [capturing, setCapturing] = useState<string | null>(null);
@@ -1368,7 +1333,7 @@ export function PluginsContent() {
 
 // ---- Archived ----
 
-function SessionsContent() {
+export function SessionsContent() {
   const { t } = useI18n();
   const sessions = [
     { title: "主项目会话", meta: "hermes-chat · 42 条消息" },
@@ -1714,7 +1679,7 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
-function UsageContent() {
+export function UsageContent() {
   const usage = useStore($usage);
   const totalTokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.reasoningTokens;
   const cacheHit = usage.inputTokens > 0
@@ -1795,7 +1760,7 @@ const UNINSTALL_OPTIONS = [
   { id: "everything", label: "全部卸载", desc: "删除程序、配置、缓存与全部数据（不可恢复）" },
 ];
 
-function AboutContent() {
+export function AboutContent() {
   const { t } = useI18n();
   const [uninstallMode, setUninstallMode] = useState("gui");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -2010,199 +1975,7 @@ function AboutContent() {
   );
 }
 
-// ---- 主组件 ----
-
-export function SettingsOverlay({ initialSection = "general", onClose }: { initialSection?: string; onClose?: () => void }) {
-  const { t } = useI18n();
-  const { reload } = useAppConfig();
-  const [active, setActive] = useState(initialSection);
-  const fileRef = useRef<HTMLInputElement>(null);
-  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件）。
-  // 订阅 slot ledger 变更（与官方 shell 同构：subscribe + getVersion 快照），
-  // 分区注册/卸载即时反映，无需轮询。
-  const officialSections = useSyncExternalStore(
-    (cb) => nativeSlotSubscribe("settings.section", cb),
-    () => nativeSettingsSections(),
-    () => nativeSettingsSections(),
-  );
-
-  // 导出配置 → 下载 config.json
-  const exportConfig = async () => {
-    try {
-      const cfg = await invoke<Record<string, unknown>>("get_config");
-      const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "hermes-config.json";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      window.alert(`导出失败：${String(e)}`);
-    }
-  };
-
-  // 导入配置 → 解析 JSON → set_config 逐项写回（全字段，避免丢 apiBase/apiToken/hermesBin/dataDir）
-  const importConfig = async (file: File) => {
-    try {
-      const obj = JSON.parse(await file.text()) as Record<string, unknown>;
-      const str = (k: string): string | null => (typeof obj[k] === "string" ? (obj[k] as string) : null);
-      await invoke("set_config", {
-        workspace: str("workspace"),
-        mirachHome: str("mirachHome"),
-        browserHome: str("browserHome"),
-        engineBase: str("engineBase"),
-        apiBase: str("apiBase"),
-        apiToken: str("apiToken"),
-        hermesBin: str("hermesBin"),
-        dataDir: str("dataDir"),
-      });
-      await reload();
-      window.alert("配置已导入");
-    } catch (e) {
-      window.alert(`导入失败：${String(e)}`);
-    }
-  };
-
-  // 恢复默认 → 删除 config.json
-  const resetConfig = async () => {
-    if (!window.confirm("恢复默认配置？当前自定义配置将被清除。")) return;
-    try {
-      await invoke("reset_config");
-      await reload();
-    } catch (e) {
-      window.alert(`重置失败：${String(e)}`);
-    }
-  };
-
-  const renderContent = () => {
-    // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
-    const official = officialSections.find((s) => s.id === active);
-    if (official) {
-      // 官方条目没有可直调的 render()——内容经 OfficialEntry 渲染
-      // （官方组件 + mirach 令牌 UI；条目级错误边界兜底，不炸设置页）。
-      // 分区级再包一层边界：官方向 uSES/测量类原语在数据未就绪时可能整体
-      // 抛 "Maximum update depth exceeded"（React 根级未捕获会卸载整个应用），
-      // 分区边界兜住后设置页其余分区仍可正常切换。
-      return (
-        <div key={`official-${active}`} className="tavern-native-host h-full overflow-y-auto p-4">
-          <MiniBoundary>
-            <OfficialEntry entry={official} onClose={onClose} />
-          </MiniBoundary>
-        </div>
-      );
-    }
-    switch (active) {
-      case "chat-style": return <GeneralContent key="chat-style" />;
-      case "memory": return <MemorySection key="memory" />;
-      case "sessions": return <SessionsContent />;
-      case "safety": return <SafetyContent />;
-      case "git": return <GitContent />;
-      case "keybinds": return <KeybindsContent />;
-      case "usage": return <UsageContent />;
-      case "envs": return <EnvSettingsSection />;
-      case "about": return <AboutContent />;
-      default: return null;
-    }
-  };
-
-  return (
-    <div className="settings-dropdown flex h-full">
-      <div className="flex w-56 shrink-0 flex-col border-r border-border">
-        <div className="min-h-0 flex-1 overflow-y-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {SECTIONS.filter((s) => s.id !== "envs").map((s) => (
-            <NavItem key={s.id} id={s.id} icon={s.icon} active={active === s.id} onClick={() => setActive(s.id)} />
-          ))}
-          {/* 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件） */}
-          {officialSections.length > 0 && (
-            <>
-              <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-muted-foreground/60">官方 / 插件</p>
-              {officialSections.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setActive(s.id)}
-                  className={cn(
-                    "flex w-full items-center gap-2.5 px-4 py-1.5 text-left text-body-sm transition-colors",
-                    active === s.id ? "bg-muted font-medium text-[#303030]" : "text-[#464646] hover:bg-muted/60",
-                  )}
-                >
-                  <Package className="h-4 w-4 shrink-0" strokeWidth={2} />
-                  <span className="truncate">{s.label}</span>
-                </button>
-              ))}
-            </>
-          )}
-          <NavItem id="envs" icon={Layers} active={active === "envs"} onClick={() => setActive("envs")} />
-        </div>
-        <div className="flex shrink-0 items-center justify-center gap-1 border-t border-border py-2">
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void importConfig(f);
-              e.target.value = "";
-            }}
-          />
-          {[
-            { icon: Download, title: t("settings.exportConfig"), run: () => void exportConfig() },
-            { icon: Upload, title: t("settings.importConfig"), run: () => fileRef.current?.click() },
-            { icon: RefreshCw, title: t("settings.resetToDefaults"), danger: true, run: () => void resetConfig() },
-          ].map((b, i) => (
-            <button
-              key={i}
-              title={b.title}
-              onClick={b.run}
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md text-[#464646] transition-colors hover:bg-muted",
-                b.danger && "hover:text-[#EF4444]",
-              )}
-            >
-              <b.icon className="h-4 w-4" strokeWidth={2} />
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="px-5 py-3">
-          {/* 官方分区标题用其注册的 label（locale thunk 已求值）；mirach 分区沿用词典 */}
-          <h3 className="text-member font-medium text-[#303030]">
-            {officialSections.find((s) => s.id === active)?.label ?? t(`settings.${active}`)}
-          </h3>
-        </div>
-        {renderContent()}
-      </div>
-    </div>
-  );
-}
-
-function NavItem({ id, icon: Icon, active, onClick }: { id: string; icon: LucideIcon; active: boolean; onClick: () => void }) {
-  const { t } = useI18n();
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-2.5 px-4 py-1.5 text-left text-body-sm transition-colors",
-        active ? "bg-muted font-medium text-[#303030]" : "text-[#464646] hover:bg-muted/60",
-      )}
-    >
-      <Icon className="h-4 w-4 shrink-0" strokeWidth={2} />
-      <span className="truncate">{t(`settings.${id}`)}</span>
-    </button>
-  );
-}
-
-// ================================================================
-// MemorySection — 环境记忆（per-env MEMORY.md / USER.md）
-// 记忆文件 = <环境工作区>/.mirach/MEMORY.md（环境记忆）+ USER.md（用户档案）。
-// sidecar 在 set_env 时把内容注入该环境全部对话（主对话 + 成员）的系统提示，
-// AI 亦按注入的维护约定用文件工具自行更新。cwd 即环境边界 → 记忆天然按环境
-// 隔离；工作区未设置的环境回退用户主目录。
-// ================================================================
-
-function MemorySection() {
+export function MemorySection() {
   const envs = useStore($environments);
   const engineEnvId = useStore($engineEnv).id;
   const [tab, setTab] = useState<string | null>(null);
@@ -2320,4 +2093,3 @@ function MemorySection() {
     </div>
   );
 }
-

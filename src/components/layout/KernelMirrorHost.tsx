@@ -17,6 +17,7 @@
 
 import { Component, useEffect, useState, type ReactNode } from "react";
 import { deliverSlotDeclarations, kernelContext, nativeRenderReady, nativeRootTree } from "@/dsh-kernel/boot";
+import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
 
 const RETRY_MS = 1500;
 const RETRY_MAX = 20;
@@ -71,7 +72,9 @@ export function KernelMirrorHost() {
           setState 死循环（Maximum update depth）→ 整树崩。官方 web 是
           全尺寸单容器，本页按同样尺寸放一层隐形官方树即等价。
           inert + pointer-events:none：不可聚焦/不可交互，不干扰 mirach 界面；
-          z-index:-1 + opacity:0 + overflow:hidden：不参与视觉。 */}
+          z-index:-1 + opacity:0 + overflow:hidden：不参与视觉。
+          皮肤层：容器挂 DSW 令牌——设置页所有权移交官方后，官方面板在
+          浮出（settings-surface）时读到的就是 mirach 色板/字体/圆角。 */}
       <div
         data-kernel-mirror
         aria-hidden
@@ -85,6 +88,7 @@ export function KernelMirrorHost() {
           opacity: 0,
           overflow: "hidden",
           pointerEvents: "none",
+          ...DSW_ALIAS_VARS,
         }}
       >
         {node}
