@@ -66,7 +66,27 @@ export function KernelMirrorHost() {
   if (node === null) return null;
   return (
     <KernelBoundary>
-      <div data-kernel-mirror aria-hidden style={{ display: "none" }}>
+      {/* 官方树按真实窗口尺寸隐形渲染：官方组件里有基于测量的 effect
+          （如 HoverCard 的定位两次 clamp），0×0 容器会让测量值永远不稳 →
+          setState 死循环（Maximum update depth）→ 整树崩。官方 web 是
+          全尺寸单容器，本页按同样尺寸放一层隐形官方树即等价。
+          inert + pointer-events:none：不可聚焦/不可交互，不干扰 mirach 界面；
+          z-index:-1 + opacity:0 + overflow:hidden：不参与视觉。 */}
+      <div
+        data-kernel-mirror
+        aria-hidden
+        inert
+        style={{
+          position: "fixed",
+          inset: 0,
+          width: "100vw",
+          height: "100vh",
+          zIndex: -1,
+          opacity: 0,
+          overflow: "hidden",
+          pointerEvents: "none",
+        }}
+      >
         {node}
       </div>
     </KernelBoundary>

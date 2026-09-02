@@ -17,7 +17,7 @@ export const DSW_ALIAS_VARS = {
   "--dsw-alias-border-l1": "#E5E7EB",
   "--dsw-alias-border-l2": "#E5E7EB",
   "--dsw-alias-border-default": "#D1D5DB",
-  "--dsw-alias-bg-base": "#1A1A1A",
+  "--dsw-alias-bg-base": "#FFFFFF",
   "--dsw-alias-bg-layer-1": "#FFFFFF",
   "--dsw-alias-bg-layer-2": "#F5F6F8",
   "--dsw-alias-brand-primary": "#017CF3",

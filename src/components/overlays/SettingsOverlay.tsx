@@ -2,14 +2,13 @@
  * SettingsOverlay — 设置面板（精简版：通用设置 / 模型 / 插件 / 智能体预设 / 智能体团队 / 归档会话 / 安全 / 键盘快捷键 / 使用统计 / 关于）
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useStore } from "@nanostores/react";
 import { motion, AnimatePresence } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
-import { nativeSettingsSections } from "@/dsh-kernel/boot";
-import { OfficialEntry } from "@/components/settings/OfficialContent";
-import { DSW_ALIAS_VARS } from "@/components/settings/AgentTeam";
+import { nativeSettingsSections, nativeSlotSubscribe } from "@/dsh-kernel/boot";
+import { OfficialEntry, MiniBoundary } from "@/components/settings/OfficialContent";
 import { cn } from "@/lib/utils";
 import { EnvSettingsSection } from "@/components/settings/EnvSettingsSection";
 import { useI18n, type Lang } from "@/lib/i18n";
@@ -2020,22 +2019,14 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
   const { reload } = useAppConfig();
   const [active, setActive] = useState(initialSection);
   const fileRef = useRef<HTMLInputElement>(null);
-  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件如酒馆管理）。
-  // 内核声明链需要官方根树挂载后才 live（KernelMirrorHost 挂载在 App 树里，
-  // 但可能晚于设置页打开，这里持续轮询直到非空或超时）。
-  const [officialSections, setOfficialSections] = useState(() => nativeSettingsSections());
-  useEffect(() => {
-    if (officialSections.length > 0) return;
-    let left = 24;
-    const timer = (): void => {
-      const next = nativeSettingsSections();
-      setOfficialSections(next);
-      left -= 1;
-      if (next.length === 0 && left > 0) window.setTimeout(timer, 1500);
-    };
-    const t = window.setTimeout(timer, 1500);
-    return () => window.clearTimeout(t);
-  }, [officialSections.length]);
+  // 官方 settings.section 槽位分区（dsh 内核注册，含第三方插件）。
+  // 订阅 slot ledger 变更（与官方 shell 同构：subscribe + getVersion 快照），
+  // 分区注册/卸载即时反映，无需轮询。
+  const officialSections = useSyncExternalStore(
+    (cb) => nativeSlotSubscribe("settings.section", cb),
+    () => nativeSettingsSections(),
+    () => nativeSettingsSections(),
+  );
 
   // 导出配置 → 下载 config.json
   const exportConfig = async () => {
@@ -2088,13 +2079,18 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
 
   const renderContent = () => {
     // 官方 settings.section 槽位（dsh 内核注册的分区，含第三方插件）
-    const official = nativeSettingsSections().find((s) => s.id === active);
+    const official = officialSections.find((s) => s.id === active);
     if (official) {
       // 官方条目没有可直调的 render()——内容经 OfficialEntry 渲染
-      // （官方组件 + mirach 令牌 UI；条目级错误边界兜底，不炸设置页）
+      // （官方组件 + mirach 令牌 UI；条目级错误边界兜底，不炸设置页）。
+      // 分区级再包一层边界：官方向 uSES/测量类原语在数据未就绪时可能整体
+      // 抛 "Maximum update depth exceeded"（React 根级未捕获会卸载整个应用），
+      // 分区边界兜住后设置页其余分区仍可正常切换。
       return (
-        <div key={`official-${active}`} className="tavern-native-host h-full overflow-y-auto p-4" style={DSW_ALIAS_VARS}>
-          <OfficialEntry entry={official} onClose={onClose} />
+        <div key={`official-${active}`} className="tavern-native-host h-full overflow-y-auto p-4">
+          <MiniBoundary>
+            <OfficialEntry entry={official} onClose={onClose} />
+          </MiniBoundary>
         </div>
       );
     }
@@ -2174,7 +2170,10 @@ export function SettingsOverlay({ initialSection = "general", onClose }: { initi
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="px-5 py-3">
-          <h3 className="text-member font-medium text-[#303030]">{t(`settings.${active}`)}</h3>
+          {/* 官方分区标题用其注册的 label（locale thunk 已求值）；mirach 分区沿用词典 */}
+          <h3 className="text-member font-medium text-[#303030]">
+            {officialSections.find((s) => s.id === active)?.label ?? t(`settings.${active}`)}
+          </h3>
         </div>
         {renderContent()}
       </div>

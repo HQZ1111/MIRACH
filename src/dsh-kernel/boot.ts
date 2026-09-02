@@ -126,6 +126,9 @@ export function kernelDeliveryLog(): string {
   return deliveryLog;
 }
 
+/** 声明骨架注册的 disposer（内核重载时释放） */
+let slotDisposers: (() => void)[] = [];
+
 /**
  * mirach 侧补登记官方 slot 声明骨架（sidebar → sidebar.settings →
  * settings.section）。必须在官方根树挂载之后调用（KernelMirrorHost）：
@@ -134,47 +137,85 @@ export function kernelDeliveryLog(): string {
  * mirach 内核中静默未达。此处注册骨架条目，且占位组件渲染自己的子槽
  * （renderSlot）——子条目随之被渲染、声明链逐级 live，官方设置分区包
  * （settings-general/models/plugins/…）随即回应声明注册分区条目。
+ *
+ * 只在官方 sidebar 缺席时注册（register 时检查 entriesOfSlot），且用高
+ * priority（100）占闲置位：official 在 0 位渲染、本骨架永不出场；官方缺失
+ * 时才成为单元格头开始渲染、逐级激活声明链。sidebar.settings 不需要骨架——
+ * single 槽位由官方 ui-settings-general 经 slots.inject 在声明落地时注册，
+ * 再注册同 priority 直接撞车（"already has a registration at priority 0"）。
  */
 export function deliverSlotDeclarations(ctx: Context): string {
   try {
     const slots = (ctx as unknown as { slots?: unknown }).slots as
-      | { register?: (entry: Record<string, unknown>, component?: unknown) => unknown }
+      | {
+          register?: (entry: Record<string, unknown>, component?: unknown) => (() => void) | unknown;
+          entriesOfSlot?: (key: string) => unknown[];
+        }
       | undefined;
-    if (typeof slots?.register !== "function") return "ERR: register missing";
+    if (typeof slots?.register !== "function") {
+      deliveryLog = "ERR: register missing";
+      return deliveryLog;
+    }
     function EmptySlot(props: { renderSlot?: (key: string, owner: object) => unknown }) {
       return typeof props.renderSlot === "function" ? props.renderSlot("sidebar.settings", {}) : null;
     }
-    function EmptySettings(props: { renderSlot?: (key: string, owner: object) => unknown }) {
-      return typeof props.renderSlot === "function" ? props.renderSlot("settings.section", {}) : null;
+    const occupied = slots.entriesOfSlot?.("sidebar")?.length ?? 0;
+    if (occupied === 0) {
+      const d = slots.register(
+        {
+          name: "sidebar",
+          id: "mirach-sidebar",
+          locale: "sidebar",
+          priority: 100, // 官方在场时闲置；缺席才渲染激活声明链
+          children: { "sidebar.settings": { kind: "single", scope: "root" } },
+        },
+        EmptySlot,
+      );
+      if (typeof d === "function") slotDisposers.push(d as () => void);
     }
-    slots.register(
-      {
-        name: "sidebar",
-        id: "mirach-sidebar",
-        locale: "sidebar",
-        children: { "sidebar.settings": { kind: "single", scope: "root" } },
-      },
-      EmptySlot,
-    );
-    slots.register(
-      {
-        name: "sidebar.settings",
-        id: "mirach-sidebar-settings",
-        locale: "sidebar",
-        children: { "settings.section": { kind: "list", scope: "root" } },
-      },
-      EmptySettings,
-    );
-    logInfo("slot declarations delivered (sidebar/sidebar.settings/settings.section)");
-    return "DONE";
+    deliveryLog = `DONE (sidebar occupied=${occupied})`;
+    logInfo("slot declarations delivered: %s", deliveryLog);
+    return deliveryLog;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    deliveryLog = `ERR: ${msg}`;
     logWarn("slot declarations failed: %s", msg);
-    return `ERR: ${msg}`;
+    return deliveryLog;
   }
 }
 
-/** 读取官方 settings.section 槽位全量（含第三方插件注册的分区） */
+/** 空结果常量：uSES getSnapshot 必须返回稳定引用（[] 每次新建会触发重渲染循环） */
+const EMPTY_SECTIONS: ReturnType<typeof nativeSettingsSections> = [];
+const EMPTY_ENTRIES: ReturnType<typeof nativeSlotEntries> = [];
+
+/** 槽位快照缓存：按 (pick:slotKey, version) 缓存，版本不变返回同一引用 */
+let slotCache: { key: string; version: number; list: unknown } | null = null;
+
+function cachedEntriesOf(slotKey: string, pick: "entries" | "entriesOfSlot"): { version: number; list: unknown[] } {
+  const EMPTY: unknown[] = [];
+  if (!kernelCtx) return { version: 0, list: EMPTY };
+  try {
+    const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
+      | {
+          entries?: (name: string) => readonly unknown[];
+          entriesOfSlot?: (name: string) => readonly unknown[];
+          getVersion?: (name: string) => number;
+        }
+      | undefined;
+    const version = slots?.getVersion?.(slotKey) ?? 0;
+    const cacheKey = `${pick}:${slotKey}`;
+    if (slotCache !== null && slotCache.key === cacheKey && slotCache.version === version) {
+      return { version, list: slotCache.list as unknown[] };
+    }
+    const list = (pick === "entries" ? slots?.entries?.(slotKey) : slots?.entriesOfSlot?.(slotKey)) ?? [];
+    slotCache = { key: cacheKey, version, list: list as unknown[] };
+    return { version, list: list as unknown[] };
+  } catch {
+    return { version: 0, list: EMPTY };
+  }
+}
+
+/** 读取官方 settings.section 槽位全量（含第三方插件注册的分区），按 order 排序 */
 export function nativeSettingsSections(): {
   id: string;
   label: string;
@@ -182,26 +223,49 @@ export function nativeSettingsSections(): {
   inject?: (...args: never[]) => unknown;
   options: Record<string, unknown>;
 }[] {
-  if (!kernelCtx) return [];
+  const { version, list } = cachedEntriesOf("settings.section", "entries");
+  // 被调用方作为 uSES getSnapshot 使用：版本不变必须返回**同一引用**，
+  // 否则每次渲染都新建数组 → "getSnapshot should be cached" 无限循环。
+  if (sectionsCache !== null && sectionsCache.version === version) return sectionsCache.list;
+  const entries = list as {
+    options?: { id?: unknown; label?: unknown; order?: unknown; [k: string]: unknown };
+    component?: unknown;
+    inject?: (...args: never[]) => unknown;
+  }[];
+  const mapped = entries
+    .filter((e) => typeof e.options?.id === "string")
+    .map((e) => ({
+      id: e.options!.id as string,
+      label:
+        typeof e.options!.label === "function"
+          ? (e.options!.label as () => string)()
+          : String(e.options!.label ?? e.options!.id),
+      component: e.component,
+      ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
+      options: e.options ?? {},
+    }))
+    .sort((a, b) => ((a.options.order as number) ?? 0) - ((b.options.order as number) ?? 0));
+  const listOut = mapped.length === 0 ? (EMPTY_SECTIONS as ReturnType<typeof nativeSettingsSections>) : mapped;
+  sectionsCache = { version, list: listOut };
+  return listOut;
+}
+
+let sectionsCache: { version: number; list: ReturnType<typeof nativeSettingsSections> } | null = null;
+
+/** 官方 settings.section 槽位版本（uSES 快照用） */
+export function nativeSectionsVersion(): number {
+  return cachedEntriesOf("settings.section", "entries").version;
+}
+
+/** 订阅任意槽位变更（官方 ledger subscribe；返回退订） */
+export function nativeSlotSubscribe(key: string, fn: () => void): () => void {
+  const ctx = kernelCtx;
+  if (ctx === null) return () => {};
   try {
-    const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
-      | { entries?: (name: string) => { options?: Record<string, unknown>; component?: unknown; inject?: (...args: never[]) => unknown; children?: unknown }[] }
-      | undefined;
-    const entries = slots?.entries?.("settings.section") ?? [];
-    return entries
-      .filter((e) => typeof e.options?.id === "string")
-      .map((e) => ({
-        id: e.options!.id as string,
-        label:
-          typeof e.options!.label === "function"
-            ? (e.options!.label as () => string)()
-            : String(e.options!.label ?? e.options!.id),
-        component: e.component,
-        ...(typeof e.inject === "function" ? { inject: e.inject } : {}),
-        options: e.options ?? {},
-      }));
+    const slots = (ctx as unknown as { slots?: { subscribe?: (k: string, f: () => void) => () => void } }).slots;
+    return slots?.subscribe?.(key, fn) ?? (() => {});
   } catch {
-    return [];
+    return () => {};
   }
 }
 
@@ -212,22 +276,28 @@ export function nativeSlotEntries(key: string): {
   inject?: (...args: never[]) => unknown;
   options: Record<string, unknown>;
 }[] {
-  if (!kernelCtx) return [];
-  try {
-    const slots = (kernelCtx as unknown as Record<string, unknown>).slots as
-      | { entriesOfSlot?: (name: string) => { options?: Record<string, unknown>; component?: unknown; inject?: (...args: never[]) => unknown }[] }
-      | undefined;
-    const entries = slots?.entriesOfSlot?.(key) ?? [];
-    return entries.map((e) => ({
-      id: typeof e.options?.id === "string" ? e.options.id : undefined,
-      component: e.component,
-      ...(typeof e.inject === "function" ? { inject: e.inject } : {}),
-      options: e.options ?? {},
-    }));
-  } catch {
-    return [];
+  const { version, list } = cachedEntriesOf(key, "entriesOfSlot");
+  // 同版同引用（SlotRow 的 useMemo 依赖 entry 引用；uSES 快照要求稳定）
+  if (entriesCache !== null && entriesCache.key === key && entriesCache.version === version) {
+    return entriesCache.list;
   }
+  const entries = list as {
+    options?: Record<string, unknown>;
+    component?: unknown;
+    inject?: (...args: never[]) => unknown;
+  }[];
+  const mapped = entries.map((e) => ({
+    id: typeof e.options?.id === "string" ? (e.options.id as string) : undefined,
+    component: e.component,
+    ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
+    options: e.options ?? {},
+  }));
+  const listOut = mapped.length === 0 ? (EMPTY_ENTRIES as ReturnType<typeof nativeSlotEntries>) : mapped;
+  entriesCache = { key, version, list: listOut };
+  return listOut;
 }
+
+let entriesCache: { key: string; version: number; list: ReturnType<typeof nativeSlotEntries> } | null = null;
 
 /** 酒馆原生面板入口（内核 slots 系统注册的 settings.section）；未加载返回 null */
 export function nativeTavernSection(): Extract<ReturnType<typeof nativeSettingsSections>, unknown[]> extends infer T
@@ -381,10 +451,38 @@ export function nativeCollapsePanels(): void {
 }
 
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
-export async function bootKernelMirror(): Promise<void> {
+/** 并发/重复 boot 去重（kernelSend 惰性重试与首次 boot 可能并发） */
+let bootPromise: Promise<void> | null = null;
+
+export function bootKernelMirror(): Promise<void> {
+  if (bootPromise !== null) return bootPromise;
+  bootPromise = bootKernelMirrorOnce().finally(() => {
+    bootPromise = null;
+  });
+  return bootPromise;
+}
+
+async function bootKernelMirrorOnce(): Promise<void> {
+  // 重跑前释放上一轮骨架注册与槽位缓存（失败重试路径上 slots 可能已在旧 ctx 里）
+  for (const d of slotDisposers) {
+    try {
+      d();
+    } catch {
+      /* disposer 失败不阻塞 */
+    }
+  }
+  slotDisposers = [];
+  slotCache = null;
+  sectionsCache = null;
+  entriesCache = null;
   const pluginFails: string[] = [];
   try {
     const ctx = new Context();
+    // typert 反射根必须先于插件循环：session-controller 的 inject 依赖
+    // ['connection','typert','remote',...]，cordis 只在依赖就绪时才 apply
+    // 插件——typert 后置会让 session-controller 永远挂起（"ctx.sessions
+    // missing — kernel inactive"），整个会话/UI 内核变成半活。
+    new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     for (const id of KERNEL_PLUGINS) {
       const mod = bundleRequire(id) as { inject?: string[]; apply: (c: Context) => unknown };
       if (mod?.apply === undefined) throw new Error(`plugin ${id} has no apply`);
@@ -398,8 +496,6 @@ export async function bootKernelMirror(): Promise<void> {
     }
     // 诊断信号：失败插件清单（日志/仪表盘用）
     lastPluginFails = pluginFails;
-    // typert 客户端反射根：bundle 注册实测不稳定，直接实例化主类（与 client apply 等价）
-    new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     kernelCtx = ctx;
     // ── 酒馆原生面板：ctx.slots/ctx.locale 由上面官方 ui-renderer/locale 提供，
     // 不再需要 shim。直接调 apply(ctx) 注册 settings.section。
