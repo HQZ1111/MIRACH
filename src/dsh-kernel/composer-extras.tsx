@@ -2,18 +2,12 @@
  * composer-extras — 把 mirach 输入框特有控件注入官方 InputBar 的子槽位
  *
  * 官方输入条（ui-conversation InputBar）声明了 conversation.input.left /
- * right 子槽（left = 工具组、right = 模型座位同组）。本模块把 mirach 有、
- * 官方没有的输入框控件以官方槽位条目形态注册进去——官方更新输入条布局时
- * 这些控件自动跟随官方工具行排布。
+ * right 子槽（left = 工具组、right = 模型/发送组）。本模块把 mirach 有、
+ * 官方没有的输入框控件以官方槽位条目形态注册进去。
  *
- * 注入位置 = conversation.input.left（工具组，+号/权限预设同一行）——
- * 用户要求终端/语音/朗读等放在左边。
- *
- * 当前注入（全部真接线，非摆设）：
- *  - 朗读回复：$autoSpeak（chat store）真实开关，AI 回复经 TTS 朗读
- *  - 终端：派发 mirach:toggle-terminal → MainPanel 切换内嵌终端面板
- *  - 语音听写：handleDictate 链路（SpeechRecognition API）
- *  - 唤醒词：wake word 切换（待接入 hey-hermes 引擎侧，UI 开关先行）
+ * 注入布局（用户指定）：
+ *   left 工具组:  +号(built-in) → 权限预设(official) → 终端(our)
+ *   right 尾组:   听写(our) → 唤醒(our) → 朗读(our) → 模型(official) → 上下文(official) → 发送(built-in)
  *
  * 组件本体保持 mirach 实现（nanostores/lucide 在同一 React 树），只借官方
  * 槽位获得官方排布与主题令牌（容器由官方渲染，无需自挂 DSW alias）。
@@ -96,7 +90,6 @@ function DictationToggle() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recRef = useRef<any>(null);
 
-  // 清理（卸载时结束识别）
   useEffect(() => () => { try { recRef.current?.stop(); } catch { /* ignore */ } }, []);
 
   const toggle = () => {
@@ -128,7 +121,6 @@ function DictationToggle() {
         const results = (e as unknown as { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }).results;
         let text = "";
         for (let i = 0; i < results.length; i++) text += results[i][0].transcript;
-        // 经全局事件把识别文本送入官方编辑器（InputBar contenteditable）
         window.dispatchEvent(new CustomEvent("mirach:dictation-text", { detail: text }));
       };
       rec.onend = () => setDictating(false);
@@ -155,14 +147,18 @@ function DictationToggle() {
   );
 }
 
-/** 官方输入条 left 槽（工具组，+号同行）的 mirach 附加控件组 */
-function ComposerExtras() {
+/** left 槽：终端（权限预设右边） */
+function LeftExtras() {
+  return <TerminalToggle />;
+}
+
+/** right 槽：听写 → 唤醒 → 朗读（模型左边） */
+function RightExtras() {
   return (
     <>
-      <TerminalToggle />
-      <SpeakToggle />
-      <WakeToggle />
       <DictationToggle />
+      <WakeToggle />
+      <SpeakToggle />
     </>
   );
 }
@@ -170,6 +166,8 @@ function ComposerExtras() {
 /**
  * 注册 mirach 附加控件进官方输入条子槽（boot 后调用一次；幂等——
  * 重复注册被官方 register 拒绝并告警）。
+ * left: 终端（权限预设右边，order 100 排官方后）
+ * right: 听写/唤醒/朗读（模型左边，负 order 排官方前）
  */
 export function registerComposerExtras(ctx: Context): void {
   try {
@@ -182,11 +180,17 @@ export function registerComposerExtras(ctx: Context): void {
     }
     slots.inject("conversation.input.left", () => {
       ctx.slots.register(
-        { name: "conversation.input.left", id: "mirach-extras", order: 50 },
-        ComposerExtras as never,
+        { name: "conversation.input.left", id: "mirach-terminal", order: 100 },
+        LeftExtras as never,
       );
     });
-    logInfo("composer extras registered: conversation.input.left");
+    slots.inject("conversation.input.right", () => {
+      ctx.slots.register(
+        { name: "conversation.input.right", id: "mirach-voice-extras", order: -50 },
+        RightExtras as never,
+      );
+    });
+    logInfo("composer extras registered: left=terminal, right=dictation+wake+speak");
   } catch (err) {
     logWarn("composer extras registration failed: %s", err instanceof Error ? err.message : String(err));
   }
