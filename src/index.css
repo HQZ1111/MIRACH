@@ -635,3 +635,40 @@ html.dark .chat-backdrop-on {
   border-color: #C7CFE2;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.05);
 }
+
+/* +号按钮：去掉官方一直高亮的 outline/背景，对齐 mirach ghost 图标 */
+.dsh-native-area [data-composer-card] [class*="_add"] {
+  outline: none !important;
+  outline-offset: 0 !important;
+  background: transparent !important;
+}
+.dsh-native-area [data-composer-card] [class*="_add"]:hover {
+  background: rgba(0, 0, 0, 0.05) !important;
+  border-radius: 8px;
+}
+.dsh-native-area [data-composer-card] [class*="_add"]:focus-visible {
+  outline: 2px solid #6366F1 !important;
+  outline-offset: 1px !important;
+  border-radius: 8px;
+}
+
+/* 发送按钮：mirach 原样式（靛蓝圆角，不用官方蓝色纯圆） */
+.dsh-native-area [data-composer-card] [class*="_primary"] {
+  background: #6366F1 !important;
+  border-radius: 12px !important;
+  width: 34px !important;
+  height: 34px !important;
+}
+.dsh-native-area [data-composer-card] [class*="_primary"]:hover {
+  background: #5558E3 !important;
+}
+.dsh-native-area [data-composer-card] [class*="_primary"]:disabled {
+  background: #D1D5DB !important;
+  opacity: 0.6;
+}
+
+/* mirach 令牌注入：官方编辑器 placeholder 字色/字距对齐 mirach 输入框 */
+.dsh-native-area [data-composer-card] [contenteditable="true"]:empty::before {
+  color: #9CA3AF;
+  font-size: 13px;
+}
