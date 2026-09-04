@@ -21,9 +21,9 @@ Mirach = DeepSeek Harness (dsh) 引擎的桌面前端。Tauri 2 + React 19 自�
 **仓库**：
 - mirach 应用：Gitee `HANQINGZHOU/mirach` + GitHub `HQZ1111/MIRACH`（双远程）
 - 整体工作区（含官方 dsh 源码 + mirach 子模块）：Gitee `HANQINGZHOU/mirach-harness`（仅 Gitee，GitHub 推送已取消）
-- 工作目录：`G:\deepseek-harness-master\apps\mirach`（官方 0.1.2-alpha.1 workspace 成员）
+- 工作目录：`G:\deepseek-harness-master\apps\mirach`（官方 0.1.2-alpha.4 workspace 成员）
 
-**官方 dsh 引擎**：npm `@deepseek-ai/dsh`，当前全局安装 **0.1.2-alpha.3**（alpha 通道）。更新 = `npm i -g @deepseek-ai/dsh@alpha` 一条命令 + 重启。
+**官方 dsh 引擎**：npm `@deepseek-ai/dsh`，当前全局安装 **0.1.2-alpha.5**（alpha 通道）。更新 = `npm i -g @deepseek-ai/dsh@alpha` 一条命令 + 重启。
 
 ---
 
@@ -32,7 +32,7 @@ Mirach = DeepSeek Harness (dsh) 引擎的桌面前端。Tauri 2 + React 19 自�
 ```
 Tauri 壳（Rust）
  ├─ WebView（mirach React 前端，端口 1420 dev）
- │   └─ src/dsh-kernel/boot.ts → 内核加载官方 client 栈（14 个包）+ dsh-tavern
+ │   └─ src/dsh-kernel/boot.ts → 内核加载官方 client 栈（KERNEL_PLUGINS 41 bundle）+ dsh-tavern
  ├─ src-tauri（Rust 中继：sidecar 管理、文件操作、git、手机接入 web_host）
  └─ agent-sidecar（Node 进程，stdin/stdout JSON-RPC）
       ├─ 引擎启动：dsh.cmd --profile mirach（npm 全局安装的 dsh CLI）
@@ -55,7 +55,7 @@ Tauri 壳（Rust）
 ## 3. 已完成功能
 
 ### 对话与渲染
-- 三种对话风格：Zosma（自定义气泡）/ dsh 风格（官方 web UI iframe 嵌入）/ 紧凑
+- 三种对话风格：默认（mirach 气泡 UI）/ dsh（官方 ConversationRoot 原生渲染，无 iframe）/ 简约（zosma 组件树）
 - 消息定位器 TurnNavigator（官方组件移植，右侧回合导航轨）
 - StatsLine（官方投影字段：工作/思考时长、首字、tok/s、缓存、四桶 token）
 - 等待指示（头像+名字+思考气泡+工作中计时，Virtuoso Footer）
@@ -83,7 +83,7 @@ Tauri 壳（Rust）
 
 ### 基础设施
 - 引擎 npm 全局安装（更新 = npm i -g @deepseek-ai/dsh@alpha + 重启）
-- 内核加载完整官方 client 栈（14 包：connection/gateway/remotes/session-controller/ui-renderer/locale/settings/session/workspace/theme/layout/conversation/chat/tavern）
+- 内核加载完整官方 client 栈（KERNEL_PLUGINS 41 bundle：连接/gateway/remotes/session-controller/workspace-controller + 全套 client UI 包（renderer/locale/settings 及分区包/session/workspace/theme/layout/sidebar/conversation/chat/tool/attachment/reference/brand-official + 输入框/对话区/能力包/定时/目录选择器栈）；酒馆与 dsh-pocket 经 apply 侧载）
 - 插件一键安装器（npm 搜索发现 + 安装/卸载 + 步骤日志）
 - 环境记忆（per-env MEMORY.md + USER.md，sidecar set_env 注入，AI 自维护）
 - About 双标签（Mirach/引擎）+ 真实版本检查 + 一键更新 + 自动更新开关 + 更新内容展示
@@ -150,7 +150,7 @@ Tauri 壳（Rust）
 ### 启动
 ```
 cd G:\deepseek-harness-master\apps\mirach
-npm run dev          # 前端 + Tauri（自动拉起 sidecar → 引擎）
+pnpm tauri dev       # 前端 + Tauri（自动拉起 sidecar → 引擎）
 ```
 
 ### 引擎更新（一条命令）
@@ -173,7 +173,7 @@ npm i -g @deepseek-ai/dsh@alpha
 ## 6. 已知限制 / 待做
 
 ### 待做（按优先级）
-1. **dsh 风格完整官方 ChatView 渲染**：内核已加载全部 14 个 client 包，但 mirach 的 MessageList 尚未替换为官方 ChatView。需要从 dsh-assembly 数据构造官方 ChatSnapshot 并喂给 ChatView。做完后 dsh 风格 = 官方对话区完整体验 + 自动跟随更新。
+1. **dsh 风格完整官方 ChatView 渲染**：内核已加载全部 41 个官方 bundle；chatStyle=dsh 已由 NativeChatArea 直挂官方 ConversationRoot 树。剩余为官方会话数据接通后的完整体验对齐（对齐后 dsh 风格 = 官方对话区完整体验 + 自动跟随更新）。
 2. **群聊增强**：状态栏卡片/剧情选项按钮在群聊已生效，但群聊上下文靠 prompt 注入最近 12 条（各成员保有自己会话记忆）。
 3. **手机端**：设置 → 手机接入 → 开开关 → 重启 → 扫码即用。公网需隧道+HTTPS。
 4. **dsh-agent-rp**：npm 上不存在（404），待用户提供来源。
@@ -192,8 +192,8 @@ npm i -g @deepseek-ai/dsh@alpha
 
 - **数据目录**：`C:\Users\Administrator\.mirach`（会话/插件/存储/profiles）
 - **酒馆数据根**：`C:\Users\Administrator\.dsh\.agent-presets`（插件硬编码 homedir）
-- **引擎源码**：`G:\deepseek-harness-master`（官方 workspace 0.1.2-alpha.1 源码）
-- **npm 引擎**：全局 `@deepseek-ai/dsh@alpha`（0.1.2-alpha.3）
+- **引擎源码**：`G:\deepseek-harness-master`（官方 workspace 0.1.2-alpha.4 源码）
+- **npm 引擎**：全局 `@deepseek-ai/dsh@alpha`（0.1.2-alpha.5）
 - **社区插件目录**：`C:\Users\Administrator\.mirach\dsh-plugins\node_modules`
 - **Gitee PAT**：`scripts/_gitee_pat.txt`（已 gitignore）
 - **API Key**：本机 providerConfig（localStorage），代码中无硬编码

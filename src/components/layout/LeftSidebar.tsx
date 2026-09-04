@@ -94,6 +94,7 @@ import { MOCK } from "@/lib/mock";
 import { newTaskSession } from "@/store/chat";
 import { requestTrajectory } from "@/store/chat-history";
 import { openPrompt } from "@/store/prompt-dialog";
+import { kernelSearchSessions } from "@/lib/kernel-search";
 import type { SessionHit } from "@/lib/api/types";
 
 // ===== View config =====
@@ -301,16 +302,27 @@ export function LeftSidebar({
     }
     setHitsLoading(true);
     const t = window.setTimeout(() => {
-      void getApi()
-        .searchSessions(searchQuery.trim())
-        .then((h) => {
+      void (async () => {
+        // 引擎全文检索优先（session-query-sqlite FTS5：原始事件流，比 Rust FTS5 镜像更全更准）；
+        // dsh 会话 id 反查映射回前端会话 id（engineDshRef 逆向）。
+        const dshToMirach = new Map<string, string>();
+        for (const [mirId, dshId] of engineDshRef.current) dshToMirach.set(dshId, mirId);
+        const kernelHits = await kernelSearchSessions(searchQuery.trim(), dshToMirach);
+        if (kernelHits.length > 0) {
+          setRealHits(kernelHits);
+          setHitsLoading(false);
+          return;
+        }
+        // 引擎无结果或不可用 → 回退 Rust FTS5（sessions.db 标题/预览镜像）
+        try {
+          const h = await getApi().searchSessions(searchQuery.trim());
           setRealHits(h);
           setHitsLoading(false);
-        })
-        .catch(() => {
+        } catch {
           setRealHits([]);
           setHitsLoading(false);
-        });
+        }
+      })();
     }, 250);
     return () => window.clearTimeout(t);
   }, [isReal, searchQuery]);

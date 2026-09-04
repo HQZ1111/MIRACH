@@ -17,31 +17,22 @@ const SURFACE_CLASS = "dsh-settings-surface";
 const STYLE_ID = "dsh-settings-surface-style";
 
 const CSS = `
-/* 背板：镜像容器本体（浮出时抬高到一切 UI 之上） */
+/* 背板与抬层：浮出时镜像容器升到一切 UI 之上（遮罩视觉由官方 mask 层提供，
+   容器本体不再自画背景，避免与官方 --dsw-alias-bg-mask-1 双重叠色） */
 [data-kernel-mirror].${SURFACE_CLASS} {
   opacity: 1 !important;
   z-index: 400 !important;
   pointer-events: auto !important;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(6px);
 }
-/* 官方面板 = sidebar.settings 槽内联的 overlay 对话框（fixed 全屏）。
-   隐藏镜像其余部分（帧整体 visibility:hidden），面板单独可见并约束成
-   居中对话框（mirach 观感）；visibility 可被后代覆盖，正是这个用法。 */
+/* 隐藏镜像其余部分（帧整体 visibility:hidden）；visibility 可被后代覆盖。
+   注意：不再给 overlay 套自定义尺寸/圆角/overflow——官方 panel 自身就是
+   width:800px; height:min(800px,100vh-48px); border-radius:24px 的居中对话框
+   （fixed inset:0 flex 居中），官方更新几何时本视图直接跟随。 */
 [data-kernel-mirror].${SURFACE_CLASS} [data-slot="root"] > div {
   visibility: hidden;
 }
 [data-kernel-mirror].${SURFACE_CLASS} [data-slot="sidebar.settings"] > div {
   visibility: visible;
-  position: fixed;
-  inset: 0;
-  margin: auto;
-  width: min(1020px, 94vw);
-  height: min(680px, 90vh);
-  border-radius: 18px;
-  overflow: hidden;
-  background: var(--dsw-alias-bg-layer-1, #ffffff);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
 }
 `;
 
@@ -98,9 +89,16 @@ export function closeOfficialSettings(): void {
 }
 
 function attachCloseWiring(mirror: HTMLElement, trigger: HTMLButtonElement): void {
-  // 背板点击 = 关闭（背板即容器本体；面板/对话框在其上层，点不到背板）
+  // 背板点击 = 关闭。背板是官方 mask 层（overlay 内 absolute inset:0 的 .WYVdaG_mask，
+  // 类名是 css-modules 哈希，不能写死）——用结构判定：点击目标在 overlay 容器内、
+  // 但不是 panel 及其后代（panel 是 overlay 内除 mask 之外的常驻层）。
+  const overlay = mirror.querySelector<HTMLElement>('[data-slot="sidebar.settings"] > div');
   mirror.onmousedown = (e) => {
-    if (e.target === mirror) closeOfficialSettings();
+    const t = e.target as HTMLElement | null;
+    if (!t || !overlay) return;
+    if (!overlay.contains(t)) return; // 面板外（容器本体，理论上点不到）也可关闭
+    if (t.closest('[class*="_panel"]')) return; // 官方面板靠 css-modules 类名标识面板层
+    closeOfficialSettings();
   };
   // Esc = 关闭
   if (!escAttached) {

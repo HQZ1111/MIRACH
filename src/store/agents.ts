@@ -137,11 +137,10 @@ export function loadAgentsOf(envId: string): ConvItem[] {
     if (raw) {
       const arr = JSON.parse(raw) as ConvItem[];
       if (Array.isArray(arr)) {
-        // 演示种子清洗（真实模式）：id 1~6 是早期硬编码队友
-        const cleaned = MOCK ? arr : arr.filter((a) => !/^[1-6]$/.test(a.id));
-        // 团队种子并入：已存列表缺的成员补上（用户版本优先）
-        const ids = new Set(cleaned.map((a) => a.id));
-        return [...cleaned, ...(MOCK ? [] : seed.filter((s) => !ids.has(s.id)))];
+        // 演示种子清洗（真实模式）：id 1~6 是早期硬编码队友。
+        // 存储列表为权威（早期的"缺谁补谁"种子并入已退役）——
+        // 否则删掉的种子成员会在下次 load 时复活。
+        return MOCK ? arr : arr.filter((a) => !/^[1-6]$/.test(a.id));
       }
     }
   } catch {

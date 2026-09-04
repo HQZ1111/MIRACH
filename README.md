@@ -89,14 +89,14 @@ mirach/
 ## 五、运行
 
 ```bash
-npm install
+pnpm install
 
 # 桌面应用（真实引擎链路；VITE_MOCK=0 已固化于 .env）
-npm run tauri dev
+pnpm tauri dev
 
 # 构建
-npm run build          # 前端产物
-npm run tauri build    # 安装包
+pnpm build             # 前端产物
+pnpm tauri build       # 安装包
 
 # 便携分享包（exe + 便携 Node + 引擎 + 依赖，接收者解压即用）
 powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1

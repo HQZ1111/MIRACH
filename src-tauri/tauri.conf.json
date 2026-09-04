@@ -22,7 +22,8 @@
         "decorations": false,
         "transparent": true,
         "backgroundColor": "#00000000",
-        "shadow": false
+        "shadow": false,
+        "additionalBrowserArgs": "--remote-debugging-port=9222"
       }
     ],
     "security": {

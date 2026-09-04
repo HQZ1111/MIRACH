@@ -45,7 +45,7 @@
 - `src/dsh-kernel/module-loader-shim.ts`：`__ModuleLoader__.load({id,factory})`
   契约、bundle id = 去掉 `/client` 后缀的包名、平台外部依赖表
   （cordis/client-store/ui-slots/ui-primitives/react/jsx-runtime/react-dom/clsx）
-- `boot.ts` KERNEL_PLUGINS：40 个官方 bundle id 清单 + 激活顺序
+- `boot.ts` KERNEL_PLUGINS：41 个官方 bundle id 清单 + 激活顺序
   （**typert 必须先于 session-controller**，后者 inject 依赖 typert）
 - 社区插件侧载：`vite.config.ts` 别名（dsh-tavern/dsh-pocket 的 client bundle
   绝对路径）+ `boot.ts` 侧载 apply；引擎侧 = `~/.mirach/profiles/mirach`

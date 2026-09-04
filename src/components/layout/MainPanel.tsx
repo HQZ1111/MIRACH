@@ -1789,8 +1789,6 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
   const [terminalOpen, setTerminalOpen] = useState(false);
   // ---- 终端高度（手柄拖拽调整；对话区 flex-1 自动吸收变化）----
   const [terminalH, setTerminalH] = useState(MIN_TERMINAL);
-  // ---- dsh 风格官方原生融合就绪（内核 boot + 会话映射成功 → 渲染官方根树）----
-  const [nativeDshOk, setNativeDshOk] = useState(false);
   // Ctrl+O 全局详细/简洁双档（参考 zosma：工具详情/思考一键切换技术视图）。
   // 状态放 MainPanel：ChatSection 卸载（工具类视图）时快捷键仍生效。
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -1954,6 +1952,12 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
     setTerminalH((h) => Math.max(MIN_TERMINAL, Math.min(h - dy, MAX_TERMINAL)));
   // 稳定回调（Composer 已 memo，回调必须引用稳定才不会破坏 memo）
   const toggleTerminal = useCallback(() => setTerminalOpen((v) => !v), []);
+  // 官方输入条里的 mirach「终端」控件（dsh-kernel/composer-extras）经全局事件切换
+  useEffect(() => {
+    const onToggle = () => setTerminalOpen((v) => !v);
+    window.addEventListener("mirach:toggle-terminal", onToggle);
+    return () => window.removeEventListener("mirach:toggle-terminal", onToggle);
+  }, []);
 
   // 6 个 Mirach 环境（hermes 主环境 + chat/code/work/finance/write 5 模式）对应独立环境：
   // 切换模式 = 切换环境身份（左侧栏团队名联动），主内容区保持对话区。
@@ -1961,6 +1965,28 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
   const viewPage = activeView === "mirach" || activeView === "chat" || activeView === "code" || activeView === "work" || activeView === "finance" || activeView === "write"
     ? null
     : activeView;
+
+  // mirach 默认对话区（default 档本体；也是 dsh 档官方树未就绪时的 fallback：
+  // NativeChatArea 在内核/映射就绪前渲染它，就绪后整块换官方根树）
+  const mirachChat = (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <ChatSection detailsExpanded={detailsExpanded} onToggleDetails={toggleDetails} />
+      <Composer
+        terminalOpen={terminalOpen}
+        onToggleTerminal={toggleTerminal}
+      />
+      {/* 会话统计条：输入框底部以下 20px 内、宽度跟随输入框限宽居中
+          （对齐官方 composer.dock；pointer-events-none 不挡交互；
+          对话区变窄时 StatsLine 自带省略号 + 悬停全文） */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-5 items-center justify-center overflow-hidden px-5">
+        <div className="w-full min-w-0" style={{ maxWidth: "var(--chat-composer-max-width, 852px)" }}>
+          <StatsLine msgs={[]} />
+        </div>
+      </div>
+      <ResizeHandle onDrag={dragTerminal} />
+      {terminalOpen && <TerminalPanel height={terminalH} onClose={() => setTerminalOpen(false)} />}
+    </div>
+  );
 
   return (
     // 主面板【不建】isolate 层叠上下文：isolate 会把整个面板压到 z-0 层，搜索框(z-50)/
@@ -2001,34 +2027,16 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
               </div>
             )}
             {/* 简约对话档：zosma ChatView 全套（自带 MessageInput），
-               替换现有消息区 + Composer + 终端（终端仅默认/dsh 档使用）。
-               dsh 档：内核就绪时渲染官方根树（官方 ChatView + 官方 Composer
-               原生融合，官方更新即跟随）；否则回退紧凑行式。 */}
-            {chatStyle === "dsh" && nativeDshOk ? (
-              <NativeChatArea
-                sessionId={activeId}
-                onReady={setNativeDshOk}
-              />
+                替换现有消息区 + Composer + 终端（终端仅默认/dsh 档使用）。
+                dsh 档：NativeChatArea 常驻——内核/映射就绪前渲染 mirachChat
+                占位，就绪后整块换官方根树（官方 ChatView + 官方 Composer
+                原生融合，官方更新即跟随）。 */}
+            {chatStyle === "dsh" ? (
+              <NativeChatArea sessionId={activeId} fallback={mirachChat} />
             ) : chatStyle === "minimal" ? (
               <ZosmaChat sessionId={activeId} sessionTitle={activeTitle} />
             ) : (
-              <div className="relative flex min-h-0 flex-1 flex-col">
-                <ChatSection detailsExpanded={detailsExpanded} onToggleDetails={toggleDetails} />
-                <Composer
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                />
-                {/* 会话统计条：输入框底部以下 20px 内、宽度跟随输入框限宽居中
-                    （对齐官方 composer.dock；pointer-events-none 不挡交互；
-                    对话区变窄时 StatsLine 自带省略号 + 悬停全文） */}
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex h-5 items-center justify-center overflow-hidden px-5">
-                  <div className="w-full min-w-0" style={{ maxWidth: "var(--chat-composer-max-width, 852px)" }}>
-                    <StatsLine msgs={[]} />
-                  </div>
-                </div>
-                <ResizeHandle onDrag={dragTerminal} />
-                {terminalOpen && <TerminalPanel height={terminalH} onClose={() => setTerminalOpen(false)} />}
-              </div>
+              mirachChat
             )}
           </>
         )}

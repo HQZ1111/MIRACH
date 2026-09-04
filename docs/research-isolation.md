@@ -191,7 +191,16 @@ switch(id) 执行：
 - 换机/备份 = 拷贝 ~/.mirach/environments/<envId>/
 - 官方插件生态（记忆/任务/审批等 per-env root 类）由插件统一管理，永不遗漏
 
-## 八、官方 web 连接层清单 vs Mirach 连接层（2026-08-30）
+## 八、官方 web 连接层清单 vs Mirach 连接层（2026-08-30；2026-09-04 现状更新）
+
+> **2026-09-04 现状**：内核直连官方面后，下表大部分已过时——官方 16 个 RPC 命名空间
+> 全部经 api-remotes 挂载成功（agentPresets / commands / credentials / directoryPicker /
+> dynamicCordisRunner / fileReferences / goals / llm / messageFeedback / pluginInventory /
+> session / sessionReferenceResolver / settings / skills / subagents / workspace），挂载即
+> 通过与引擎面的 typert 校验。原 #1 原始事件流、#3 jobs（走 sessions 投影 jobsBySession）、
+> #5 session-query 全文检索（profile patch 覆盖 openAt: first-search + 落盘 path，前端经
+> remote.session.search 消费，Rust FTS5 降为回退）、#6 cordis 自省（dynamicCordisRunner）、
+> #7 approval/auth 栅均已被官方装配覆盖；仍属可选增强的只有官方附件持久化存储（用到再做）。
 
 ### 官方 web 连接层连接了什么
 
@@ -204,24 +213,6 @@ switch(id) 执行：
    cordis 自省（tool-cordis/web-cordis：插件清单与配置读写）
 5. **client-runtime**：projection 座（tokenUsage/sessionStats/contextPressure）+
    snapshot 选择器 + stores——StatsLine/ContextMeter/定位器/轨迹/JobPanel 全部吃它
-
-### Mirach 连接层缺的（按补齐顺序）
-
-| # | 缺口 | 用途 | 补法 |
-|---|---|---|---|
-| 1 | **原始 SessionEvent 流** | 装配层/定位器/轨迹的数据底座（官方逐 seq 事件流） | sidecar adapter 转发原始事件（现在转换后丢弃）|
-| 2 | **contextPressure projection** | ContextMeter 环 + 压缩触发显示 | token-meter 投影随 usage 事件透出 |
-| 3 | jobs RPC 面 | 引擎级任务（补 Rust cron 之外的会话内 jobs UI）| jobs-local 已挂，加 RPC 透传 |
-| 4 | attachments RPC | 图片发送/预览 | attachment-local 已挂，加 RPC 透传 |
-| 5 | session-query 面 | 会话全文检索 | query-sqlite 已挂（:memory:），开 first-search + 落盘 path |
-| 6 | cordis 自省面 | 插件清单/配置 UI | tool-cordis 已挂，加 RPC 透传 |
-| 7 | approval/auth 栅 | 审批弹窗闭环（ask 模式时） | 复用 user-questions 通道 |
-
-### dsh 原生风格对话区直接用官方装配层——可行，前置是 #1+#2
-
-dsh 风格对话区作为官方装配层的宿主试点：原始事件流接入 → ConversationLocationIndex/
-assembler 构建 timeline/projection → dsh 风格渲染层吃装配输出（消息块/定位条/轨迹入口）。
-default/minimal 两种风格不受影响。
 ## 八、官方 web 连接层清单 vs Mirach 连接层（2026-08-30）
 
 ### 官方 web 连接层连接了什么

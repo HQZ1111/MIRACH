@@ -20,6 +20,10 @@ import "@deepseek-ai/dsh-client-connection/client";
 import "@deepseek-ai/dsh-api-gateway/client";
 import "@deepseek-ai/dsh-api-remotes/client";
 import "@deepseek-ai/dsh-api-session-controller/client";
+// ── 官方 workspace 服务（ctx.workspaces）：ui-workspace/ui-conversation 的
+//    inject 依赖（uiWorkspace / workspaces）——缺它 ui-conversation 整插件
+//    pending，官方 composer 链（模型 seat / 权限 / 计划）全部不注册。 ──
+import "@deepseek-ai/dsh-api-workspace-controller/client";
 // ── 官方 client UI 栈（完整加载，dsh 风格渲染 + 原生面板全走官方组件） ──
 import "@deepseek-ai/dsh-client-ui-renderer/client";
 import "@deepseek-ai/dsh-client-ui-settings/client";
@@ -55,6 +59,16 @@ import "@deepseek-ai/dsh-client-ui-goal/client";
 import "@deepseek-ai/dsh-client-ui-message-feedback/client";
 import "@deepseek-ai/dsh-client-ui-trajectory/client";
 import "@deepseek-ai/dsh-client-ui-jobs/client";
+import "@deepseek-ai/dsh-client-ui-schedule/client";
+// 工具行/附件/会话引用：官方消息流节点（ToolRow/ToolCallTree/图片附件/引用）本体
+import "@deepseek-ai/dsh-client-ui-tool/client";
+import "@deepseek-ai/dsh-client-ui-attachment/client";
+import "@deepseek-ai/dsh-client-ui-reference/client";
+// ── 官方品牌标（sidebar.brand.mark / conversation.hero.brand.mark 的注册者） ──
+import "@deepseek-ai/dsh-client-ui-brand-official/client";
+// 官方工作区目录选择器（设置/工作区浏览的弹层本体；native 变体的
+// directoryFlow 槽与 workspace 根注册冲突，web 面只装 browse 变体）
+import "@deepseek-ai/dsh-client-ui-directory-picker-browse/client";
 // ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行）──
 // 之前因"设置页冻结"回退——根因实为 uSES 快照不稳定 + 内核未激活，与包无关
 import "@deepseek-ai/dsh-client-ui-skill/client";
@@ -75,6 +89,7 @@ import { $activeSessionId } from "@/store/session";
 import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { registerMirachSections } from "./mirach-sections";
+import { registerComposerExtras } from "./composer-extras";
 import { logInfo, logWarn } from "./kernel-log";
 
 /** 鍐呮牳鎻掍欢婵€娲婚『搴忥紙modules 绯荤粺 bundle id 鈫?瀹炰緥鍖?鈫?cordis plugin锛夈€?*/
@@ -83,6 +98,7 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-api-gateway/client",
   "@deepseek-ai/dsh-api-remotes/client",
   "@deepseek-ai/dsh-api-session-controller/client",
+  "@deepseek-ai/dsh-api-workspace-controller/client",
   // ── 官方 client UI 栈（slots/locale/uiSession/uiConversation/ChatView） ──
   "@deepseek-ai/dsh-client-ui-renderer/client",
   "@deepseek-ai/dsh-client-ui-settings/client",
@@ -108,11 +124,18 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-model-selection/client",
   "@deepseek-ai/dsh-client-ui-plan/client",
   "@deepseek-ai/dsh-client-ui-permission-presets/client",
-  // ── 对话区专属官方栈（目标栏/消息反馈/轨迹/任务；失败仅降级该包） ──
+  // ── 对话区专属官方栈（目标栏/消息反馈/轨迹/任务/定时；失败仅降级该包） ──
   "@deepseek-ai/dsh-client-ui-goal/client",
   "@deepseek-ai/dsh-client-ui-message-feedback/client",
   "@deepseek-ai/dsh-client-ui-trajectory/client",
   "@deepseek-ai/dsh-client-ui-jobs/client",
+  "@deepseek-ai/dsh-client-ui-schedule/client",
+  // 工具行/附件/会话引用（官方消息流节点本体）+ 官方品牌标 + 目录选择器
+  "@deepseek-ai/dsh-client-ui-tool/client",
+  "@deepseek-ai/dsh-client-ui-attachment/client",
+  "@deepseek-ai/dsh-client-ui-reference/client",
+  "@deepseek-ai/dsh-client-ui-brand-official/client",
+  "@deepseek-ai/dsh-client-ui-directory-picker-browse/client",
   // ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行） ──
   "@deepseek-ai/dsh-client-ui-skill/client",
   "@deepseek-ai/dsh-client-ui-subagent/client",
@@ -355,8 +378,12 @@ export function nativeLocaleTranslate(ns: string): ((key: string, params?: Recor
 
 /**
  * 官方模型选型 seat：ui-model-selection 包的 ModelSelect 组件 + 'model' 词典。
- * 返回组件本体（mirach 侧注入 directory store / load / select 席位）；
- * 内核未加载该包时返回 null（Composer 回退 mirach 自有模型菜单）。
+ * 库产物不导出组件名（组件经 conversation.input.model 槽条目注入）——
+ * 因此本函数只在官方树内可用（NativeChatArea / chatStyle=dsh 时由官方
+ * ConversationRoot 以 slot 注入完整 props 渲染）；mirach 自家 Composer 用
+ * bundleRequire 拿不到组件本体时返回 null，回退 mirach 自有模型菜单。
+ * 不要从 entriesOfSlot 窃取组件：官方条目在无会话 context 时注入面为 null，
+ * 单组件双份渲染会把整棵树拖崩。
  */
 export function nativeModelSeat(): {
   ModelSelect: (props: Record<string, unknown>) => React.ReactElement | null;
@@ -554,6 +581,9 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // ── mirach 自有分区槽位化：注册进官方 settings.section（所有权移交后
     //    官方面板导航自动混排；slots.inject 等声明落地，时机安全）
     registerMirachSections(ctx);
+    // ── mirach 输入框附加控件：注入官方 InputBar 子槽（朗读/终端等
+    //    mirach 有、官方没有的控件，随官方工具行排布）
+    registerComposerExtras(ctx);
     bridge = createDshBridge();
 
     const sessions = (ctx as unknown as { sessions: KernelSessions }).sessions;

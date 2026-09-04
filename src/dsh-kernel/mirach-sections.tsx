@@ -34,7 +34,7 @@ interface MirachSectionDef {
 
 /** 顺序沿用旧导航习惯：mirach 分区在前，官方分区（order≥0）在后 */
 const SECTIONS: MirachSectionDef[] = [
-  { id: "chat-style", order: -32, label: "通用设置", component: GeneralContent },
+  { id: "chat-style", order: -32, label: "界面", component: GeneralContent },
   { id: "agents", order: -30, label: "智能体团队", component: EnvSettingsSection },
   { id: "memory", order: -28, label: "记忆", component: MemorySection },
   { id: "sessions", order: -26, label: "归档会话", component: SessionsContent },

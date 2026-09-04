@@ -6,13 +6,15 @@
  * 组件——官方更新渲染管线时本视图直接跟随。
  *
  * 会话同步：目标 mirach 会话 → sidecar session.map.get → 内核 sessions.open
- * 官方 current 会话（官方 ConversationRoot 按 current 渲染）。
- * 内核未 boot / 会话未映射 / 引擎不可达 → onReady(false)，父层回退 mirach UI。
+ * 官方 current 会话（官方 ConversationRoot 按 current 渲染）；映射缺失
+ * （该会话从未对引擎发言）时现场 bindEngineSession 建立映射。
+ * 内核未 boot / 会话未映射 / 引擎不可达 → 渲染 fallback（mirach 默认对话区）。
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
+import { bindEngineSession, $mainPersona } from "@/store/engine-session";
 import {
   nativeCollapsePanels,
   nativeOpenSession,
@@ -26,56 +28,62 @@ const KERNEL_RETRY_MAX = 20;
 
 export function NativeChatArea({
   sessionId,
-  onReady,
+  fallback,
 }: {
   sessionId: string;
-  onReady?: (ok: boolean) => void;
+  /** 内核/映射未就绪或失败时的占位（mirach 默认对话区），就绪后整块换官方树 */
+  fallback?: ReactNode;
 }) {
   const [tree, setTree] = useState<ReactNode | null>(null);
-  const onReadyRef = useRef(onReady);
-  onReadyRef.current = onReady;
 
   useEffect(() => {
     let cancelled = false;
     setTree(null);
-    if (MOCK) {
-      onReadyRef.current?.(false);
-      return;
-    }
+    if (MOCK) return;
 
     const tryLoad = async (retriesLeft: number): Promise<void> => {
       if (cancelled) return;
       if (!nativeRenderReady()) {
+        console.debug("[nca] render not ready, retries left", retriesLeft);
         if (retriesLeft > 0) {
           window.setTimeout(() => void tryLoad(retriesLeft - 1), KERNEL_RETRY_MS);
           return;
         }
-        onReadyRef.current?.(false);
+        console.debug("[nca] give up: render never ready");
         return;
       }
-      // 会话映射 → 内核 current 会话同步（官方 conversation 渲染对象）
-      const dshId = await getApi().getDshSessionId(sessionId);
+      // 会话映射 → 内核 current 会话同步（官方 conversation 渲染对象）。
+      // 映射缺失（该前端会话从未对引擎发言）时现场绑定一次：
+      // set_env(环境+persona) + load_session 建立 session-map，之后官方树
+      // 与 mirach 管道读写同一个 dsh 会话。
+      let dshId = await getApi().getDshSessionId(sessionId);
+      console.debug("[nca] mapped dshId", dshId);
       if (cancelled) return;
       if (!dshId) {
-        onReadyRef.current?.(false);
-        return;
+        try {
+          dshId = await bindEngineSession(sessionId, $mainPersona.get());
+          console.debug("[nca] bind result", dshId);
+        } catch (e) {
+          console.debug("[nca] bind threw", String(e));
+          dshId = null;
+        }
+        if (cancelled) return;
       }
+      if (!dshId) return;
       try {
         await nativeOpenSession(dshId);
-      } catch {
-        if (!cancelled) onReadyRef.current?.(false);
+        console.debug("[nca] open ok", dshId);
+      } catch (e) {
+        console.debug("[nca] open threw", String(e));
         return;
       }
       if (cancelled) return;
       const t = nativeRootTree();
-      if (t === null) {
-        onReadyRef.current?.(false);
-        return;
-      }
+      console.debug("[nca] tree", t === null ? "null" : "element");
+      if (t === null) return;
       // 官方三栏只剩中间对话列（mirach shell 提供侧栏）
       nativeCollapsePanels();
       setTree(t);
-      onReadyRef.current?.(true);
     };
 
     void tryLoad(KERNEL_RETRY_MAX);
@@ -84,9 +92,9 @@ export function NativeChatArea({
     };
   }, [sessionId]);
 
-  if (tree === null) return null;
+  if (tree === null) return fallback ? <>{fallback}</> : null;
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden" style={DSW_ALIAS_VARS}>
+    <div className="dsh-native-area relative min-h-0 flex-1 overflow-hidden" style={DSW_ALIAS_VARS}>
       {tree}
     </div>
   );
