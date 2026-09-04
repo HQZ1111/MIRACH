@@ -672,3 +672,127 @@ html.dark .chat-backdrop-on {
   color: #9CA3AF;
   font-size: 13px;
 }
+
+/* ===== 酒馆面板 CSS 适配层（#tavern-manager = dsh-tavern 社区插件注入的 DOM） =====
+   酒馆已用 --dsw-alias-* 令牌做色值，但组件形态（按钮/输入框/下拉框/拖放区）
+   与官方面板原生组件不一致——此处对齐按钮/输入框/选择器到官方设置面板风格。 */
+
+/* 按钮：对齐官方面板按钮（圆角 8px、高度 32px、官方字色/边距） */
+#tavern-manager button {
+  border-radius: 8px;
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+}
+#tavern-manager button:hover {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-border-default);
+}
+
+/* 输入框：对齐官方面板输入框（圆角 8px、统一边框、聚焦高亮） */
+#tavern-manager input[type=text],
+#tavern-manager input[type=number],
+#tavern-manager input[type=password],
+#tavern-manager select,
+#tavern-manager textarea {
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  outline: none;
+  transition: border-color 0.15s;
+}
+#tavern-manager input:focus,
+#tavern-manager select:focus,
+#tavern-manager textarea:focus {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+/* select 下拉箭头 */
+#tavern-manager select {
+  appearance: auto;
+  cursor: pointer;
+}
+
+/* 复选框/单选框：官方 accent 色 */
+#tavern-manager input[type=checkbox],
+#tavern-manager input[type=radio] {
+  accent-color: var(--dsw-alias-brand-primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* 拖放区：确保不被官方 modal 层拦截 pointer 事件 */
+#tavern-manager .t-dropzone {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+#tavern-manager .t-dropzone.drag-over {
+  border-color: var(--dsw-alias-brand-primary) !important;
+  background: rgba(99, 102, 241, 0.06) !important;
+}
+
+/* 分隔线/间距：与官方面板一致 */
+#tavern-manager hr {
+  border: none;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  margin: 12px 0;
+}
+
+/* 面板标题字号对齐官方设置分区标题 */
+#tavern-manager h2 {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  margin-bottom: 12px !important;
+}
+
+/* 小标题（t-card-title）对齐官方分区组标题 */
+#tavern-manager .t-card-title {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
+/* 状态标签（预设已绑定/未绑定）*/
+#tavern-manager .t-badge {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* 表格行对齐（如果有的话）*/
+#tavern-manager table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+#tavern-manager th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 600;
+}
+#tavern-manager td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* 滚动条对齐官方 */
+#tavern-manager ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+#tavern-manager ::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--dsw-alias-border-l2);
+}
