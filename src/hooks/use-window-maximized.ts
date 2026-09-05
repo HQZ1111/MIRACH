@@ -10,6 +10,10 @@ export function useWindowMaximized(): boolean {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     if (MOCK) return;
+    // 非 Tauri 宿主（浏览器预览/无 IPC）没有窗口系统：
+    // getCurrentWindow() 读 undefined.metadata 会抛错——这是宿主能力边界，
+    // 按官方 fail-loud 哲学：环境不支持就不启用该功能（能力探测，非降级兜底）。
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const win = getCurrentWindow();
     if (win.label !== "main") return;
     let alive = true;

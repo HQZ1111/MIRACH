@@ -22,6 +22,7 @@ import { $bgState } from "@/store/background-processes";
 import { $subagentState } from "@/store/subagents";
 import { $todosState } from "@/store/todos";
 import { $goalState } from "@/store/goals";
+import { useOfficialActivity } from "./useOfficialActivity";
 
 const AUTO_EXPAND_KEY = "mirach.statusAutoExpand";
 
@@ -96,12 +97,17 @@ export function StatusWindow({ className }: { className?: string }) {
   const { agents } = useStore($subagentState);
   const { items } = useStore($todosState);
   const goal = useStore($goalState);
+  // 官方数据面（内核投影：jobs/subagents/goal）——就绪时与 mirach store 各取 max，
+  // 两套数据同源不同视角，官方先到/先清时角标都不漏报、不虚报
+  const official = useOfficialActivity();
 
   const activeTodos = items.filter(
     (t) => t.status !== "completed" && t.status !== "cancelled",
   ).length;
-  const goalActive = goal.status === "active" || goal.status === "waiting" ? 1 : 0;
-  const count = queueCount + processes.length + agents.length + activeTodos + goalActive;
+  const bgCount = official.ready ? Math.max(processes.length, official.jobsRunning) : processes.length;
+  const subCount = official.ready ? Math.max(agents.length, official.subagents) : agents.length;
+  const goalActive = (goal.status === "active" || goal.status === "waiting" || official.goalActive) ? 1 : 0;
+  const count = queueCount + bgCount + subCount + activeTodos + goalActive;
 
   // 上一帧计数（自动展开用：只在计数增加时展开，完成/减少不收起）
   const prevCountRef = useRef(count);
@@ -137,7 +143,7 @@ export function StatusWindow({ className }: { className?: string }) {
   }, [open]);
 
   return (
-    <div ref={rootRef} className={cn("absolute right-3 top-3 z-30", className)}>
+    <div ref={rootRef} className={cn("absolute right-3 top-[88px] z-30", className)}>
       {open ? (
         /* ---- 展开态：浮动面板 ---- */
         <div className="panel-glass menu-anim w-[300px] overflow-hidden rounded-xl">

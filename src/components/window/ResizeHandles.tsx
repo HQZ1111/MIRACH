@@ -22,12 +22,12 @@ import { cn } from "@/lib/utils";
 
 export function ResizeHandles() {
   const maximized = useWindowMaximized();
-  if (MOCK || maximized) return null; // 铺满时不要手柄（面板已占满桌面工作区）
-
-  // 窗口外框到屏幕工作区四边的原始间隙（逻辑像素；最大化时为负）
+  // useState/useEffect 必须无条件调用（hooks 规则）——隐藏逻辑用条件渲染表达
   const [gaps, setGaps] = useState({ gT: WINDOW_SHADOW_MARGIN, gR: WINDOW_SHADOW_MARGIN, gB: WINDOW_SHADOW_MARGIN, gL: WINDOW_SHADOW_MARGIN });
 
   useEffect(() => {
+    // 非 Tauri 宿主没有窗口系统（能力边界，按官方 fail-loud 哲学不启用该功能）
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const win = getCurrentWindow();
     let alive = true;
     const update = async (): Promise<void> => {
@@ -57,6 +57,9 @@ export function ResizeHandles() {
       void u2.then((u) => u());
     };
   }, []);
+
+  // 隐藏手柄：mock 演示态 / 最大化铺满时（面板已占满桌面工作区）
+  if (MOCK || maximized) return null;
 
   const start = (dir: ResizeDirection) => (e: MouseEvent) => {
     e.preventDefault();

@@ -22,12 +22,10 @@ import { $usage, resetUsage } from "@/store/usage";
 import { $agentMode, setAgentMode, $approvalMode, setApprovalMode, type AgentMode } from "@/store/agent";
 import {
   $chatBackdrop,
-  $chatStyle,
   $chatWidth,
   $defaultAgent,
   $enterBehavior,
   setChatBackdrop,
-  setChatStyle,
   setChatWidth,
   setDefaultAgent,
   setEnterBehavior,
@@ -408,7 +406,6 @@ export function GeneralContent() {
   const { t, lang, setLang } = useI18n();
   const { theme, setTheme } = useTheme();
   const chatWidth = useStore($chatWidth);
-  const chatStyle = useStore($chatStyle);
   const backdrop = useStore($chatBackdrop);
   const defaultAgent = useStore($defaultAgent);
   const mode = useStore($agentMode);
@@ -445,21 +442,7 @@ export function GeneralContent() {
         />
       </StackedRow>
 
-      {/* ③ 对话风格（默认 / dsh系统 / 简约）—— zosma 滑块组件 */}
-      <StackedRow
-        label={t("settings.chatStyle")}
-        hint="默认=现有对话界面；dsh系统=紧凑行式；简约=极简玻璃卡片"
-      >
-        <SegmentedPill
-          pillId="chat-style-pill"
-          ariaLabel="对话风格"
-          options={["默认", "dsh系统", "简约"]}
-          value={chatStyle === "minimal" ? "简约" : chatStyle === "dsh" ? "dsh系统" : "默认"}
-          onChange={(v) => setChatStyle(v === "简约" ? "minimal" : v === "dsh系统" ? "dsh" : "default")}
-        />
-      </StackedRow>
-
-      {/* ④ 聊天背景（放对话风格后面，持久化） */}
+      {/* ③ 聊天背景（持久化） */}
       <FieldRow label={t("settings.chatBackdrop")} hint="对话区背景装饰（淡色渐变 / 深色微光）">
         <Segmented
           options={["关闭", "开启"]}

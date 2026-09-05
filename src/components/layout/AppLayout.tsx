@@ -27,11 +27,15 @@ import { QuitConfirmOverlay } from "@/components/overlays/QuitConfirmOverlay";
 import { PromptDialogOverlay } from "@/components/overlays/PromptDialogOverlay";
 import { TopBar } from "./TopBar";
 import { LeftToolbar } from "./LeftToolbar";
-import { LeftSidebar, type ConvItem } from "./LeftSidebar";
+import type { ConvItem } from "./LeftSidebar";
 import { MainPanel } from "./MainPanel";
 import { RightSidebar } from "./RightSidebar";
 import { RightToolbar } from "./RightToolbar";
 import { MemberChatPanel } from "@/components/chat/MemberChatPanel";
+import { memberPanelOpenId, toggleMemberPanel, closeMemberPanel } from "@/store/member-panel";
+import { setCurrentView } from "@/store/current-view";
+import { setSidebarCollapsed, sidebarCollapsed as sidebarCollapsedStore } from "@/store/layout-mirror";
+import { nativeToggleSidebar } from "@/dsh-kernel/boot";
 import { OverlayShell } from "@/components/overlays/OverlayShell";
 import { type CommandPaletteAction } from "@/components/command-palette/CommandPalette";
 import { useTheme } from "@/hooks/useTheme";
@@ -131,8 +135,9 @@ type RightPanelId =
   | "artifacts" | "usage" | "update" | "gateway" | "lock" | "theme";
 
 // ---- 默认/可调宽度常量 ----
+// 左侧栏已并入官方 AppFrame 的 sidebar 列（dsh-kernel/sidebar-shell），
+// 不再占 AppLayout 的网格列。
 
-const LEFT_SIDEBAR_W = 280;   // 左侧栏固定宽度（不参与拖拽）
 const RIGHT_SIDEBAR_W = 380;  // 右侧栏默认宽度（可拖拽调节）
 const COL_W = 380;            // 子对话栏默认宽度（可拖拽调节）
 const MIN_COL_W = 350;        // 子对话栏 / 右侧栏 最小宽度（最大不设限）
@@ -156,9 +161,21 @@ export function AppLayout() {
   const [rightTab, setRightTab] = useState<string | null>(null);
   // 外部打开请求（seq 递增 → RightSidebar 每次点击都重新打开对应标签，避免同值不重渲染）
   const [rightOpenReq, setRightOpenReq] = useState<{ id: string; seq: number } | null>(null);
-  const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(false);
-  const [selectedMember, setSelectedMember] = useState<ConvItem | null>(null);
+  // 选中成员：侧栏（dsh-kernel 官方槽内）经 member-panel store 桥接打开/关闭
+  // 侧栏折叠状态：LeftToolbar 背景跟随（收起 → 与面板/侧栏底色一致）
+  // k=v 刷新触发点
+  const sidebarCollapsedState = useStore(sidebarCollapsedStore);
+  const memberPanelId = useStore(memberPanelOpenId);
+  const memberAgents = useStore($agents);
+  const selectedMember = useMemo(
+    () => (memberPanelId === null ? null : memberAgents.find((a) => a.id === memberPanelId) ?? null),
+    [memberPanelId, memberAgents],
+  );
+  // 当前视图同步给 dsh-kernel 侧栏外壳（不在 AppLayout 树内，跨树读）
+  useEffect(() => {
+    setCurrentView(activeView);
+  }, [activeView]);
   // ---- 列宽（列间分隔条拖拽调节；左侧栏固定 280 不参与拖拽） ----
   const [memberW, setMemberW] = useState(COL_W);
   // 视口尺寸（窗口 client 区）→ 面板 = 视口 − 2×阴影边距，跟随窗口缩放/最大化
@@ -185,14 +202,12 @@ export function AppLayout() {
   const layoutRef = useRef({
     memberW,
     rightW,
-    showLeft,
     showRight,
     hasMember: !!selectedMember,
   });
   layoutRef.current = {
     memberW,
     rightW,
-    showLeft,
     showRight,
     hasMember: !!selectedMember,
   };
@@ -204,6 +219,54 @@ export function AppLayout() {
   const chatHistoryOpen = useStore($chatHistoryOpen);
   // 启动流程预览（mock 下演示连接动画）
   const [previewStartup, setPreviewStartup] = useState<"connecting" | null>(null);
+  // ---- 官方侧栏列宽度（280/折叠 56）→ --mirach-internal-sidebar-w：主内容区
+  // 顶栏覆盖层/ViewPage 覆盖层按它定位（官方 layout store 在树内，无法从
+  // 面板层读，用 ResizeObserver 观察官方 sidebar 列并同步到面板容器） ----
+  useEffect(() => {
+    // 任意一棵官方树（可见树优先，镜像树兜底——两者共享 layout store，宽度同步）。
+    // 官方树（KernelMirrorHost/NativeChatArea）在应用挂载后异步渲染，先轮询等待。
+    let ro: ResizeObserver | null = null;
+    let timer = 0;
+    const frameObservers: MutationObserver[] = [];
+    const attach = () => {
+      const el = document.querySelector('.dsh-native-area [data-slot="sidebar"]')
+        ?? document.querySelector('[data-slot="sidebar"]');
+      const col = el?.parentElement ?? null;
+      if (col === null) {
+        timer = window.setTimeout(attach, 500);
+        return;
+      }
+      const update = () => {
+        const w = Math.round(col.getBoundingClientRect().width);
+        // 折叠态（56 窄轨 / CSS 归零 0）→ 顶栏圆形"展开左侧栏"图标接管。
+        // 官方 narrow 自动折叠已由 boot 关闭（固定面板布局），不必再按帧宽判定。
+        setSidebarCollapsed(w <= 60);
+        if (w > 0) panelRef.current?.style.setProperty("--mirach-internal-sidebar-w", `${w}px`);
+      };
+      update();
+      ro = new ResizeObserver(update);
+      ro.observe(col);
+      // 官方详情面板打开（data-details-collapsed 移除）→ 显示右侧栏：
+      // 详情面板经 CSS 固定到右侧栏区域（index.css），侧栏本体是它的衬底。
+      const frame = document.querySelector('.dsh-native-area div[style*="grid-template-columns"]');
+      if (frame !== null) {
+        const mo = new MutationObserver(() => {
+          if (frame.getAttribute("data-details-collapsed") === null) {
+            setShowRight(true);
+          }
+        });
+        mo.observe(frame, { attributes: true, attributeFilter: ["data-details-collapsed"] });
+        frameObservers.push(mo);
+      }
+    };
+    attach();
+    return () => {
+      window.clearTimeout(timer);
+      ro?.disconnect();
+      for (const mo of frameObservers) mo.disconnect();
+    };
+  }, []);
+
   // ---- 引擎网关探活 / 故障浮层（真实模式；mock 恒 open 不触发） ----
   // 首启不再引导填地址：直接用默认引擎地址（config engineBase，默认 http://127.0.0.1:8787）
   // 探活，不通走 BootFailure（重试 / 去设置连接）。打包后的安装位置等由系统安装器负责。
@@ -222,7 +285,6 @@ export function AppLayout() {
     const exists = $sessions.get().some((s) => s.id === sid);
     if (exists) {
       setActiveSession(sid);
-      setShowLeft(true);
     }
   }, []);
   // ⌘K 命令面板
@@ -253,7 +315,6 @@ export function AppLayout() {
           break;
         case "newSession": {
           setActiveSession(newTaskSession());
-          setShowLeft(true);
           break;
         }
         case "switchSession": {
@@ -269,7 +330,8 @@ export function AppLayout() {
           setJumpOpen(true);
           break;
         case "toggleSidebar":
-          setShowLeft((v) => !v);
+          // 侧栏 = 官方 AppFrame sidebar 列（mirach 外壳），⌘B 折叠/展开走官方 layout
+          nativeToggleSidebar();
           break;
         case "toggleRightSidebar":
           setShowRight((v) => !v);
@@ -294,7 +356,7 @@ export function AppLayout() {
 
   // ---- 点击成员：展开子对话栏；再次点击同一成员收起（默认收起） ----
   const openMember = (member: ConvItem) => {
-    setSelectedMember((prev) => (prev && prev.id === member.id ? null : member));
+    toggleMemberPanel(member.id);
     // 确保该成员线程存在（幂等，首次打开时创建）
     setProjectSession((s) => ensureMemberThread(s, member));
     // 引擎侧续聊历史回放：线程只有种子消息时拉取该成员 dsh 会话的历史
@@ -535,9 +597,6 @@ export function AppLayout() {
     })();
   };
 
-  // ---- 收放回调 ----
-  const collapseLeft = useCallback(() => setShowLeft(false), []);
-
   // ---- 列间分隔条拖拽：CSS 变量直驱（拖拽中不触发 React 重渲染，跟手且快） ----
   // 列宽写为卡片上的 --col-member-w / --col-right-w，各栏 width 与分隔条 left 用 var() 引用；
   // 拖拽时只 setProperty 改变量（合成器级），松手才提交 React 状态。
@@ -553,9 +612,9 @@ export function AppLayout() {
 
   // 主对话栏 | 子对话栏：右拖 dx>0 → 子对话栏变窄（主栏变宽）
   const handleMemberDrag = useCallback((dx: number) => {
-    const { rightW, showLeft, showRight } = layoutRef.current;
+    const { rightW, showRight } = layoutRef.current;
     const maxByMain = panelW - LEFT_TOOLBAR_WIDTH - RIGHT_TOOLBAR_WIDTH - MIN_MAIN_W
-      - (showLeft ? LEFT_SIDEBAR_W : 0) - (showRight ? rightW : 0);
+      - (showRight ? rightW : 0);
     const n = Math.min(Math.max(dragWRef.current.member - dx, MIN_COL_W), Math.max(MIN_COL_W, maxByMain));
     dragWRef.current.member = n;
     applyColVar("member", n);
@@ -563,7 +622,7 @@ export function AppLayout() {
 
   // 子对话栏 | 右侧栏：拖拽在两栏之间重新分配宽度，主对话栏保持不变
   const handleRightDrag = useCallback((dx: number) => {
-    const { showLeft, hasMember } = layoutRef.current;
+    const { hasMember } = layoutRef.current;
     if (hasMember) {
       const sum = dragWRef.current.member + dragWRef.current.right;
       const nm = Math.min(Math.max(dragWRef.current.member + dx, MIN_COL_W), sum - MIN_COL_W);
@@ -574,7 +633,7 @@ export function AppLayout() {
       applyColVar("right", nr);
       return;
     }
-    const maxRight = panelW - LEFT_TOOLBAR_WIDTH - (showLeft ? LEFT_SIDEBAR_W : 0) - MIN_MAIN_W - RIGHT_TOOLBAR_WIDTH;
+    const maxRight = panelW - LEFT_TOOLBAR_WIDTH - MIN_MAIN_W - RIGHT_TOOLBAR_WIDTH;
     const nr = Math.min(Math.max(dragWRef.current.right - dx, MIN_COL_W), maxRight);
     dragWRef.current.right = nr;
     applyColVar("right", nr);
@@ -589,15 +648,14 @@ export function AppLayout() {
   // ---- 主对话栏最小宽度保护：子对话栏/右侧栏同时占宽导致主栏过窄时，优先压缩子对话栏，其次右侧栏 ----
   // 单次计算同时确定两个目标宽度（避免分两步压导致收敛到次优解）
   useEffect(() => {
-    const fixed = LEFT_TOOLBAR_WIDTH + RIGHT_TOOLBAR_WIDTH
-      + (showLeft ? LEFT_SIDEBAR_W : 0) + MIN_MAIN_W;
+    const fixed = LEFT_TOOLBAR_WIDTH + RIGHT_TOOLBAR_WIDTH + MIN_MAIN_W;
     const avail = panelW - fixed; // 子对话栏 + 右侧栏 可占用的总宽度
     const nMember = Math.min(memberW, Math.max(MIN_COL_W, avail - (showRight ? rightW : 0)));
     setMemberW(nMember);
     if (showRight) {
       setRightW(Math.min(rightW, Math.max(MIN_COL_W, avail - nMember)));
     }
-  }, [showRight, rightW, showLeft, selectedMember, memberW]);
+  }, [showRight, rightW, selectedMember, memberW]);
 
   // ---- 软件面板 = 白色圆角 1580×900（设计默认，勿改）；悬浮在透明窗口内，阴影在透明边距里 ----
 
@@ -615,7 +673,6 @@ export function AppLayout() {
         return;
       }
       setActiveView(view as ViewId);
-      setShowLeft(true);
     },
     [],
   );
@@ -653,6 +710,17 @@ export function AppLayout() {
     window.addEventListener("mirach:switch-view", onSwitchView);
     return () => window.removeEventListener("mirach:switch-view", onSwitchView);
   }, []);
+  // 侧栏快捷入口（产物/看板/定时任务）：打开对应覆盖层（与命令面板跳转同款）
+  useEffect(() => {
+    const onOpenOverlay = (e: Event) => {
+      const view = (e as CustomEvent<string>).detail;
+      if (view === "artifacts" || view === "kanban" || view === "cron") {
+        setOverlayView(view);
+      }
+    };
+    window.addEventListener("mirach:open-overlay", onOpenOverlay as EventListener);
+    return () => window.removeEventListener("mirach:open-overlay", onOpenOverlay as EventListener);
+  }, []);
   const openCC = useCallback((tab: string) => {
     setCcTab(tab);
     setOverlayView("commands");
@@ -675,7 +743,6 @@ export function AppLayout() {
   const handleOpenPluginView = useCallback((viewId: string) => {
     setOverlayView(null);
     setActiveView(viewId as ViewId);
-    setShowLeft(true);
   }, []);
 
   const paletteActions: CommandPaletteAction[] = useMemo(() => {
@@ -691,7 +758,6 @@ export function AppLayout() {
     // 跳转
     add("jump.new-chat", "新建会话", "跳转", () => {
       setActiveSession(newTaskSession());
-      setShowLeft(true);
     }, { keywords: "新对话 new chat" });
     add("jump.settings", "设置", "跳转", () => openSettings("model"), { keywords: "settings 偏好" });
     add("jump.commands", "命令中心", "跳转", () => openCC("sessions"), { keywords: "command center 会话 系统 用量" });
@@ -782,17 +848,21 @@ export function AppLayout() {
     }
 
     return list;
-  }, [openSettings, openCC, openPanel, setOverlayView, setShowLeft, setTheme, toggleTheme]);
+  }, [openSettings, openCC, openPanel, setOverlayView, setTheme, toggleTheme]);
 
-  // TopBar 左侧起始位置：左侧工具栏(70) + 左侧栏(可见时 280)
-  const topBarLeft = showLeft ? LEFT_TOOLBAR_WIDTH + LEFT_SIDEBAR_W : LEFT_TOOLBAR_WIDTH;
+  // TopBar 左侧起始位置：左侧工具栏(70) + 侧栏列宽（展开 280 / 折叠 0）。
+  // TopBar 在 Tauri 下会拦截点击（pointer-events 默认 auto），必须从侧栏
+  // 右缘开始——旧版布局即如此（70+280=350），否则侧栏 header 的标题/
+  // 收起按钮会被 85px 高的 TopBar 盖住而无法点击。折叠时宽度变量可能
+  // 残留 56，用 React 状态归零（grid 已把侧栏列折叠为 0）。
+  const topBarLeft = `calc(${LEFT_TOOLBAR_WIDTH}px + ${sidebarCollapsedState ? 0 : "var(--mirach-internal-sidebar-w, 280px)"})`;
 
-  // 主内容区宽度 = 软件面板宽 - 左工具栏 - 左侧栏(可见时) - 子对话栏(选中时) - 右侧栏(可见时) - 右工具栏
-  // 固定宽度 + transition 让收起/展开平滑过渡（flex-1 无法过渡）
+  // 主内容区宽度 = 软件面板宽 - 左工具栏 - 子对话栏(选中时) - 右侧栏(可见时) - 右工具栏
+  // 固定宽度 + transition 让收起/展开平滑过渡（flex-1 无法过渡）；官方侧栏在
+  // 主内容区内部（AppFrame sidebar 列），不参与本计算
   const mainWidth =
     panelW -
     LEFT_TOOLBAR_WIDTH -
-    (showLeft ? LEFT_SIDEBAR_W : 0) -
     (selectedMember ? memberW : 0) -
     (showRight ? rightW : 0) -
     RIGHT_TOOLBAR_WIDTH;
@@ -835,49 +905,38 @@ export function AppLayout() {
           transform: "translateZ(0)",
           // 列宽 CSS 变量：各栏 width 与分隔条 left 用 var() 引用；
           // 拖拽时只 setProperty 改变量（不触发 React 重渲染，跟手且快）
-          "--left-sidebar-w": `${showLeft ? LEFT_SIDEBAR_W : 0}px`,
           "--col-member-w": `${selectedMember ? memberW : 0}px`,
           "--col-right-w": `${showRight ? rightW : 0}px`,
         } as React.CSSProperties}
       >
         {/* ---- TopBar：绝对定位覆盖，透明；Tauri 下 data-tauri-drag-region 拖拽窗口，
               浏览器/vite 下保持 pointer-events-none（不遮挡下方搜索框） ---- */}
+        {/* 高度 53：Tauri 下 TopBar 会拦截点击（pointer-events 默认 auto），
+            85 高会盖住"会话名 + 对话/轨迹"行导致无法点击切换；缩到 53
+            （顶栏行高），窗口拖拽/右上角控制不影响。 */}
         <TopBar
           className={`absolute z-10 ${isTauri ? "" : "pointer-events-none"}`}
-          style={{ top: 0, left: topBarLeft, right: 0, height: 85 }}
+          style={{ top: 0, left: topBarLeft, right: 0, height: 53 }}
           showRight={showRight}
           onToggleRight={() => setShowRight((v) => !v)}
         />
 
-        {/* ---- 左侧工具栏 (70px，全高；左侧栏收起时背景转白与主内容区一致) ---- */}
+        {/* ---- 左侧工具栏 (70px，全高；侧栏收起时背景转为面板底色，与侧栏一致) ---- */}
         <LeftToolbar
           activeView={activeView}
           onViewChange={handleViewChange}
-          sidebarVisible={showLeft}
+          sidebarVisible={!sidebarCollapsedState}
         />
 
-        {/* ---- 左侧栏 (固定 280px，可收起) ---- */}
-        {showLeft && (
-          <LeftSidebar
-            activeView={activeView}
-            onCollapse={collapseLeft}
-            onSelectMember={openMember}
-            selectedMemberId={selectedMember?.id ?? null}
-            onOpenArtifacts={() => setOverlayView("artifacts")}
-            onOpenCron={() => setOverlayView("cron")}
-            onOpenKanban={() => setOverlayView("kanban")}
-          />
-        )}
-
-        {/* ---- 主内容区（宽度用 CSS 变量 calc，拖拽中变量变化即生效、不重渲染） ---- */}
+        {/* ---- 主内容区（宽度用 CSS 变量 calc，拖拽中变量变化即生效、不重渲染；
+              左侧栏 = 官方 AppFrame sidebar 列（mirach 外壳），在主内容区内部） ---- */}
         <MainPanel
           style={{
             width:
-              "calc(100% - 70px - var(--left-sidebar-w) - var(--col-member-w) - var(--col-right-w) - 60px)",
+              "calc(100% - 70px - var(--col-member-w) - var(--col-right-w) - 60px)",
           }}
           mainWidth={mainWidth}
-          showLeft={showLeft}
-          onExpandLeft={() => setShowLeft(true)}
+          showLeft
           activeView={activeView}
           palette={{
             open: paletteOpen,
@@ -896,7 +955,7 @@ export function AppLayout() {
             member={selectedMember}
             messages={projectSession.memberThreads[selectedMember.id] ?? []}
             busy={!!memberBusy[selectedMember.id]}
-            onClose={() => setSelectedMember(null)}
+            onClose={closeMemberPanel}
             onSend={sendMemberMessage}
           />
         )}

@@ -79,8 +79,7 @@ Tauri 壳（Rust）
 - 世界书面板（v2 格式，全文/关键词注入模式，读写 worldbooks.json）
 - 注入门控：session-bindings.json 登记 → 只有绑定的成员会话有酒馆注入
 - 成员融合：预设绑定（agentPresets.select）→ 世界书/记忆/关系网/剧情选项激活
-- NSFW：插件自带开关在原生面板里可用；mirach 代码不实现/不接线破限
-
+- NSFW：插件自带开关在原生面板里可用；
 ### 基础设施
 - 引擎 npm 全局安装（更新 = npm i -g @deepseek-ai/dsh@alpha + 重启）
 - 内核加载完整官方 client 栈（KERNEL_PLUGINS 41 bundle：连接/gateway/remotes/session-controller/workspace-controller + 全套 client UI 包（renderer/locale/settings 及分区包/session/workspace/theme/layout/sidebar/conversation/chat/tool/attachment/reference/brand-official + 输入框/对话区/能力包/定时/目录选择器栈）；酒馆与 dsh-pocket 经 apply 侧载）
@@ -175,13 +174,12 @@ npm i -g @deepseek-ai/dsh@alpha
 ### 待做（按优先级）
 1. **dsh 风格完整官方 ChatView 渲染**：内核已加载全部 41 个官方 bundle；chatStyle=dsh 已由 NativeChatArea 直挂官方 ConversationRoot 树。剩余为官方会话数据接通后的完整体验对齐（对齐后 dsh 风格 = 官方对话区完整体验 + 自动跟随更新）。
 2. **群聊增强**：状态栏卡片/剧情选项按钮在群聊已生效，但群聊上下文靠 prompt 注入最近 12 条（各成员保有自己会话记忆）。
-3. **手机端**：设置 → 手机接入 → 开开关 → 重启 → 扫码即用。公网需隧道+HTTPS。
+3. **手机端**：设置 → 手机接入 → 开开关 → 重启 → 扫码即用。已用插件实现。
 4. **dsh-agent-rp**：npm 上不存在（404），待用户提供来源。
 5. **定时任务 envId 隔离**：当前是命名约定（[envId] 前缀），字段级隔离需引擎支持。
 6. **成员模板导入导出**：已有团队导出/导入 JSON，成员级细粒度待做。
 
 ### 已知限制
-- NSFW 破限：mirach 代码不实现/不接线。原生酒馆面板里的开关属插件作者功能。
 - 成员线程 UI 记录在内存 + localStorage（重启恢复），引擎侧持久日志是权威。
 - 群聊并发绑定窗口理论上可交错（引擎串行队列兜底）。
 - 内核单会话绑定：A 的回合收尾可能短暂清 B 的 busy（B 的 turn 事件到达后恢复）。

@@ -39,6 +39,13 @@ import "@deepseek-ai/dsh-client-ui-agent-preset/client";
 import "@deepseek-ai/dsh-client-ui-session/client";
 import "@deepseek-ai/dsh-client-ui-workspace/client";
 import "@deepseek-ai/dsh-client-ui-theme/client";
+// 官方布局包（CJS bundle，经 shim 注册工厂；bundleRequire 实例化）。
+// 固定面板桌面布局适配：官方 narrow 自动折叠（帧宽 < 1024 → 侧栏缩成
+// 56 窄轨）只该服务网页版响应式布局。mirach 的官方帧宽度随宿主列拖拽
+// 变化——快速拖动右栏把手跨过 1024 阈值时会在窄轨/展开之间来回切换
+// （左侧栏闪烁消失）。关闭该断点：侧栏仅随 ⌘B/折叠按钮显式开关变化。
+// 注意：不能静态 import 具名导出（bundle 是 CJS，ESM 具名导入直接崩），
+// 开关只能经 bundleRequire（与插件循环同一实例）在 boot 里设置。
 import "@deepseek-ai/dsh-client-ui-layout/client";
 // ui-sidebar：声明 sidebar 槽位链（sidebar.settings 声明在此）——ui-settings
 // 分区包的 inject 是 lazy 的（key 未声明不执行），缺它官方设置分区不注册
@@ -83,6 +90,7 @@ import "dsh-tavern/client";
 // dsh-pocket client bundle（"手机访问"设置分区：局域网/公网扫码同步访问）
 import "dsh-pocket/client";
 import { Context } from "@deepseek-ai/cordis";
+import type { ReactNode } from "react";
 import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
@@ -90,6 +98,7 @@ import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { registerMirachSections } from "./mirach-sections";
 import { registerComposerExtras } from "./composer-extras";
+import { registerSidebarShell } from "./sidebar-shell";
 import { logInfo, logWarn } from "./kernel-log";
 
 /** 鍐呮牳鎻掍欢婵€娲婚『搴忥紙modules 绯荤粺 bundle id 鈫?瀹炰緥鍖?鈫?cordis plugin锛夈€?*/
@@ -113,9 +122,11 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-workspace/client",
   "@deepseek-ai/dsh-client-ui-theme/client",
   "@deepseek-ai/dsh-client-ui-layout/client",
-  // ui-sidebar：sidebar 槽位链起点（sidebar.settings 声明）——缺它官方设置
-  // 分区的 inject 永远不注册（lazy 声明）
-  "@deepseek-ai/dsh-client-ui-sidebar/client",
+  // ui-sidebar 已从官方装配移除：sidebar 槽（含 5 个官方子槽声明：
+  // brand.mark/brand.name/workspaces/settings/footer.action）由 mirach 的
+  // registerSidebarShell 接管（sidebar-shell.tsx），官方 ui-workspace /
+  // ui-settings-general / ui-brand-official 的 slots.inject 会跟随 mirach
+  // 声明自动注册 — 每个子槽只允许一次声明，官方包保留会与 mirach 冲突。
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
   // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
@@ -484,7 +495,7 @@ export function nativeGoalsRemote(): Record<string, (...args: unknown[]) => Prom
 }
 
 /**
- * 折叠官方三栏的 sidebar/details 列（只留中间对话列）。
+ * 折叠官方三栏的 details 列（侧栏列保留展开 —— 渲染 mirach 侧栏外壳）。
  * AppFrame 的 layout store 实例经 storeOf 取 bound actions（draft 已被剥离）。
  */
 export function nativeCollapsePanels(): void {
@@ -503,11 +514,111 @@ export function nativeCollapsePanels(): void {
     const actions = store?.actions as
       | { setSidebar?: (px: number) => void; setDetails?: (px: number) => void }
       | undefined;
-    actions?.setSidebar?.(0);
     actions?.setDetails?.(0);
   } catch {
     /* 布局列折叠失败不阻塞渲染 */
   }
+}
+
+// ── 官方侧栏能力外露（mirach LeftSidebar 复用官方新任务/工作区/会话列表） ──
+
+/**
+ * 官方侧栏折叠/展开（⌘B 快捷键走官方 layout.toggleSidebar）：侧栏列宽
+ * 由官方 layout store 管理（展开 280 / 折叠 56 rail，折叠态仍渲染 mirach
+ * 侧栏外壳及其展开按钮）。
+ */
+export function nativeToggleSidebar(): boolean {
+  const ctx = kernelCtx;
+  if (ctx === null) return false;
+  try {
+    const ctxAny = ctx as unknown as {
+      layout?: { toggleSidebar?: () => void };
+      get?: (k: string) => unknown;
+    };
+    const layout = ctxAny.layout
+      ?? (typeof ctxAny.get === "function" ? (ctxAny.get("layout") as { toggleSidebar?: () => void } | undefined) : undefined);
+    if (typeof layout?.toggleSidebar !== "function") return false;
+    layout.toggleSidebar();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 官方"新任务"行为（SidebarRoot 新任务按钮同款）：uiWorkspace.startSession
+ * —— 继承当前会话工作区 → connectWorkspace（空白会话复用/新建）→ open。
+ * 官方打开后由 LeftSidebar 的 OfficialWorkspaceBrowser 反向同步对齐 mirach
+ * 活跃会话。fail-loud：内核未 boot / 服务缺失返回 false，调用方显式提示
+ * "内核未就绪"，不静默回退 mirach 自有新建（无第二实现）。
+ */
+export function nativeOfficialStartSession(): boolean {
+  const ctx = kernelCtx;
+  if (ctx === null) return false;
+  try {
+    const ctxAny = ctx as unknown as {
+      uiWorkspace?: { startSession?: (w?: string) => void };
+      get?: (k: string) => unknown;
+    };
+    const uiWorkspace = ctxAny.uiWorkspace
+      ?? (typeof ctxAny.get === "function" ? (ctxAny.get("uiWorkspace") as typeof ctxAny.uiWorkspace | undefined) : undefined);
+    if (typeof uiWorkspace?.startSession !== "function") return false;
+    uiWorkspace.startSession();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 官方工作区/会话浏览器渲染面：renderSlot("sidebar.workspaces", owner) 的
+ * ReactNode。该槽为 root scope 单槽，条目由 ui-workspace 的 WorkspaceBrowser
+ * 占据（含搜索 + 工作区树 + 全部会话）。mirach LeftSidebar 在自己的树里渲染
+ * 该节点即可获得官方会话列表（槽位渲染器全局安装，跨树渲染与官方设置浮出
+ * 同机制）。内核未 boot / 渲染失败返回 null（调用方回退 mirach 自有列表）。
+ */
+export function nativeWorkspaceBrowser(): ReactNode | null {
+  const ctx = kernelCtx;
+  if (ctx === null) return null;
+  try {
+    const slots = ctx as unknown as {
+      slots?: { renderSlot?: (key: string, owner: object) => ReactNode };
+    };
+    // wide=true + expandSidebar no-op：mirach 侧栏恒为展开形态，无需回请求展开
+    return slots.slots?.renderSlot?.("sidebar.workspaces", { wide: true, expandSidebar: () => {} }) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 官方"当前会话"列表订阅面（sessions.list observable）：反向同步用——
+ * 用户在官方工作区列表点击会话（sessions.open）后，mirach 侧据此把活跃
+ * 会话对齐到映射的前端会话。无内核/服务缺失返回 null。
+ */
+export function nativeSessionsList(): {
+  getSnapshot: () => {
+    current?: string;
+    byId?: Record<string, { blank?: boolean; title?: string }>;
+    jobsBySession?: Record<string, { id: string; status: string; label: string }[]>;
+    subagentsByParent?: Record<string, unknown>;
+  };
+  subscribe: (fn: () => void) => () => void;
+} | null {
+  const sessions = nativeSessions();
+  if (sessions === null) return null;
+  const list = (sessions as unknown as {
+    list?: {
+      getSnapshot: () => {
+        current?: string;
+        jobsBySession?: Record<string, { id: string; status: string; label: string }[]>;
+        subagentsByParent?: Record<string, unknown>;
+      };
+      subscribe: (fn: () => void) => () => void;
+    };
+  }).list;
+  if (typeof list?.getSnapshot !== "function" || typeof list.subscribe !== "function") return null;
+  return list;
 }
 
 /** 婵€娲诲畼鏂瑰鎴风鍐呮牳骞跺紑濮嬮暅鍍忥紱澶辫触鍙憡璀︿笉闃诲搴旂敤锛坰idecar 绠￠亾鍏滃簳锛夈€?*/
@@ -584,6 +695,21 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // ── mirach 输入框附加控件：注入官方 InputBar 子槽（朗读/终端等
     //    mirach 有、官方没有的控件，随官方工具行排布）
     registerComposerExtras(ctx);
+    // ── 侧栏窄态断点关闭：官方 AppFrame 的模块级开关，与插件循环共用
+    //    bundleRequire 缓存（同一实例）——必须先于树渲染设置。降级仅告警。
+    try {
+      const layoutBundle = bundleRequire("@deepseek-ai/dsh-client-ui-layout/client") as {
+        setSidebarAutoCollapseEnabled?: (enabled: boolean) => void;
+      };
+      layoutBundle?.setSidebarAutoCollapseEnabled?.(false);
+      logInfo("sidebar narrow auto-collapse disabled (fixed-panel layout)");
+    } catch (err) {
+      logWarn("ui-layout narrow switch unavailable: %s", err instanceof Error ? err.message : String(err));
+    }
+    // ── mirach 侧栏外壳：接管官方 sidebar 槽（官方 ui-sidebar 已移除，
+    //    本注册自带 5 个官方子槽声明 + inject：官方 WorkspaceBrowser/设置
+    //    入口经 slots.inject 跟随注册，mirach 自由重排搜索/工作区/会话列表）
+    registerSidebarShell(ctx);
     bridge = createDshBridge();
 
     const sessions = (ctx as unknown as { sessions: KernelSessions }).sessions;

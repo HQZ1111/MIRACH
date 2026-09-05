@@ -77,6 +77,37 @@ function handleQuickSubmit(text: string): void {
   }
 }
 
+/**
+ * CrashBoundary — 主界面渲染崩溃的 fail-loud 边界。
+ * React 渲染抛错（如 hooks 数量不一致）会让整棵树白屏且没有任何可见线索；
+ * 这里显式展示错误 + 组件栈（DEV 下 componentStack 指向出错的组件），不静默。
+ */
+import { Component, type ReactNode } from "react";
+
+class CrashBoundary extends Component<{ children: ReactNode }, { err: Error | null; info: string }> {
+  state = { err: null as Error | null, info: "" };
+  static getDerivedStateFromError(err: Error) {
+    return { err };
+  }
+  componentDidCatch(err: Error, info: { componentStack?: string }) {
+    // eslint-disable-next-line no-console
+    console.error("[crash-boundary]", err, info.componentStack ?? "(no component stack)");
+    this.setState({ info: info.componentStack ?? "" });
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div className="fixed inset-0 z-[999] overflow-auto bg-white p-8 font-mono text-xs text-[#303030]">
+          <h1 className="mb-2 text-sm font-bold text-[#EF4444]">界面渲染崩溃（fail-loud）</h1>
+          <pre className="whitespace-pre-wrap">{String(this.state.err.stack ?? this.state.err.message).slice(0, 3000)}</pre>
+          {this.state.info && <pre className="mt-4 whitespace-pre-wrap text-[11px] text-muted-foreground">Component stack:{this.state.info}</pre>}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   useEffect(() => {
     // 日志捕获（导出日志弹窗用）
@@ -122,7 +153,9 @@ function App() {
         <NotifyBridge />
         <ResizeHandles />
         <KernelMirrorHost />
-        <AppLayout />
+        <CrashBoundary>
+          <AppLayout />
+        </CrashBoundary>
       </TerminalStatusProvider>
     </ThemeProvider>
   );

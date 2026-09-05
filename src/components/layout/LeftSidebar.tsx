@@ -38,15 +38,11 @@ import {
   UserRound,
   MessageCircle,
   ChevronDown,
-  ChevronRight,
-  Search as SearchIcon,
   FilePlus,
   Package,
   Columns3,
   Clock,
   Pin,
-  FolderKanban,
-  FolderPlus,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -77,7 +73,6 @@ import {
   FileText,
   Fingerprint,
   FolderOpen,
-  MoreHorizontal,
   Pencil,
   RotateCcw,
   Trash2,
@@ -85,17 +80,14 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openSessionWindow } from "@/lib/sessionWindow";
-import { openTab, $suppressTabOnce } from "@/store/open-tabs";
 import { useAppConfig } from "@/hooks/useAppConfig";
-import { $projects, createProject } from "@/store/projects";
 import { $agents, type ConvItem } from "@/store/agents";
 import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
-import { newTaskSession } from "@/store/chat";
 import { requestTrajectory } from "@/store/chat-history";
 import { openPrompt } from "@/store/prompt-dialog";
-import { kernelSearchSessions } from "@/lib/kernel-search";
-import type { SessionHit } from "@/lib/api/types";
+import { pushToast } from "@/store/toast";
+import { nativeOfficialStartSession } from "@/dsh-kernel/boot";
 
 // ===== View config =====
 
@@ -191,15 +183,6 @@ function fmtSessionTime(ms: number): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// FTS snippet：转义 HTML 后保留 <mark> 高亮标签（防止会话内容里的 HTML 注入）
-function highlightSnippet(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/&lt;mark&gt;/g, "<mark>")
-    .replace(/&lt;\/mark&gt;/g, "</mark>");
-}
 
 // ===== Component =====
 
@@ -235,20 +218,16 @@ export function LeftSidebar({
   const cfg = getConfig(activeView);
   // 当前模式的 hermes 数据文件夹名（会话列表"项目"归属文件夹；随模式切换）：
   // 主环境 = .myhermes 根（hermes），5 档案 = .myhermes/profiles/<view>（hermes-<view>）
-  const viewFolder = activeView === "mirach" ? "mirach" : `mirach-${activeView}`;
   // 工作区/数据目录（会话右键菜单"在资源管理器中打开 / 复制路径 / 复制日志路径"用）
   const { config } = useAppConfig();
   const [activeTab, setActiveTab] = useState<"all" | "read" | "unread">("all");
   const [viewMode, setViewMode] = useState<"team" | "sessions">("team");
   const [sessionTab, setSessionTab] = useState<"conv" | "member">("conv");
-  const [searchQuery, setSearchQuery] = useState("");
   // 会话操作菜单（当前打开菜单的会话 id + 固定定位；右键/⋯ 共用）
   // menuTitle：项目树会话可能尚无 store 会话（不主动创建），仅记录标题供延迟创建
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [menuTitle, setMenuTitle] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
-  // 当前选中的会话 id（普通点击高亮 + 设为活跃会话）
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   // 菜单钳制到软件面板内：透明窗口比面板大（各 40px 边距），按窗口/视口钳制会把菜单
   // 推进透明边距并被窗口边缘截断；改为记录面板视口矩形 + 菜单实际高度，钳制在面板内
   const [panelRect, setPanelRect] = useState<{ l: number; t: number; r: number; b: number } | null>(null);
@@ -258,6 +237,7 @@ export function LeftSidebar({
   // 真实模式：会话列表来自 dsh 引擎（磁盘目录扫描 + 首条用户消息做标题）；
   // 搜索走本地过滤（引擎 FTS5 是旧 hermes 面，未接）
   const isReal = !MOCK && getApi().mode === "real";
+
 
   /** 前端会话 id → 磁盘 dsh 会话 id（导入时记录；点击时先采纳映射再切换） */
   const engineDshRef = useRef(new Map<string, string>());
@@ -291,53 +271,10 @@ export function LeftSidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReal, activeView]);
 
-  // 真实模式：会话全文搜索结果（FTS5，防抖 250ms）
-  const [realHits, setRealHits] = useState<SessionHit[]>([]);
-  const [hitsLoading, setHitsLoading] = useState(false);
-  useEffect(() => {
-    if (!isReal || !searchQuery.trim()) {
-      setRealHits([]);
-      setHitsLoading(false);
-      return;
-    }
-    setHitsLoading(true);
-    const t = window.setTimeout(() => {
-      void (async () => {
-        // 引擎全文检索优先（session-query-sqlite FTS5：原始事件流，比 Rust FTS5 镜像更全更准）；
-        // dsh 会话 id 反查映射回前端会话 id（engineDshRef 逆向）。
-        const dshToMirach = new Map<string, string>();
-        for (const [mirId, dshId] of engineDshRef.current) dshToMirach.set(dshId, mirId);
-        const kernelHits = await kernelSearchSessions(searchQuery.trim(), dshToMirach);
-        if (kernelHits.length > 0) {
-          setRealHits(kernelHits);
-          setHitsLoading(false);
-          return;
-        }
-        // 引擎无结果或不可用 → 回退 Rust FTS5（sessions.db 标题/预览镜像）
-        try {
-          const h = await getApi().searchSessions(searchQuery.trim());
-          setRealHits(h);
-          setHitsLoading(false);
-        } catch {
-          setRealHits([]);
-          setHitsLoading(false);
-        }
-      })();
-    }, 250);
-    return () => window.clearTimeout(t);
-  }, [isReal, searchQuery]);
-
-  // 真实模式打开历史会话：设活跃会话 → MainPanel 的 dsh_get_history effect
-  // 统一回放（含空会话清空），避免与这里的 loadLiveHistory 双路径竞争覆盖
-  const openSearchHit = async (h: SessionHit) => {
-    setSelectedSessionId(h.sessionId);
-    setActiveSession(h.sessionId);
-  };
 
   /** 会话行点击：原型修饰键语义
    *  - 普通点击 → in-place：选中该会话并设为活跃会话（主对话区 / per-session 状态跟随）
-   *  - ⌘/⌃+点击 → tab：设为活跃会话，SessionTabs 自动补开标签
-   *  - ⇧⌘/⇧⌃+点击 → window：新窗口打开（open_session_window 未注册时静默）
+     *  - ⇧⌘/⇧⌃+点击 → window：新窗口打开（open_session_window 未注册时静默）
    */
   const handleSessionClick = (e: React.MouseEvent, s: SessionItem) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -345,13 +282,6 @@ export function LeftSidebar({
       e.preventDefault();
       openSessionWindow(s.id);
       return;
-    }
-    setSelectedSessionId(s.id);
-    if (mod) {
-      // ⌘/⌃+点击 = 标签意图：显式补开标签（普通点击 in-place 切换，不开标签）
-      openTab(s.id);
-    } else {
-      $suppressTabOnce.set(true);
     }
     // 引擎磁盘历史：先采纳 "<env>::<前端id>" → 已有 dsh 会话的映射（否则
     // MainPanel 流水线会新建空会话丢上下文），再切换活跃会话触发统一回放
@@ -366,15 +296,23 @@ export function LeftSidebar({
 
   // 会话列表（store，本地持久化）
   const sessions = useStore($sessions);
-  const pinnedSessions = sessions.filter((s) => s.pinned && !s.archived);
+
+  // 当前菜单会话（供共享菜单渲染）。项目会话尚无 store 会话时以标题生成虚拟项，操作时再创建
+  const menuSession = menuFor
+    ? sessions.find((s) => s.id === menuFor) ?? null
+    : menuTitle
+      ? sessions.find((s) => s.title === menuTitle) ??
+        ({ id: "", title: menuTitle, preview: "", time: "", pinned: false, archived: false } as SessionItem)
+      : null;
+  // 菜单操作真正需要 store 会话时再解析：已存在直接返回，否则延迟创建（一次右键只建一个）
+  const ensureMenuSession = (): SessionItem | null => {
+    if (menuSession && menuSession.id) return menuSession;
+    if (!menuTitle) return null;
+    const found = $sessions.get().find((s) => s.title === menuTitle);
+    return found ?? createSession(menuTitle);
+  };
   const archivedSessions = sessions.filter((s) => s.archived);
-  // 项目树（store，本地持久化）
-  const projects = useStore($projects);
-  const convList = sessions
-    .filter((s) => !s.archived)
-    // 对齐 dsh：空白会话从列表隐藏（复用入口 = 新建任务），只显示有内容的会话
-    .filter((s) => hasSessionContent(s.id))
-    .filter((s) => !searchQuery || (s.title ?? "").includes(searchQuery) || (s.preview ?? "").includes(searchQuery));
+  const pinnedSessions = sessions.filter((s) => s.pinned && !s.archived);
 
   // ---- 自定义滚动条目标容器 ----
   const sessionBodyRef = useRef<HTMLDivElement>(null);
@@ -402,22 +340,6 @@ export function LeftSidebar({
     if (el) setMenuH(el.offsetHeight);
   }, [menuPos]);
   // 项目树会话没有 store id：右键时只查已存在的同名会话，不创建（副作用延迟到菜单操作）
-  const resolveProjectSession = (title: string): SessionItem | null =>
-    $sessions.get().find((s) => s.title === title) ?? null;
-  // 当前菜单会话（供共享菜单渲染）。项目会话尚无 store 会话时以标题生成虚拟项，操作时再创建
-  const menuSession = menuFor
-    ? sessions.find((s) => s.id === menuFor) ?? null
-    : menuTitle
-      ? sessions.find((s) => s.title === menuTitle) ??
-        ({ id: "", title: menuTitle, preview: "", time: "", pinned: false, archived: false } as SessionItem)
-      : null;
-  // 菜单操作真正需要 store 会话时再解析：已存在直接返回，否则延迟创建（一次右键只建一个）
-  const ensureMenuSession = (): SessionItem | null => {
-    if (menuSession && menuSession.id) return menuSession;
-    if (!menuTitle) return null;
-    const found = $sessions.get().find((s) => s.title === menuTitle);
-    return found ?? createSession(menuTitle);
-  };
 
   // ===== Session list view =====
   if (viewMode === "sessions") {
@@ -468,10 +390,15 @@ export function LeftSidebar({
                   icon: FilePlus,
                   shortcut: "Ctrl+N",
                   action: () => {
-                    // dsh New Session 语义：空白会话复用（不每次新建堆积空会话）；
-                    // 有内容才新建。激活后 MainPanel 切会话统一清空 + 回放历史
-                    setActiveSession(newTaskSession());
+                    // 官方"新任务"语义（SidebarRoot 新任务按钮同款）：uiWorkspace.startSession
+                    // —— 继承当前工作区 → connectWorkspace（空白会话复用/新建）→ open。
+                    // 官方打开后经 OfficialWorkspaceBrowser 的反向同步把 mirach 活跃会话
+                    // 对齐到新 dsh 会话的映射。fail-loud：内核未 boot / 服务缺失不静默
+                    // 换第二套实现，直接明示"内核未就绪"（对齐官方哲学）。
                     setSessionTab("conv");
+                    if (!nativeOfficialStartSession()) {
+                      pushToast("官方内核未就绪，无法新建任务（等待连接引擎）", "error");
+                    }
                   },
                 },
                 { label: "产物", icon: Package, shortcut: undefined, action: () => onOpenArtifacts?.() },
@@ -490,19 +417,9 @@ export function LeftSidebar({
               ))}
             </div>
 
-            {/* 搜索 */}
-            <div className="relative mb-3">
-              <input
-                className="w-full rounded-lg border border-border bg-white pl-8 pr-3 py-1.5 text-body-sm text-[#303030] placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#303030]/10"
-                placeholder="搜索会话..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            </div>
-
             {/* 已置顶会话（.dropdown-card 令牌 = zosma CustomProviderRow 卡片样式：
-                头部按钮 + 旋转 ChevronDown + borderTop 内容区；改令牌即全局换样式） */}
+                头部按钮 + 旋转 ChevronDown + borderTop 内容区；改令牌即全局换样式）。
+                置顶是 mirach 自有功能（官方列表没有），官方浏览器就绪后仍显示。 */}
             <div className="dropdown-card mb-3">
               <Collapsible defaultOpen>
                 <CollapsibleTrigger className="dropdown-card-trigger py-1.5 group/pinned">
@@ -523,7 +440,7 @@ export function LeftSidebar({
                         <div
                           key={s.id}
                           onClick={(e) => handleSessionClick(e, s)}
-                          title="点击打开 · ⌘/⌃+点击打开标签 · ⇧⌘+点击新窗口"
+                          title="点击打开 · ⇧⌘+点击新窗口"
                           onContextMenu={(e) => openSessionMenu(e, s)}
                           className="flex items-center gap-[16px] rounded-lg px-2 py-1.5 hover:bg-muted cursor-pointer transition-colors"
                         >
@@ -540,89 +457,7 @@ export function LeftSidebar({
               </Collapsible>
             </div>
 
-            {/* 项目（.dropdown-card 令牌 = zosma CustomProviderRow 卡片样式；改令牌即全局换样式） */}
-            <div className="dropdown-card mb-3">
-              <Collapsible defaultOpen>
-                <CollapsibleTrigger className="dropdown-card-trigger py-1.5 group/pinned">
-                  <FolderKanban className="dropdown-card-icon" strokeWidth={2} />
-                  <span className="min-w-0 flex-1 truncate text-left text-member" title={`项目（${viewFolder}）`}>
-                    项目<span className="text-muted-foreground">（{viewFolder}）</span>
-                  </span>
-                  <button
-                    className="opacity-0 group-hover/pinned:opacity-100 transition-opacity hover:text-[#303030] text-muted-foreground"
-                    title="新建项目"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      const name = (await openPrompt({ title: "新建项目名称", initialValue: "新项目", confirmText: "创建" }))?.trim();
-                      if (name) createProject(name);
-                    }}
-                  >
-                    <FolderPlus className="h-4 w-4" strokeWidth={2} />
-                  </button>
-                  <ChevronDown className="dropdown-card-chevron group-data-[state=open]/pinned:rotate-180" />
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="dropdown-card-body space-y-0.5 p-1.5">
-                    {projects.map((proj) => (
-                      <Collapsible key={proj.id}>
-                        <CollapsibleTrigger className="flex items-center gap-[16px] w-full rounded-lg py-1.5 px-2 hover:bg-muted data-[state=open]:bg-muted cursor-pointer group/proj">
-                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 group-data-[state=open]/proj:rotate-90" />
-                          <span className="flex-1 min-w-0 truncate text-left text-body-sm text-[#303030]">{proj.name}</span>
-                          <button
-                            className="opacity-0 group-hover/proj:opacity-100 transition-opacity hover:text-[#303030] text-muted-foreground"
-                            title="新建会话"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              // 不弹标题输入：直接建空会话（中栏显示引导页）
-                              createSession(`${proj.name} · 新会话`);
-                              setSessionTab("conv");
-                            }}
-                          >
-                            <FolderPlus className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="ml-8 pl-3 space-y-0.5">
-                            {/* 项目专属目录说明 */}
-                            <div className="flex items-center gap-1.5 py-1">
-                              <FolderKanban className="h-3 w-3 shrink-0 text-muted-foreground" strokeWidth={2} />
-                              <span className="min-w-0 truncate text-body-sm text-muted-foreground">
-                                {viewFolder}-{proj.name.replace(/\s+/g, "")}
-                              </span>
-                            </div>
-                            {/* Sessions（点击打开：有同名 store 会话直接激活；没有则创建并激活，
-                                主页面标题/介绍跟随切换） */}
-                            {proj.sessions.map((s, i) => (
-                              <div
-                                key={i}
-                                onClick={(e) => {
-                                  const store = resolveProjectSession(s.title);
-                                  if (store) {
-                                    handleSessionClick(e, store);
-                                  } else {
-                                    const created = createSession(s.title);
-                                    setSelectedSessionId(created.id);
-                                    setActiveSession(created.id);
-                                    setSessionTab("conv");
-                                  }
-                                }}
-                                onContextMenu={(e) => openSessionMenu(e, resolveProjectSession(s.title), s.title)}
-                                className="flex items-center gap-2 rounded-lg py-1 pl-5 hover:bg-muted cursor-pointer transition-colors"
-                              >
-                                <span className="flex-1 text-body-sm text-[#303030] truncate">{s.title}</span>
-                                <span className="text-[11px] text-muted-foreground shrink-0">{s.time}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </CollapsibleContent>
-                      </Collapsible>
-                    ))}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            </div>
-
-            {/* Tabs: 对话 / 成员 */}
+            {/* Tabs: 所有会话 / 成员 */}
             <div className="flex items-center w-full">
               {(["conv", "member"] as const).map((tab, i) => {
                 const labels = { conv: "所有会话", member: "成员" };
@@ -645,104 +480,12 @@ export function LeftSidebar({
             {/* Separator */}
             <div className="w-full h-px bg-border mb-3" />
 
-            {/* 真实模式：会话全文搜索结果（FTS5） */}
-            {sessionTab === "conv" && isReal && searchQuery.trim() && (
-              <div className="mb-2">
-                {hitsLoading ? (
-                  <p className="px-2 py-1 text-body-sm text-muted-foreground">搜索中…</p>
-                ) : realHits.length > 0 ? (
-                  realHits.map((h) => (
-                    <div
-                      key={`${h.sessionId}-${h.messageId}`}
-                      onClick={() => void openSearchHit(h)}
-                      title="打开该历史会话"
-                      className="group relative flex flex-col gap-0.5 rounded-lg px-2 py-2 cursor-pointer transition-colors hover:bg-muted"
-                    >
-                      <div className="flex items-center gap-1">
-                        <p className="text-member font-medium text-[#303030] truncate flex-1">{h.title}</p>
-                        <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[10px] uppercase text-muted-foreground">{h.role}</span>
-                      </div>
-                      <p
-                        className="text-body-sm text-muted-foreground truncate"
-                        dangerouslySetInnerHTML={{ __html: highlightSnippet(h.snippet) }}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <p className="px-2 py-1 text-body-sm text-muted-foreground">没有匹配的会话内容</p>
-                )}
-              </div>
-            )}
-
-            {/* 当前活跃会话置顶：空白会话按 dsh 语义从列表隐藏，但"正在说话的
-                这个"必须随时可见（否则新开会话找不到入口） */}
-            {sessionTab === "conv" &&
-              !convList.some((s) => s.id === selectedSessionId) &&
-              selectedSessionId && (
-                <div
-                  onClick={(e) =>
-                    handleSessionClick(e, {
-                      id: selectedSessionId,
-                      title: "当前对话",
-                      preview: "",
-                      time: "刚刚",
-                      pinned: false,
-                      archived: false,
-                      createdAt: Date.now(),
-                    })
-                  }
-                  className="flex flex-col gap-0.5 rounded-lg bg-muted px-2 py-2 cursor-pointer"
-                >
-                  <div className="flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#2E5BFF]" />
-                    <p className="text-member font-medium text-[#303030] truncate flex-1">当前对话</p>
-                  </div>
-                  <p className="text-body-sm text-muted-foreground">尚未命名（发送第一条消息后自动归入列表）</p>
-                </div>
-              )}
-            {/* 对话列表 (带搜索过滤；hover 出现操作菜单：置顶/重命名/归档/导出/删除) */}
-            {sessionTab === "conv" &&
-              convList.map((s) => (
-                <div
-                  key={s.id}
-                  onClick={(e) => handleSessionClick(e, s)}
-                  title="点击打开 · ⌘/⌃+点击打开标签 · ⇧⌘+点击新窗口"
-                  onContextMenu={(e) => openSessionMenu(e, s)}
-                  className={cn(
-                    "group relative flex flex-col gap-0.5 rounded-lg px-2 py-2 cursor-pointer transition-colors",
-                    selectedSessionId === s.id ? "bg-muted" : "hover:bg-muted",
-                  )}
-                >
-                  <div className="flex items-center gap-1">
-                    <p title={s.title} className="text-member font-medium text-[#303030] truncate flex-1">{s.title}</p>
-                    {s.pinned && (
-                      <Pin className="h-3 w-3 shrink-0 text-[#F59E0B]" strokeWidth={2} fill="#F59E0B" />
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // ⋯ 按钮：在按钮下方弹出共享菜单
-                        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                        setMenuFor((m) => (m === s.id ? null : s.id));
-                        setMenuPos({ x: r.right - 160, y: r.bottom + 4 });
-                      }}
-                      title="会话操作"
-                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-black/5 group-hover:opacity-100"
-                    >
-                      <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={2} />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <p title={s.preview} className="text-body-sm text-muted-foreground truncate flex-1">{s.preview || "（空会话）"}</p>
-                    <span className="text-[11px] text-muted-foreground shrink-0">{s.time}</span>
-                  </div>
-                </div>
-              ))}
-            {sessionTab === "conv" && convList.length === 0 && (
-              <p className="px-2 py-4 text-center text-body-sm text-muted-foreground">
-                {searchQuery ? "没有匹配的会话" : "暂无会话，点「新建任务」开始"}
-              </p>
-            )}
+            {/* 所有会话 = 官方 WorkspaceBrowser（搜索 + 工作区 + 详细会话列表）。
+                官方 0.1.2-alpha.4 起 child slots 只能经组件 props face 渲染
+                （ctx 级 renderSlot 拒绝 child slot），无法把官方浏览器摘出挂到
+                mirach 树 —— 官方侧栏因此保留在对话区左列（与 mirach 左栏并排，
+                见 index.css 的三列融合布局），会话浏览入口以官方为准。
+                本 tab 保留 mirach 自有块：置顶会话（上）+ 成员切换（下方 tabs）。 */}
 
             {/* 成员列表（点击打开与该成员的对话，选中常亮；添加/编辑/删除在设置 → 智能体） */}
             {sessionTab === "member" &&

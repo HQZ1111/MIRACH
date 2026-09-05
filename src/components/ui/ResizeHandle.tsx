@@ -83,7 +83,9 @@ export function ColumnResizeHandle({
         onDragEnd?.();
       }}
     >
-      {/* 拖拽热区（不可见，仅悬停显示缩放光标） */}
+      {/* 官方同款拖拽手柄视觉（AppFrame .handle[data-side=details] 的
+          12×32 悬浮 pill）：hover / 拖拽时显现，细圆角 + 悬浮填充 + 阴影 */}
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-8 w-3 -translate-x-1/2 -translate-y-1/2 rounded-[10px] border border-[#d1d5db]/70 bg-[#f5f6f8] opacity-0 shadow-[0_0_1px_rgba(0,0,0,0.2),0_0_4px_rgba(0,0,0,0.02),0_12px_32px_rgba(0,0,0,0.08)] transition-opacity duration-200 group-hover:opacity-100 group-active:opacity-100" />
     </div>
   );
 }

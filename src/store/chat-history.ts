@@ -50,12 +50,6 @@ export function closeChatHistory(): void {
   $chatHistoryOpen.set(false);
 }
 
-/** 主对话栏上方的会话标签条是否显示（工具按钮可隐藏） */
-export const $showSessionTabs = atom(true);
-export function toggleSessionTabs(): void {
-  $showSessionTabs.set(!$showSessionTabs.get());
-}
-
 /** 跳转请求：弹窗点结果 → 设消息索引 → ChatSection 监听滚动+闪烁 */
 export const $jumpRequest = atom<number | null>(null);
 export function requestJump(messageIndex: number): void {

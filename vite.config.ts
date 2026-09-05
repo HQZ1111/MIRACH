@@ -38,6 +38,25 @@ export default defineConfig(async () => ({
   plugins: [
     react(),
     tailwindcss(),
+    // ── 官方 lib 产物新鲜度守卫：junction 消费 packages/*/lib，官方 src 同步
+    //    后若未重跑 build:lib 会静默打开旧构建。官方无现成消费者门禁 → mirach 侧拦截。
+    {
+      name: "mirach-dsh-lib-freshness",
+      async buildStart() {
+        const { findStaleLibs } = await import("./scripts/check-dsh-lib-fresh.mjs");
+        const stale = findStaleLibs();
+        if (stale.length > 0) {
+          const list = stale.map((s) => `  ${s.pkg}: ${s.reason}`).join("\n");
+          throw new Error(
+            [
+              "官方 lib 产物比 src 旧（继续启动会打开旧构建的官方 UI）：",
+              list,
+              "修复：cd G:\\deepseek-harness-master && npm run build:lib，然后重启。",
+            ].join("\n"),
+          );
+        }
+      },
+    },
   ],
   resolve: {
     alias: {

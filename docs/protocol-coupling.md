@@ -93,10 +93,19 @@
 1. `pnpm --filter mirach exec tsc --noEmit`（前端类型）
 2. 启动应用 → 控制台确认无 `[dsh-kernel] ctx.sessions missing`、
    无 `slot declarations failed`、无 `Maximum update depth`
-3. 设置页：五分区 + 手机访问 + 酒馆管理齐全、可切换、文案中文、无
+3. **profile 插件树冒烟**（内核起不来的头号杀手）：手动跑一次
+   `node %APPDATA%\npm\node_modules\@deepseek-ai\dsh\lib\bin.js --profile mirach`
+   （env：`DSH_HOME=%USERPROFILE%\.mirach`、`MIRACH_WEB_PORT=3212`、
+   `MIRACH_WEB_HOST=127.0.0.1`、cwd=profile 目录），确认打出
+   `dsh web: http://127.0.0.1:3212/...` 且不再抛
+   `plugin tree failed to load`。社区插件（dsh-tavern 系）包名/版本互不匹配
+   （如 `muv-table`→`dsh-muv-table` 改名）会让引擎整机起不来。
+4. 设置页：五分区 + 手机访问 + 酒馆管理齐全、可切换、文案中文、无
    "官方项暂不可用"降级
-4. 对话：发送/回复/事件镜像/用量统计正常
-5. 历史会话：旧会话可打开（存储直读未破坏）
-6. 手机访问：局域网二维码出现、密码可刷新
-7. 若 401：查 shared/dsh-auth.cjs（对照官方 browser-auth.ts 新版）
-8. 若 404：查 wire 端点/信封（rpc-http.ts + adaptRpcArgs）
+5. 对话：发送/回复/事件镜像/用量统计正常
+6. 历史会话：旧会话可打开（存储直读未破坏）
+7. 手机访问：局域网二维码出现、密码可刷新
+8. 若 401：查 shared/dsh-auth.cjs（对照官方 browser-auth.ts 新版）
+9. 若 404：查 wire 端点/信封（rpc-http.ts + adaptRpcArgs）
+10. 窗口操作回归：最大化/还原后界面必须存活（ResizeHandles 曾因条件 return
+    在 hooks 之前导致整树白屏，见 official-internals-map.md 第六节第 8 条）

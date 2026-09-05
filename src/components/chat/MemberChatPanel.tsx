@@ -273,11 +273,13 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
             </div>
       </div>
 
-      {/* ---- 输入框（发送交给 AppLayout 管理会话） ---- */}
+      {/* ---- 输入框（发送交给 AppLayout 管理会话；standalone = 只走 onSend，
+           不落主对话 store / 不 kernelSend——否则成员消息双写主会话） ---- */}
       <Composer
         terminalOpen={terminalOpen}
         onToggleTerminal={() => setTerminalOpen((v) => !v)}
         onSend={(text) => onSend(member.id, text)}
+        standalone
         sessionScope={`member-${member.id}`}
       />
 

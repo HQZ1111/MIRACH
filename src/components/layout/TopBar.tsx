@@ -50,16 +50,24 @@ export const WINDOW_DOTS = [
   {
     title: "最大化 / 还原",
     color: "#E3A93C", // 琥珀
-    action: async () => {
-      try {
-        // Rust 侧 WM_SYSCOMMAND SC_MAXIMIZE/SC_RESTORE：本机实测唯一不回弹的
-        // 路径（tao 的 set_maximized 与 SetWindowPos 自管边界在无边框透明窗上
-        // 都会闪回；系统命令由 Windows 维护还原边界与任务栏排除）。
-        await invoke("toggle_main_maximize");
-      } catch {
-        /* 非 Tauri 环境：忽略 */
-      }
-    },
+    action: (() => {
+      // 连点保护：SC_MAXIMIZE/SC_RESTORE 是异步动画，GetWindowPlacement 的状态
+      // 在动画完成前滞后——250ms 内的第二次点击会把状态翻转回去（表现为"点了没反应"）。
+      let last = 0;
+      return async () => {
+        const now = Date.now();
+        if (now - last < 250) return;
+        last = now;
+        try {
+          // Rust 侧 WM_SYSCOMMAND SC_MAXIMIZE/SC_RESTORE：本机实测唯一不回弹的
+          // 路径（tao 的 set_maximized 与 SetWindowPos 自管边界在无边框透明窗上
+          // 都会闪回；系统命令由 Windows 维护还原边界与任务栏排除）。
+          await invoke("toggle_main_maximize");
+        } catch {
+          /* 非 Tauri 环境：忽略 */
+        }
+      };
+    })(),
   },
   {
     title: "关闭",
