@@ -109,3 +109,8 @@
 9. 若 404：查 wire 端点/信封（rpc-http.ts + adaptRpcArgs）
 10. 窗口操作回归：最大化/还原后界面必须存活（ResizeHandles 曾因条件 return
     在 hooks 之前导致整树白屏，见 official-internals-map.md 第六节第 8 条）
+11. 输入框工具行回归：尾组顺序（从右往左）= 发送/唤醒/朗读/听写/模型/用量；
+    收窄全程单行不折行，级联自适应：模型按钮先收成 cpu 图标（开始截断即收，
+    断点随模型名长短变），模式 chip 再收成字形图标，省略只作兜底；放宽逐级
+    恢复。切模型/切权限预设后级联要重算（MutationObserver 覆盖）。间距
+    row/tools 8、modes/trailing 6。见 official-internals-map.md 第六节第 11 条

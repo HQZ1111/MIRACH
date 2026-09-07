@@ -1,4 +1,4 @@
-/**
+﻿/**
  * LeftSidebar — 左侧栏 (280px)
  *
  * 内容从上到下：
@@ -81,7 +81,9 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { openSessionWindow } from "@/lib/sessionWindow";
 import { useAppConfig } from "@/hooks/useAppConfig";
-import { $agents, type ConvItem } from "@/store/agents";
+import { $agents, $agentsVersion, teamRosterFor, type ConvItem } from "@/store/agents";
+import { $environments } from "@/store/environments";
+import { BotFace, defaultShapeFor } from "./AgentAvatar";
 import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
 import { requestTrajectory } from "@/store/chat-history";
@@ -318,7 +320,13 @@ export function LeftSidebar({
   const sessionBodyRef = useRef<HTMLDivElement>(null);
   const teamBodyRef = useRef<HTMLDivElement>(null);
 
-  const conversations = useStore($agents).filter(
+  // 成员列表：主环境聚合全部环境的主人格（teamRosterFor 的跨环境行）；
+  // 订阅 $agents/$environments/$agentsVersion——任意环境的成员写入
+  // （尤其设置页改其他环境主人的头像）都触发聚合行刷新。
+  const agentsRaw = useStore($agents);
+  const environments = useStore($environments);
+  useStore($agentsVersion);
+  const conversations = (envIdForView(activeView) === "main" ? teamRosterFor("main") : agentsRaw).filter(
     (c) => activeTab === "all" || c.tab === activeTab,
   );
 
@@ -500,8 +508,11 @@ export function LeftSidebar({
                 >
                   <div onClick={() => onSelectMember?.(conv)} className="flex min-w-0 flex-1 items-center gap-2.5">
                     <div className="relative shrink-0" style={{ width: 36, height: 36 }}>
-                      <div className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold" style={{ backgroundColor: conv.avatarBg }}>
-                        {conv.initials}
+                      <div
+                        className="flex h-full w-full items-center justify-center overflow-hidden rounded-full"
+                        style={{ backgroundColor: conv.avatarImage ? "transparent" : conv.avatarBg }}
+                      >
+                        <BotFace color={conv.avatarBg} image={conv.avatarImage} name={conv.name} shape={conv.avatarShape || defaultShapeFor(conv.name)} size={32} />
                       </div>
                       <span className="absolute block rounded-full border-2 border-white" style={{ width: 11, height: 11, bottom: -2, right: -2, backgroundColor: conv.status === "pending" ? "#D1D5DB" : "#10B981" }} />
                     </div>
@@ -779,10 +790,10 @@ export function LeftSidebar({
                 {/* Avatar */}
                 <div className="relative shrink-0" style={{ width: 36, height: 36 }}>
                   <div
-                    className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold"
-                    style={{ backgroundColor: conv.avatarBg }}
+                    className="flex h-full w-full items-center justify-center overflow-hidden rounded-full"
+                    style={{ backgroundColor: conv.avatarImage ? "transparent" : conv.avatarBg }}
                   >
-                    {conv.initials}
+                    <BotFace color={conv.avatarBg} image={conv.avatarImage} name={conv.name} shape={conv.avatarShape || defaultShapeFor(conv.name)} size={32} />
                   </div>
                   <span
                     className="absolute block rounded-full border-2 border-white"
@@ -793,7 +804,14 @@ export function LeftSidebar({
                 {/* Info（名字/摘要限宽截断；flex-1 撑满剩余空间，
                     时间/状态固定钉在行最右侧，不随内容宽度移动） */}
                 <div className="min-w-0 flex-1">
-                  <p title={conv.name} className="text-member text-[#303030] truncate max-w-[140px]">{conv.name}</p>
+                  <p title={conv.name} className="text-member text-[#303030] truncate max-w-[140px]">
+                    {conv.name}
+                    {conv.fromEnv ? (
+                      <span className="ml-1 rounded bg-[#026CFE]/10 px-1 py-px align-middle font-sans text-[10px] font-medium text-[#026CFE]">
+                        {environments.find((e) => e.id === conv.fromEnv)?.name ?? conv.fromEnv}
+                      </span>
+                    ) : null}
+                  </p>
                   <p title={conv.preview} className="text-body-sm text-muted-foreground truncate mt-0.5 max-w-[168px]">
                     {conv.preview}
                   </p>

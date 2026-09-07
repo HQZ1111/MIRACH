@@ -21,7 +21,7 @@ import {
   nativeRenderReady,
   nativeRootTree,
 } from "@/dsh-kernel/boot";
-import { OfficialVoiceSend } from "@/dsh-kernel/composer-extras";
+import { ComposerRowAdaptive, MirachAutoGlyph, OfficialVoiceSend } from "@/dsh-kernel/composer-extras";
 import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
 
 const KERNEL_RETRY_MS = 1500;
@@ -138,6 +138,10 @@ export function NativeChatArea({
         {tree}
         {/* 空输入点击发送=语音（覆盖层；官方源码零改动，见 composer-extras） */}
         <OfficialVoiceSend />
+        {/* 工具行自适应折叠：模型→图标 → 模式→图标 → 省略兜底（永不折行） */}
+        <ComposerRowAdaptive />
+        {/* mirach-auto 图标：触发钮 CSS + 菜单行注入（官方无字形） */}
+        <MirachAutoGlyph />
       </TreeBoundary>
     </div>
   );

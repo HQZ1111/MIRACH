@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-kernel/sidebar-shell — mirach 侧栏外壳（官方 sidebar 槽接管者）
  *
  * 官方 ui-sidebar 包已从 KERNEL_PLUGINS 移除，本模块用相同的 register 契约
@@ -89,8 +89,9 @@ import {
   type SessionItem,
 } from "@/store/sessions";
 import { setActiveSession } from "@/store/session";
-import { envIdForView } from "@/store/environments";
-import { $agents } from "@/store/agents";
+import { envIdForView, $environments } from "@/store/environments";
+import { $agents, $agentsVersion, teamRosterFor } from "@/store/agents";
+import { BotFace, defaultShapeFor } from "@/components/layout/AgentAvatar";
 import { currentView } from "@/store/current-view";
 import { setSidebarCollapsed } from "@/store/layout-mirror";
 import { toggleMemberPanel } from "@/store/member-panel";
@@ -564,6 +565,49 @@ function FallbackSidebar(props: SidebarRootComponentProps) {
 }
 
 /**
+ * 官方 footer/设置槽的 body 级 portal 挂载（展开态/折叠态都用）。可视布局
+ * 不放设置入口（左侧工具栏齿轮是唯一设置入口），但 settings-surface 需要
+ * `[data-slot="settings.trigger"]` 触发按钮存在。挂到 document.body 的
+ * 屏幕外容器（fixed left:-10000，0×0）里：触发行在窗口外不可见，而官方
+ * 面板（fixed inset:0）相对视口定位、不受容器位置/尺寸影响——弹窗 DOM
+ * 彻底脱离应用树的裁剪链（面板 translateZ(0) 包含块、侧栏 overflow、
+ * 滚动容器 maskImage 都管不到它），可全窗口拖动、永远在最上层。
+ * createPortal 是 React 官方机制：事件仍沿 React 树冒泡，官方 onClick/
+ * 状态全部正常；portal 容器常驻，不随开关增删。
+ * **只在可见树挂载**（内联 marker 检测 .dsh-native-area 祖先）：镜像树的
+ * SettingsRoot 在引擎异常时会随镜像降级消失，双 portal 会让 settings-surface
+ * 的类名/拖拽接线落到错误实例上。
+ */
+function PortalSettingsMount({
+  renderSlot,
+}: {
+  renderSlot: SidebarRootComponentProps["renderSlot"];
+}) {
+  const markerRef = useRef<HTMLSpanElement | null>(null);
+  const [inVisibleTree, setInVisibleTree] = useState(false);
+  useLayoutEffect(() => {
+    const area = document.querySelector(".dsh-native-area");
+    setInVisibleTree(area !== null && markerRef.current !== null && area.contains(markerRef.current));
+  }, []);
+  if (!inVisibleTree) return <span ref={markerRef} style={{ display: "none" }} />;
+  return (
+    <>
+      <span ref={markerRef} style={{ display: "none" }} />
+      {createPortal(
+        <div
+          data-mirach-settings-portal
+          style={{ position: "fixed", left: -10000, top: 0, width: 0, height: 0 }}
+        >
+          {renderSlot("sidebar.footer.action", { wide: true })}
+          {renderSlot("sidebar.settings", { wide: true })}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/**
  * mirach 侧栏：官方 sidebar 槽的部件。
  * 布局（自上而下）：Header（标题点击切换团队/会话视图 + 折叠按钮）
  * → 团队视图（头像/统计/全部已读未读/成员列表）或会话视图（新建任务 →
@@ -573,7 +617,7 @@ function FallbackSidebar(props: SidebarRootComponentProps) {
  * standard kit —— 仅当 GuardedMirachSidebar 确认齐全后才渲染本组件。
  */
 function MirachSidebar(props: SidebarRootComponentProps) {
-  const { collapsed, width, startSession, toggleSidebar } = props;
+  const { collapsed, startSession, toggleSidebar, renderSlot } = props;
   // 官方折叠状态直接写全局 store（工具栏背景/顶栏展开按钮都由它驱动）：
   // 官方 AppFrame 的 collapsed prop 是唯一权威信号（含窄视口自动折叠、
   // 拖动右侧栏压窄主区等一切路径），不再依赖宽度观察器的时序。
@@ -609,7 +653,12 @@ function MirachSidebar(props: SidebarRootComponentProps) {
   const pinnedSessions = useMemo(() => sessions.filter((s) => s.pinned && !s.archived), [sessions]);
   const archivedSessions = useMemo(() => sessions.filter((s) => s.archived), [sessions]);
   const allAgents = useStore($agents);
-  const conversations = allAgents.filter(
+  // 主环境聚合全部环境的主人格行（与 LeftSidebar 同源 teamRosterFor）；
+  // 订阅 $environments/$agentsVersion——任意环境成员写入都刷新聚合行
+  // （跨环境行读其他环境分片，不经过 $agents）。
+  useStore($environments);
+  useStore($agentsVersion);
+  const conversations = (envIdForView(view) === "main" ? teamRosterFor("main") : allAgents).filter(
     (c) => activeTab === "all" || c.tab === activeTab,
   );
 
@@ -723,9 +772,14 @@ function MirachSidebar(props: SidebarRootComponentProps) {
 
   // ================= 折叠态：侧栏本体隐藏（不渲染 rail 工具栏） =================
   // "展开/新建任务/搜索"图标由主对话区顶栏（MainPanel 折叠态图标组）接管，
-  // 位于项目名左边；本组件返回 null，侧栏列保持官方窄轨（56px，列背景透明）。
+  // 位于项目名左边；可视内容为空，但官方设置槽保持 body portal 挂载——
+  // 折叠态下左侧工具栏齿轮仍能经 settings-surface 打开官方设置。
   if (collapsed) {
-    return null;
+    return (
+      <div className="h-full w-full">
+        <PortalSettingsMount renderSlot={renderSlot} />
+      </div>
+    );
   }
 
   // ================= 展开态（280px；顶部排版参考原 LeftSidebar header） =================
@@ -735,8 +789,9 @@ function MirachSidebar(props: SidebarRootComponentProps) {
     <div
       // pb-[20px]：侧栏底部 20px 空白限制区（与主对话区底部留白对齐，
       // 内容列表在 20px 之上结束）
+      // 宽度交给 CSS（index.css: [data-slot="sidebar"] > div { width:100% }），
+      // 与列宽同帧同步（拖动/钳制任何时刻内容都随列、不溢出、不晃动）
       className="flex h-full flex-col bg-white pb-[20px]"
-      style={{ width, minWidth: width }}
     >
       {/* Header（85px：标题点击切换团队/会话视图 + 折叠按钮 + 底部分割线） */}
       <div className="relative flex shrink-0 items-center justify-between px-4" style={{ height: 85 }}>
@@ -833,10 +888,10 @@ function MirachSidebar(props: SidebarRootComponentProps) {
                   >
                     <div className="relative shrink-0" style={{ width: 36, height: 36 }}>
                       <div
-                        className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold"
-                        style={{ backgroundColor: conv.avatarBg }}
+                        className="flex h-full w-full items-center justify-center overflow-hidden rounded-full"
+                        style={{ backgroundColor: conv.avatarImage ? "transparent" : conv.avatarBg }}
                       >
-                        {conv.initials}
+                        <BotFace color={conv.avatarBg} image={conv.avatarImage} name={conv.name} shape={conv.avatarShape || defaultShapeFor(conv.name)} size={32} />
                       </div>
                       <span
                         className="absolute block rounded-full border-2 border-white"
@@ -1087,8 +1142,11 @@ function MirachSidebar(props: SidebarRootComponentProps) {
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-2.5">
                     <div className="relative shrink-0" style={{ width: 36, height: 36 }}>
-                      <div className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold" style={{ backgroundColor: conv.avatarBg }}>
-                        {conv.initials}
+                      <div
+                        className="flex h-full w-full items-center justify-center overflow-hidden rounded-full"
+                        style={{ backgroundColor: conv.avatarImage ? "transparent" : conv.avatarBg }}
+                      >
+                        <BotFace color={conv.avatarBg} image={conv.avatarImage} name={conv.name} shape={conv.avatarShape || defaultShapeFor(conv.name)} size={32} />
                       </div>
                       <span className="absolute block rounded-full border-2 border-white" style={{ width: 11, height: 11, bottom: -2, right: -2, backgroundColor: conv.status === "pending" ? "#D1D5DB" : "#10B981" }} />
                     </div>
@@ -1188,6 +1246,13 @@ function MirachSidebar(props: SidebarRootComponentProps) {
             document.body,
           )}
       </div>
+
+      {/* 官方 footer/设置槽 body portal 挂载（可视布局不放设置入口——左侧工具栏
+          齿轮是唯一设置入口，经 settings-surface 打开全窗口面板）。portal 容器
+          屏幕外 0×0：触发行在窗口外不可见；官方面板 fixed 相对视口、脱离应用
+          裁剪链（面板 translateZ(0)/侧栏 overflow/滚动容器 maskImage 都管不到），
+          全窗口、最上层、可拖出软件边界。 */}
+      <PortalSettingsMount renderSlot={renderSlot} />
 
       {/* 添加工作区：目录浏览弹窗（官方 browse 型目录选择） */}
       <AddWorkspaceDialog

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MemberChatPanel — 子内容区（单个成员对话，固定会话 + 共享项目上下文）
  *
  * 排版完全复制主内容区（MainPanel）：
@@ -17,6 +17,7 @@ import { Composer } from "@/components/chat/Composer";
 import { TerminalPanel } from "@/components/chat/TerminalPanel";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { MarkdownText } from "@/components/chat/markdown/MarkdownText";
+import { BotFace, defaultShapeFor } from "@/components/layout/AgentAvatar";
 import type { ConvItem } from "@/components/layout/LeftSidebar";
 import type { ChatMessage } from "@/lib/memberSessions";
 
@@ -164,10 +165,16 @@ export function MemberChatPanel({ member, width = 380, messages, busy = false, o
                   <div key={m.id} className="flex gap-3">
                     <div className="relative shrink-0" style={{ width: 40, height: 40 }}>
                       <div
-                        className="flex h-full w-full items-center justify-center rounded-full text-white text-[10px] font-bold"
-                        style={{ backgroundColor: m.from?.avatarBg ?? member.avatarBg }}
+                        className="flex h-full w-full items-center justify-center overflow-hidden rounded-full"
+                        style={{ backgroundColor: (m.from?.avatarImage ?? member.avatarImage) ? "transparent" : (m.from?.avatarBg ?? member.avatarBg) }}
                       >
-                        {m.from?.initials ?? member.initials}
+                        <BotFace
+                          color={m.from?.avatarBg ?? member.avatarBg}
+                          image={m.from?.avatarImage ?? member.avatarImage}
+                          name={m.from?.name ?? member.name}
+                          shape={m.from?.avatarShape ?? member.avatarShape ?? defaultShapeFor(m.from?.name ?? member.name)}
+                          size={36}
+                        />
                       </div>
                       <span
                         className="absolute block rounded-full border-2 border-white"

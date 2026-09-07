@@ -10,6 +10,7 @@ import { getApi } from "@/lib/api";
 import { appendAiMessage, appendSystemMessage, appendUserMessage, SESSION_ID } from "@/store/chat";
 import { initLogger } from "@/lib/logger";
 import { initUiSettings } from "@/store/ui-settings";
+import { initConversationWidthAutoscale } from "@/lib/conversation-width";
 import { ensureNotifyPermission, notify } from "@/lib/notify";
 import { initWindowState, initQuitGuard } from "@/lib/windowState";
 import { $bgState, type BackgroundProcess } from "@/store/background-processes";
@@ -114,6 +115,8 @@ function App() {
     initLogger();
     // 对话宽度 CSS 变量初始化（设置-通用设置；参考 zosma chat-width）
     initUiSettings();
+    // 对话内容宽随窗口等比缩放（官方偏好为绝对 px，最大化/还原不跟随 + 手柄贴边失效的补丁）
+    initConversationWidthAutoscale();
     // 窗口几何持久化 + 关闭确认（仅主窗口）
     void initWindowState();
     void initQuitGuard();

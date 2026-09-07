@@ -496,27 +496,85 @@ export function nativeGoalsRemote(): Record<string, (...args: unknown[]) => Prom
 
 /**
  * 折叠官方三栏的 details 列（侧栏列保留展开 —— 渲染 mirach 侧栏外壳）。
- * AppFrame 的 layout store 实例经 storeOf 取 bound actions（draft 已被剥离）。
+ * 走 ctx.layout.closeDetails（偏好归 0）。此前经 ctx.slots.storeOf 取
+ * bound actions——该面只存在于渲染器内部 host，服务上没有，调用一直是
+ * 静默 no-op（store 默认 details:0 恰好兜住了，未暴露）。
  */
 export function nativeCollapsePanels(): void {
-  const ctx = kernelCtx;
-  if (ctx === null) return;
   try {
-    const slots = ctx as unknown as {
-      slots?: {
-        entries?: (key: string) => { options?: { store?: unknown } }[];
-        entriesOf?: (key: string) => unknown[];
-        storeOf?: (entry: unknown, scope: unknown) => { actions?: Record<string, (...args: never[]) => void> } | undefined;
-      };
-    };
-    const entry = (slots.slots?.entries?.("root") ?? slots.slots?.entriesOf?.("root") ?? [])[0];
-    const store = entry === undefined ? undefined : slots.slots?.storeOf?.(entry, undefined);
-    const actions = store?.actions as
-      | { setSidebar?: (px: number) => void; setDetails?: (px: number) => void }
-      | undefined;
-    actions?.setDetails?.(0);
+    nativeCloseDetails();
   } catch {
     /* 布局列折叠失败不阻塞渲染 */
+  }
+}
+
+/**
+ * ctx.layout（ILayout 公共面）获取。内核未 boot / 服务缺失返回 null。
+ */
+function nativeLayout(): {
+  openDetails?: () => void;
+  closeDetails?: () => void;
+} | null {
+  const ctx = kernelCtx;
+  if (ctx === null) return null;
+  try {
+    const ctxAny = ctx as unknown as {
+      layout?: { openDetails?: () => void; closeDetails?: () => void };
+      get?: (k: string) => unknown;
+    };
+    const layout = ctxAny.layout
+      ?? (typeof ctxAny.get === "function" ? (ctxAny.get("layout") as { openDetails?: () => void; closeDetails?: () => void } | undefined) : undefined);
+    return layout ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type DetailsListener = (open: boolean) => void;
+let detailsListener: DetailsListener | null = null;
+
+/**
+ * 官方"详情打开请求"监听。信号源是 ctx.layout 的 openDetails/closeDetails
+ * （ILayout 公共面——官方工具行"详情"、面板 ✕ 全部经此面写布局 store）。
+ * 不直接订阅布局 store：ctx.slots 服务不暴露 storeOf（实例解析是渲染器
+ * 内部面），且 solvable 列宽（data-details-collapsed）与"是否请求打开"
+ * 在 mirach 布局里是两件事（右栏展开压窄主区时官方让步链自动关列，但
+ * 请求仍在）。实现为对 ctx.layout 的方法包装：openDetails 前先通知
+ * （同步于 store 写入之前，React 可与官方重渲染同批提交），closeDetails
+ * 同理。重复 watch 幂等（包装只打一层）。
+ * @returns 解绑函数；内核/服务未就绪时返回 null（调用方轮询重试）。
+ */
+export function watchNativeDetails(onChange: DetailsListener): (() => void) | null {
+  const layout = nativeLayout();
+  if (layout === null || typeof layout.openDetails !== "function" || typeof layout.closeDetails !== "function") {
+    return null;
+  }
+  const host = layout as { openDetails: () => void; closeDetails: () => void; __mirachDetailsHooked?: boolean };
+  if (!host.__mirachDetailsHooked) {
+    const origOpen = host.openDetails.bind(layout);
+    const origClose = host.closeDetails.bind(layout);
+    host.openDetails = () => { detailsListener?.(true); origOpen(); };
+    host.closeDetails = () => { detailsListener?.(false); origClose(); };
+    host.__mirachDetailsHooked = true;
+  }
+  detailsListener = onChange;
+  return () => {
+    if (detailsListener === onChange) detailsListener = null;
+  };
+}
+
+/**
+ * 关闭官方 details（官方面板 ✕ 同款 closeDetails；偏好归 0，让步链同时
+ * 释放列宽）。mirach 右侧栏收起时联动调用——详情的宿主没了。
+ */
+export function nativeCloseDetails(): boolean {
+  const layout = nativeLayout();
+  if (layout === null || typeof layout.closeDetails !== "function") return false;
+  try {
+    layout.closeDetails();
+    return true;
+  } catch {
+    return false;
   }
 }
 

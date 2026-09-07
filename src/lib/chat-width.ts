@@ -59,9 +59,13 @@ export function setChatWidth(width: ChatWidth): void {
 
 /**
  * Apply the width to the document via CSS variables:
- *   --chat-max-width          — message content column
+ *   --chat-max-width          — message content column (zosma-ported fallback UI)
  *   --chat-composer-max-width — composer (slightly wider so the input's
  *                               inner text edge aligns with the messages)
+ *
+ * 注意：官方对话区的内容宽度不走这里——官方 WidthHandle 拖拽手柄
+ * （ConversationRoot）自行发布 --dsh-chat-user-width / --dsh-chat-content-width
+ * 并把偏好持久化在 dsh.conversation.contentWidth，两套写入互不覆盖。
  */
 export function applyChatWidth(width: ChatWidth): void {
 	if (typeof document === "undefined") return;

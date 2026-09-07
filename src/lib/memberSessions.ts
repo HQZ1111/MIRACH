@@ -13,8 +13,9 @@ export interface ChatMessage {
   role: "member" | "user";
   text: string;
   time: string;
-  /** 群聊场景：该条消息来自哪位成员（私聊缺省 = 面板的成员本人） */
-  from?: { name: string; initials: string; avatarBg: string };
+  /** 群聊场景：该条消息来自哪位成员（私聊缺省 = 面板的成员本人）；
+   *  头像字段从 ConvItem 快照（形状/照片/底色） */
+  from?: Pick<ConvItem, "name" | "initials" | "avatarBg" | "avatarShape" | "avatarImage">;
 }
 
 export interface ProjectSession {

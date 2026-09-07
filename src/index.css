@@ -692,44 +692,125 @@ html.dark .chat-backdrop-on {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z'/%3E%3Cpath d='M19 10v2a7 7 0 0 1-14 0v-2'/%3E%3Cline x1='12' x2='12' y1='19' y2='22'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-/* ===== 工具行适配：间距收紧 + 窄宽收图标（不改官方源码） =====
+/* ===== 工具行适配：单行不折行 + 间距收紧 + 自适应收图标（不改官方源码） =====
+   官方 .row 是 flex-wrap:wrap + .trailing flex:none——收窄时尾组先折到第二行
+   （两排）再谈收缩；用户要求永不折行：这里 nowrap + 尾组允许收缩，折叠级联
+   由 ComposerRowAdaptive 观察器按内容自适应驱动（模型 → 模式 → 省略兜底），
+   见下方 data-mirach-collapse 规则。
    官方 .row 是匿名 inline-size 容器（container-type: inline-size，css-modules
    哈希容器名，官方注释明确跨 sheet 只能匿名查询），mirach 的 @container 规则
    能命中它；官方类哈希一律用 [class*=...] 结构匹配（同 _primary 惯例）。
+   注意 _row 不能用于匹配工具行——ContextMeter 面板图例也有 _row/_rows 哈希，
+   用 :has(> _tools) 锚定（.row 是唯一直接含 .tools 的元素）。
    收窄对象：权限 chip（自带字形图标）、计划 chip（✕ 图标）、模型按钮
    （官方 trigger 无图标 → ::before 用 mask 补一个 cpu 图形，标签/推理力度
    隐藏后仍可辨识）。chevron 保留，与官方窄宽行为（权限 chip 留 icon+chevron）
    一致。 */
+.dsh-native-area [data-composer-card] div:has(> [class*="_tools"]) {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+/* tools 盒子 stage0 不许缩：官方 min-width:0 让盒子缩到比内容小，末端的
+   终端按钮（flex:none）会溢出盒子向右漂、盖到权限 chip 上（用户报障）。
+   stage0 全部赤字交给尾组（模型文字吸收）；折叠态才允许 tools 收缩——
+   此时权限 chip 文字已可缩（省略），终端无需漂移 */
 .dsh-native-area [data-composer-card] [class*="_tools"] {
-  gap: 10px;
+  flex-shrink: 0;
+  gap: 6px;
+}
+[data-composer-card][data-mirach-collapse] [class*="_tools"] {
+  flex-shrink: 1;
 }
 .dsh-native-area [data-composer-card] [class*="_modes"] {
-  gap: 8px;
+  gap: 4px;
 }
 .dsh-native-area [data-composer-card] [class*="_trailing"] {
-  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 4px;
 }
-@container (max-width: 560px) {
-  /* 模式 chip + 模型按钮：隐藏文字，只留图标 */
-  .dsh-native-area [data-composer-card] [class*="_triggerLabel"],
-  .dsh-native-area [data-composer-card] [class*="_triggerEffort"] {
-    display: none;
-  }
-  /* 模型按钮（.trailing 里唯一 aria-haspopup="menu" 的 trigger；ContextMeter
-     是 dialog）：官方 trigger 无图标，::before mask 补一个 cpu 图形 */
-  .dsh-native-area [data-composer-card] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] {
-    padding-left: 10px;
-    gap: 5px;
-  }
-  .dsh-native-area [data-composer-card] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"]::before {
-    content: "";
-    width: 14px;
-    height: 14px;
-    flex: none;
-    background: currentColor;
-    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
-  }
+/* 触发钮收缩链：模型 trigger 可缩，模型文字是第一吸收体（省略号）；
+   模式 chip 文字在 stage0 故意不给 overflow:hidden（不可缩），保证严格级联
+   "先模型后模式"；ContextMeter 28px 定宽不受影响 */
+.dsh-native-area [data-composer-card] [class*="_trigger"] {
+  min-width: 0;
+}
+.dsh-native-area [data-composer-card] [class*="_triggerLabel"] {
+  white-space: nowrap;
+}
+.dsh-native-area [data-composer-card] [class*="_triggerEffort"] {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.dsh-native-area [data-composer-card] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] [class*="_triggerLabel"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 模型根优先吸收收缩（shrink 8 抢份额）。官方 .root 是 display:block——收缩时
+   根盒变窄但里面的 inline-flex 触发钮不跟缩，文字/chevron 溢出根盒盖到相邻
+   图标上（用户报障"先覆盖再折叠"）。改 flex 让触发钮作为子项同步收缩：文字
+   在根盒内被裁剪 → 截断信号即"间距已到最小、不能再小"的折叠时机 */
+.dsh-native-area [data-composer-card] [class*="_trailing"] [class*="_root"]:has(button[aria-haspopup="menu"]) {
+  display: flex;
+  flex-shrink: 8;
+}
+/* 尾组排序（用户定序，从右往左 = 发送/唤醒/朗读/听写/模型/用量）：官方 DOM
+   固定 [right槽] → 模型 → 用量环 → 发送；用 order 把用量环提到最前、模型其次，
+   视觉即为 用量 → 模型 → 听写/朗读/唤醒 → 发送。ContextMeter 触发钮是
+   aria-haspopup="dialog"，模型触发钮是 "menu"，:has 区分两者（同 _root 哈希）。 */
+.dsh-native-area [data-composer-card] [class*="_trailing"] [class*="_root"]:has(button[aria-haspopup="dialog"]) {
+  order: -2;
+}
+.dsh-native-area [data-composer-card] [class*="_trailing"] [class*="_root"]:has(button[aria-haspopup="menu"]) {
+  order: -1;
+}
+/* 自适应折叠（composer-extras 的 ComposerRowAdaptive 观察器往 composer 卡片
+   写 data-mirach-collapse）：模型文字开始省略 → "model"（模型钮收成 cpu 图标）；
+   模式 chip 文字开始省略 → 追加 "mode"（权限 chip 收成字形图标）。级联一次
+   一步：模型 → 模式 → 省略兜底，断点随内容（模型名长短）自动变化。
+   折叠态 label 用 max-width:0 而非 display:none——元素留场可测自然宽
+   （scrollWidth），观察器据此逐级回退。 */
+[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] {
+  padding-left: 10px;
+  gap: 5px;
+}
+[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] [class*="_root"]:has(button[aria-haspopup="menu"]) {
+  min-width: 52px;
+}
+[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] [class*="_triggerLabel"],
+[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] [class*="_triggerEffort"] {
+  max-width: 0;
+  overflow: hidden;
+}
+[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"]::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+/* stage "model" 起模式 chip 才允许收缩（可测省略）→ 观察器据此升 "mode" */
+[data-composer-card][data-mirach-collapse~="model"] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-composer-card][data-mirach-collapse~="mode"] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
+  max-width: 0;
+  overflow: hidden;
+}
+/* mirach-auto 触发钮图标（官方 permissionGlyphs 只认三个内置预设，mirach-auto
+   无字形；官方源码零改动，用 aria-label 里的预设名做钩子补闪电图标）。
+   下拉菜单行没有 DOM 钩子，由 MirachAutoGlyph 观察器注入（composer-extras） */
+.dsh-native-area [data-composer-card] button[class*="_trigger"][aria-label*="Mirach Auto"]::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: none;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L3 14h9l-1 8 10-12h-9l1-8z' fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L3 14h9l-1 8 10-12h-9l1-8z' fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 /* mirach 令牌注入：官方编辑器 placeholder 字色/字距对齐 mirach 输入框 */
@@ -741,8 +822,8 @@ html.dark .chat-backdrop-on {
 /* ===== 官方 AppFrame 三列布局 =====
    侧栏列 = mirach 侧栏外壳（dsh-kernel/sidebar-shell 接管官方 sidebar 槽的
    mirach 组件），宽度由官方 layout store 控制（默认 280 / 折叠 56 rail）；
-   details 列 mirach 不用，经 nativeCollapsePanels 置 0。旧"三列融合"的
-   !important 轨道压制随官方侧栏取消而删除。 */
+   details 列默认折叠（nativeCollapsePanels 置 0 偏好），打开时由 mirach
+   右侧栏托管（见下方 data-mirach-details-open 固定定位段）。 */
 
 /* ===== 官方对话列顶部融合：mirach 顶栏 + 官方"对话/轨迹" tabs =====
    MainPanel 的 mirach 顶栏以覆盖层形式悬浮在官方会话 header 处；官方
@@ -782,15 +863,38 @@ html.dark .chat-backdrop-on {
   border-right: none !important;
   background: transparent !important;
 }
+/* 侧栏组件宽度 = 列宽（100%，CSS 同帧）：容器同步的正解——拖动/钳制
+   任何时刻组件内容都随列宽同帧变化，绝不溢出容器。此前用 props.width/
+   公式/ResizeObserver 都有分叉或滞后（用户"内容不跟随容器、溢出、
+   晃动"）。锚 [data-slot="sidebar"] 是 display:contents，组件根即网格列
+   的直接内容块，width:100% = 列内容宽。 */
+.dsh-native-area [data-slot="sidebar"] > div {
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+}
+/* 防御：左侧栏列永远在最上层（内容/顶栏覆盖层若因任何组合错位越界，
+   也压不住侧栏 —— 用户"主对话区能盖在左侧栏上面"的兜底） */
+.dsh-native-area [class*="_sidebarCol"] {
+  position: relative;
+  z-index: 30;
+}
 /* 官方 AppFrame（inline grid-template-columns 是它的稳定特征）/ 对话 root */
 .dsh-native-area div[style*="grid-template-columns"] {
   background: transparent !important;
+  /* 官方轨道宽度过渡（eased grid-template-columns 动画）在展开/收起侧栏
+     时让 mirach 侧栏外壳（width:100%）逐帧重排——文字逐帧截断/回绕即
+     "跳动"。动画关掉：列宽与内容同帧落位，无中间态。 */
+  transition: none !important;
 }
 [data-phase] {
   background: transparent !important;
 }
 .dsh-native-area [class*="_centerCol"] {
-  padding-bottom: 20px !important;
+  /* 底部让位：默认 20px（与 E3E6EC 层底缘对齐）；终端的终端打开时由
+     MainPanel 设置 --mirach-terminal-h（终端高+20），对话列内部让出
+     终端空间——侧栏列不受影响（终端只覆盖对话列下方）。 */
+  padding-bottom: var(--mirach-terminal-h, 20px) !important;
 }
 
 /* mirach 顶栏覆盖层（主对话区顶部）：容器穿透点击（不拦截 TopBar 的
@@ -808,30 +912,151 @@ html.dark .chat-backdrop-on {
   grid-template-columns: 0px minmax(0, 1fr) 0px !important;
 }
 
-/* 官方右侧详情面板 → mirach 右侧栏融合：点击消息流工具行（"详情"开）
-   时，把官方 details 列固定到右侧栏区域。面板 div 的 translateZ(0)
-   使固定定位以面板为包含块，坐标为面板内部坐标：顶栏/侧栏头之下 85px、
-   右侧留 60px 工具栏、宽度跟随右侧栏拖拽宽度（--col-right-w，隐藏时
-   兜底 380）。details 关闭时（data-details-collapsed）回到网格 0 宽
-   裁剪（列常驻不卸载，内容不丢）。 */
-.dsh-native-area div[style*="grid-template-columns"] {
-  grid-template-columns: var(--mirach-internal-sidebar-w, 280px) minmax(0, 1fr) 0px !important;
-}
+/* 官方右侧详情面板 → mirach 右侧栏融合：点击消息流工具行（"详情"开）时，
+   把官方 details 列固定到右侧栏区域，右栏本体是衬底。
+   信号是 body[data-mirach-details-open]（官方 layout store 的 details 偏好
+   经 AppLayout 订阅写入）——不能用官方 data-details-collapsed：右栏展开后
+   主区被压窄，官方让步链（CENTER_MIN=640）会自动把 details 列关到 0，但
+   偏好不变；列宽与"详情是否打开"在 mirach 布局里是两件事。
+   面板 div 的 translateZ(0) 使固定定位以面板为包含块，坐标为面板内部
+   坐标：顶栏/侧栏头之下 85px、右侧留 60px 工具栏、宽度 = --col-right-w
+   （与右栏 wrapper 同源，Sash 拖动预览时同步写，严丝合缝）。
+   关闭（偏好 0，含官方面板 ✕）回到静态 0 宽裁剪（列常驻不卸载，内容不丢）。
+   注意：轨道网格保持官方内联驱动——官方列在 mirach 布局里几乎恒为让步
+   关闭态（主区压窄），无空轨道残留。 */
+
 .dsh-native-area div[style*="grid-template-columns"] [class*="_detailsCol"] {
+  position: static !important;
+  width: 0 !important;
+}
+body[data-mirach-details-open] .dsh-native-area div[style*="grid-template-columns"] [class*="_detailsCol"] {
   position: fixed !important;
   top: 85px;
   right: 60px;
   bottom: 0;
-  width: max(var(--col-right-w, 380px), 380px) !important;
+  width: var(--col-right-w, 380px) !important;
   z-index: 40;
 }
-.dsh-native-area div[style*="grid-template-columns"][data-details-collapsed] [class*="_detailsCol"] {
-  position: static !important;
-  width: 0 !important;
+/* 详情托管时 Sash 浮到官方面板（z-40）之上：右栏边界仍可拖动，面板宽度
+   经 --col-right-w 预览同步（AppLayout.startRightSash 写变量） */
+body[data-mirach-details-open] [data-mirach-sash] {
+  z-index: 50 !important;
 }
-/* 官方 details 拖拽手柄：面板已固定到右侧栏，帧内手柄是多余位置 */
+/* 官方 details 拖拽手柄：面板已固定到右侧栏，帧内手柄是多余位置。
+   官方"对话内容宽度"手柄（ConversationRoot.widthHandle，内容列两侧
+   40px 拖拽条 [data-width-handle]）保留——官方原生宽度调节（悬停出
+   辉光条，拖动对称改宽，偏好存 dsh.conversation.contentWidth）。
+   （旧规则曾把它一并隐藏致"宽度调整组件不见了"，已恢复。）
+   min-width 28px：内容宽贴上限（列宽-232 以内）时官方公式可能把
+   40px 压到 0 —— 保底 28px 让手柄任何时刻都可抓取（可往回拖小）。 */
 .dsh-native-area [data-side="details"] {
   display: none !important;
+}
+.dsh-native-area [data-width-handle] {
+  min-width: 28px !important;
+}
+
+/* hermes guest-pointer-guard：拖动中让 webview/iframe 不吞手势
+   （lib/guest-pointer-guard.ts 加/移除 body 类） */
+body.guest-pointer-lock webview,
+body.guest-pointer-lock iframe {
+  pointer-events: none !important;
+}
+
+/* 官方 composer 统计行（"2 轮 · 2 步"，conversation.composer.dock 的
+   StatsLine）：组件原生 13px 字号 / 20px 行高 + 4px 上内边距 = 总高 24px。
+   mirach：10px 字号 / 10px 行高 + 2px 上内边距 = 总高 12px。 */
+.dsh-native-area [data-slot="conversation.composer.dock"] [class*="_root"] {
+  font-size: 10px !important;
+  line-height: 10px !important;
+  padding-top: 2px !important;
+}
+
+/* 新建任务 hero（空白会话首屏）：官方是"鱼 logo + 探索未至之境 + 预览版
+   徽章"，换成 hermes 风格的纯文字字标 MIRACH HARNESS（无图标无徽章，
+   宽度撑满 hero 栈、随对话内容宽等比缩放，品牌蓝 #026CFE，SVG textLength
+   强制满宽），下方一行中文小字介绍紧贴字标。
+   实现走 CSS 覆盖（官方 locale 注册重名会抛错，不能换词典）：鱼热区/徽章
+   display:none；headline 从 grid 改 block（官方 .headlineText 钉在
+   grid-column:2，只改列宽会让它掉进隐式列被推出屏外），标题字号归零藏
+   原文，::before 出满宽 SVG 字标、::after 出介绍行。
+   宽度链：hero 内容在官方 .composerStack（=内容宽+2×16px 侧距）内，字标
+   stack 放开到 100% 对齐输入卡两翼；隐藏官方对 stack 的内容宽封顶由
+   [class*="_stack"] 的 max-width 覆盖承担。 */
+.dsh-native-area [class*="_fishHitbox"] {
+  display: none !important;
+}
+.dsh-native-area [class*="_previewBadge"] {
+  display: none !important;
+}
+.dsh-native-area [class*="_stack"] {
+  max-width: 100% !important;
+}
+.dsh-native-area [class*="_headline"] {
+  display: block !important;
+}
+.dsh-native-area [class*="_headlineText"] {
+  display: block;
+  font-size: 0 !important;
+  color: transparent !important;
+}
+.dsh-native-area [class*="_headlineText"]::before {
+  /* 用 background-image + aspect-ratio 而非 content:url：后者对无固定比例的
+     svg 的替换尺寸算法在 Chromium 下高度失控（661 宽时框高 100px 而非 62px，
+     svg 内容在框内垂直居中 → 字标错位、介绍行视觉偏远）。background contain
+     让字形精确填满 900/84 比例框，宽度 100% 随对话内容宽等比缩放。 */
+  content: "" !important;
+  display: block !important;
+  width: 100% !important;
+  aspect-ratio: 900 / 84 !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  background: center / contain no-repeat url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 8 900 84'><text x='450' y='86' text-anchor='middle' font-family='Segoe UI, Arial, sans-serif' font-weight='800' font-size='104' fill='%23026CFE' textLength='880' lengthAdjust='spacingAndGlyphs'>MIRACH HARNESS</text></svg>");
+}
+.dsh-native-area [class*="_headlineText"]::after {
+  content: "用自己的话描述任务即可。我会挑选合适的工具、说明计划，并在执行有风险的步骤前先与你确认。";
+  display: block;
+  margin: 2px auto 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--dsw-alias-label-secondary, #6b7280);
+}
+
+/* 设置浮窗（body portal，settings-surface）：关闭按钮从内容头一行上移到
+   面板顶缘，与左侧"设置"标题字同行（标题 14/20 + nav 顶 padding≈14 →
+   按钮 28px 高 top:10px 即同行居中），z 高于内容头避免被压。 */
+[data-mirach-settings-portal] [role="dialog"] [class*="_close"] {
+  position: absolute !important;
+  top: 20px !important;
+  right: 12px !important;
+  z-index: 6 !important;
+}
+
+/* 官方 composer 发送按钮：34px 圆形蓝色 → mirach 黑底白箭头（与
+   mirach Composer 的发送按钮一致）。官方已是圆形 + ArrowUp 箭头
+   SVG，仅覆盖颜色和尺寸。空输入时官方切换为 AudioLines 语音图标
+   （同 mirach Composer 状态机）——仅覆盖颜色不改行为。 */
+.dsh-native-area button[class*="_primary"] {
+  width: 26px !important;
+  height: 26px !important;
+  background: #303030 !important;
+  color: #fff !important;
+}
+.dsh-native-area button[class*="_primary"]:hover:not(:disabled) {
+  background: #464646 !important;
+}
+.dsh-native-area button[class*="_primary"]:disabled {
+  opacity: 0.35 !important;
+}
+html.dark .dsh-native-area button[class*="_primary"] {
+  background: #e0e0e0 !important;
+  color: #171717 !important;
+}
+html.dark .dsh-native-area button[class*="_primary"]:hover:not(:disabled) {
+  background: #c8c8c8 !important;
 }
 
 /* 官方"对话/轨迹"标签页：紧贴 mirach 顶栏之下（margin-top 0）；
@@ -860,24 +1085,24 @@ html.dark .chat-backdrop-on {
   bottom: -5px !important;
 }
 
-/* 对话内容宽度固定（720px）：官方内容宽度随列宽 clamp 联动
-   （clamp(680px, 64%, 920px)），拖动左栏手柄时列宽实时变化导致
-   内容实时重排（"水一样到处晃"）。固定宽度后：拖动时内容只随列
-   在居中位置滑动，文字/消息不再重排跳动，松手后整体对齐。 */
-.dsh-native-area [data-phase] {
-  --dsh-chat-content-width: 720px !important;
-}
+/* 对话内容宽度：官方默认 clamp（680px ~ 64% ~ 920px，随列宽联动）。
+   此前固定 720px（拖动时内容不重排）是在背景层跨容器错位时期加的；
+   背景已与内容同一容器（centerCol::before）同帧绘制，不会错位，
+   恢复官方联动让"调节对话宽度"真正改变内容宽度。 */
 
-/* 官方输入区（composer seat）上部的渐隐带：保留"渐变透明"形态
-   （顶部透明 → 36px 处实色），但颜色必须与主对话区真实背景一致——
-   主背景是 E3E6EC 圆角层（opacity 0.8）叠加在白色面板上，因此渐隐带
-   使用 0.8 透明度的 E3E6EC（同一混合公式，颜色与背景完全一致），
-   不能用官方 --dsw-alias-bg-base 的纯白。暗色主题：main 底色 #151619。 */
+/* 官方输入区（composer seat）：座带必须【不透明】——官方滚动容器
+   （scrollBody）就在座带下面，消息滚动时最后一条会滑入座带区域，
+   半透明底会把它透出来（"对话内容穿过输入框"）。颜色与主对话区真实
+   背景（E3E6EC 0.8 叠加白色 = 实测 rgb(233,235,240)）精确一致：
+   background-color 铺满遮蔽，顶部 36px 再画同色渐隐带（顶部透明 →
+   36px 处实色），消息在渐隐带里淡出——渐隐随滚动位置移动。
+   暗色主题：main 底色 #151619。 */
 .dsh-native-area [class*="_composerSeat"] {
-  background: linear-gradient(
+  background-color: rgb(233, 235, 240) !important;
+  background-image: linear-gradient(
     180deg,
-    rgba(227, 230, 236, 0) 0px,
-    rgba(227, 230, 236, 0.8) 36px
+    rgba(233, 235, 240, 0) 0px,
+    rgb(233, 235, 240) 36px
   ) !important;
   /* 座带底部 20px 圆角：与 E3E6EC 圆角层的底缘同角（座带矩形直边
      会把层的圆角"切"出直角块——角就露出来了）。 */
@@ -891,24 +1116,32 @@ html.dark .chat-backdrop-on {
   margin-bottom: -6px !important;
 }
 html.dark .dsh-native-area [class*="_composerSeat"] {
-  background: linear-gradient(
+  background-color: #151619 !important;
+  background-image: linear-gradient(
     180deg,
     rgba(21, 22, 25, 0) 0px,
     #151619 36px
   ) !important;
 }
 
-/* ===== 主对话区 + 侧栏滚动条：复刻 mirach CustomScrollbar 外观 =====
-   样式与 components/ui/CustomScrollbar 一致：细线轨道（--color-border
-   中央 1px）+ 空心圆 thumb（#303030 50% 圆环、白底阴影、可拖动），
-   thumb 位置由浏览器随滚动自动定位。 */
-.dsh-native-area [class*="_scrollBody"]::-webkit-scrollbar,
-.dsh-native-area [data-slot="sidebar"] .overflow-y-auto::-webkit-scrollbar {
-  width: 12px !important;
-  height: 12px !important;
-}
+/* ===== 滚动条（对话区 + 侧栏）：mirach CustomScrollbar 外观 =====
+   细线轨道（--color-border 中央 1px）+ 空心圆环 thumb（#303030 50%
+   圆环、可拖动），与 components/ui/CustomScrollbar 一致。
+   显隐策略：thumb 默认隐藏；滚动中（JS 打 data-mirach-scrolling，
+   2 秒无操作移除）或悬停容器时显示圆环 —— 对话区与左侧栏共用同一
+   行为与样式。轨道上下各留 20px（限制区加大）：滚动条端点避开
+   背景层 20px 圆角带。 */
+
+/* —— 共同：轨道细线【默认隐藏】，滚动中/悬停时随圆环一起出现 —— */
 .dsh-native-area [class*="_scrollBody"]::-webkit-scrollbar-track,
 .dsh-native-area [data-slot="sidebar"] .overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent !important;
+  margin: 20px 0 !important;
+}
+.dsh-native-area [class*="_scrollBody"][data-mirach-scrolling]::-webkit-scrollbar-track,
+.dsh-native-area [class*="_scrollBody"]:hover::-webkit-scrollbar-track,
+.dsh-native-area [data-slot="sidebar"] .overflow-y-auto[data-mirach-scrolling]::-webkit-scrollbar-track,
+.dsh-native-area [data-slot="sidebar"] .overflow-y-auto:hover::-webkit-scrollbar-track {
   background: linear-gradient(
     to right,
     transparent 5.5px,
@@ -917,8 +1150,13 @@ html.dark .dsh-native-area [class*="_composerSeat"] {
     transparent 6.5px
   ) !important;
 }
-/* 圆环 thumb 默认隐藏（custom scrollbar 行为：静止时不显示），
-   悬停滚动容器时显示；悬停在圆环上加深（#303030 85%）。 */
+
+/* —— 共同：12px 宽、thumb 默认隐藏 —— */
+.dsh-native-area [class*="_scrollBody"]::-webkit-scrollbar,
+.dsh-native-area [data-slot="sidebar"] .overflow-y-auto::-webkit-scrollbar {
+  width: 12px !important;
+  height: 12px !important;
+}
 .dsh-native-area [class*="_scrollBody"]::-webkit-scrollbar-thumb,
 .dsh-native-area [data-slot="sidebar"] .overflow-y-auto::-webkit-scrollbar-thumb {
   height: 12px !important;
@@ -927,7 +1165,11 @@ html.dark .dsh-native-area [class*="_composerSeat"] {
   border: none !important;
   transition: background 0.3s ease !important;
 }
+
+/* —— 共同：滚动中（data-mirach-scrolling）或悬停容器时显示圆环 —— */
+.dsh-native-area [class*="_scrollBody"][data-mirach-scrolling]::-webkit-scrollbar-thumb,
 .dsh-native-area [class*="_scrollBody"]:hover::-webkit-scrollbar-thumb,
+.dsh-native-area [data-slot="sidebar"] .overflow-y-auto[data-mirach-scrolling]::-webkit-scrollbar-thumb,
 .dsh-native-area [data-slot="sidebar"] .overflow-y-auto:hover::-webkit-scrollbar-thumb {
   /* 空心圆环：中心透明 → 环带 rgba(48,48,48,0.5) → 外圈透明 */
   background: radial-gradient(
@@ -946,7 +1188,11 @@ html.dark .dsh-native-area [class*="_composerSeat"] {
     transparent 5.7px
   ) !important;
 }
+
+/* —— 共同：暗色主题 —— */
+html.dark .dsh-native-area [class*="_scrollBody"][data-mirach-scrolling]::-webkit-scrollbar-thumb,
 html.dark .dsh-native-area [class*="_scrollBody"]:hover::-webkit-scrollbar-thumb,
+html.dark .dsh-native-area [data-slot="sidebar"] .overflow-y-auto[data-mirach-scrolling]::-webkit-scrollbar-thumb,
 html.dark .dsh-native-area [data-slot="sidebar"] .overflow-y-auto:hover::-webkit-scrollbar-thumb {
   background: radial-gradient(
     circle,
@@ -956,13 +1202,34 @@ html.dark .dsh-native-area [data-slot="sidebar"] .overflow-y-auto:hover::-webkit
   ) !important;
 }
 
-/* 对话区背景层：由 MainPanel 的 E3E6EC 圆角层承载（同帧同容器）。
-   centerCol 的 ::before/::after 旧层已取消——::before 与主背景层重复
-   叠加，::after 在内容右下角留下一道 14×60 实色条（用户"右下角多余
-   一条"的来源）。 */
+/* 对话区背景层：centerCol::before 承载（与官方内容同一容器、同帧绘制）——
+   拖动左栏手柄时背景与内容永远同步。样式与原 E3E6EC 圆角层一致：
+   上下各 20px、圆角 20、0.8 透明度。旧 ::after（右下角 14×60 色条盖在
+   内容上，用户见到的"多余一条"）已取消；背景层的圆角底缘由 ::before
+   负责，座带渐隐按同色公式叠加（见 _composerSeat 规则）。 */
 .dsh-native-area [class*="_centerCol"] {
   position: relative !important;
 }
+.dsh-native-area [class*="_centerCol"]::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  /* left: 0 贴列左缘（撤销 12px 内缩——用户反馈"主对话区左边有白条"；
+     组件宽度已与列宽恒等（sidebar-shell 读列实际宽），无需白隙隔离） */
+  left: 0;
+  right: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 20px;
+  background: rgba(227, 230, 236, 0.8);
+}
+html.dark .dsh-native-area [class*="_centerCol"]::before {
+  background: rgba(21, 22, 25, 0.05);
+}
+
+/* 官方消息流滚动条：见下方"主对话区滚动条"块（5px 细条 + 上下 20px 留白）。 */
+
 
 /* 官方"回到底部"控制与轮次导轨：保留官方原始位置（内容列右侧）。
    此前 CSS 左移方案已按用户要求回退——不再覆盖，均为官方默认。 */

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AppLayout — 主布局外壳
  *
  * 结构 (1580 × 900)：
@@ -35,7 +35,7 @@ import { MemberChatPanel } from "@/components/chat/MemberChatPanel";
 import { memberPanelOpenId, toggleMemberPanel, closeMemberPanel } from "@/store/member-panel";
 import { setCurrentView } from "@/store/current-view";
 import { setSidebarCollapsed, sidebarCollapsed as sidebarCollapsedStore } from "@/store/layout-mirror";
-import { nativeToggleSidebar } from "@/dsh-kernel/boot";
+import { nativeCloseDetails, nativeToggleSidebar, watchNativeDetails } from "@/dsh-kernel/boot";
 import { OverlayShell } from "@/components/overlays/OverlayShell";
 import { type CommandPaletteAction } from "@/components/command-palette/CommandPalette";
 import { useTheme } from "@/hooks/useTheme";
@@ -50,7 +50,9 @@ import { useI18n } from "@/lib/i18n";
 import { useWindowMaximized } from "@/hooks/use-window-maximized";
 import { createProjectSession, ensureMemberThread, generateMemberReply, now, persistThreads, type ProjectSession, type ChatMessage } from "@/lib/memberSessions";
 import { LEFT_TOOLBAR_WIDTH, RIGHT_TOOLBAR_WIDTH } from "@/lib/layout";
-import { ColumnResizeHandle } from "@/components/ui/ResizeHandle";
+import { rafCoalesce } from "@/lib/raf-coalesce";
+import { Sash } from "@/components/sash";
+import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { getApi } from "@/lib/api";
 import type { MirachEvent } from "@/lib/api/types";
@@ -141,7 +143,11 @@ type RightPanelId =
 const RIGHT_SIDEBAR_W = 380;  // 右侧栏默认宽度（可拖拽调节）
 const COL_W = 380;            // 子对话栏默认宽度（可拖拽调节）
 const MIN_COL_W = 350;        // 子对话栏 / 右侧栏 最小宽度（最大不设限）
-const MIN_MAIN_W = 350;       // 主对话栏最小宽度
+// 主对话栏最小宽度：主栏 = 官方侧栏列(280) + 对话列。对话列最小 = 对话内容
+// 最小 330 + 两侧手柄 96 = 426 → 主栏最小 706；侧栏折叠（列归零）时 430。
+// （历史 350 的设定会让对话区只剩 70px——主栏不等于对话区。）
+const MIN_MAIN_W_SIDEBAR = 706;  // 主栏最小（官方侧栏列展开 280）
+const MIN_MAIN_W_COLLAPSED = 430; // 主栏最小（官方侧栏列折叠 0）
 // 面板 = 窗口视口 − 2×固定阴影边距（40px 恒定，任何窗口尺寸/状态都一致）。
 // 最大化时窗口铺满桌面 → 面板 = 桌面 − 80，四周留 40px 阴影环；
 // 移动窗口不改变面板尺寸（动态边距方案会随拖动跳动，已废弃）。
@@ -166,6 +172,8 @@ export function AppLayout() {
   // 侧栏折叠状态：LeftToolbar 背景跟随（收起 → 与面板/侧栏底色一致）
   // k=v 刷新触发点
   const sidebarCollapsedState = useStore(sidebarCollapsedStore);
+  // 主栏最小宽随官方侧栏列展开/折叠切换（主栏含侧栏列，见底部常量注释）
+  const minMainW = sidebarCollapsedState ? MIN_MAIN_W_COLLAPSED : MIN_MAIN_W_SIDEBAR;
   const memberPanelId = useStore(memberPanelOpenId);
   const memberAgents = useStore($agents);
   const selectedMember = useMemo(
@@ -227,7 +235,6 @@ export function AppLayout() {
     // 官方树（KernelMirrorHost/NativeChatArea）在应用挂载后异步渲染，先轮询等待。
     let ro: ResizeObserver | null = null;
     let timer = 0;
-    const frameObservers: MutationObserver[] = [];
     const attach = () => {
       const el = document.querySelector('.dsh-native-area [data-slot="sidebar"]')
         ?? document.querySelector('[data-slot="sidebar"]');
@@ -238,45 +245,70 @@ export function AppLayout() {
       }
       const update = () => {
         const w = Math.round(col.getBoundingClientRect().width);
-        // 折叠态（56 窄轨 / CSS 归零 0）→ 顶栏圆形"展开左侧栏"图标接管。
-        // 官方 narrow 自动折叠已由 boot 关闭（固定面板布局），不必再按帧宽判定。
-        setSidebarCollapsed(w <= 60);
-        if (w > 0) panelRef.current?.style.setProperty("--mirach-internal-sidebar-w", `${w}px`);
+        // 折叠翻转才写 store（拖动中每帧写会导致主布局重渲染 → 延迟）；
+        // 同时同步 --mirach-internal-sidebar-w（顶栏覆盖层 left 位置用）
+        const collapsed = w <= 60;
+        if (collapsed !== update.lastCollapsed) {
+          update.lastCollapsed = collapsed;
+          setSidebarCollapsed(collapsed);
+        }
+        panelRef.current?.style.setProperty("--mirach-internal-sidebar-w", `${w}px`);
       };
+      update.lastCollapsed = false;
       update();
       ro = new ResizeObserver(update);
       ro.observe(col);
-      // 官方详情面板打开（data-details-collapsed 移除）→ 显示右侧栏：
-      // 详情面板经 CSS 固定到右侧栏区域（index.css），侧栏本体是它的衬底。
-      const frame = document.querySelector('.dsh-native-area div[style*="grid-template-columns"]');
-      if (frame !== null) {
-        const mo = new MutationObserver(() => {
-          if (frame.getAttribute("data-details-collapsed") === null) {
-            setShowRight(true);
-          }
-        });
-        mo.observe(frame, { attributes: true, attributeFilter: ["data-details-collapsed"] });
-        frameObservers.push(mo);
-      }
     };
     attach();
     return () => {
       window.clearTimeout(timer);
       ro?.disconnect();
-      for (const mo of frameObservers) mo.disconnect();
     };
   }, []);
+
+  // ---- 官方 details 打开请求监听（ctx.layout.openDetails 包装，boot.ts）：
+  // 轨迹详情"打开详情"→ mirach 右侧栏直接展开并托管官方面板
+  // （body[data-mirach-details-open] → index.css 把官方 detailsCol 固定到
+  // 右栏区域）。信号是打开"请求"而非 data-details-collapsed：右栏展开后
+  // 主区被压窄，官方让步链会自动关列（列 0），请求不变——托管与列宽无关。
+  // 内核未就绪时轮询重试。 ----
+  useEffect(() => {
+    let unwatch: (() => void) | null = null;
+    let timer = 0;
+    const attach = () => {
+      unwatch = watchNativeDetails((open) => {
+        document.body.toggleAttribute("data-mirach-details-open", open);
+        if (open) setShowRight(true);
+      });
+      if (unwatch === null) timer = window.setTimeout(attach, 500);
+    };
+    attach();
+    return () => {
+      window.clearTimeout(timer);
+      unwatch?.();
+      document.body.removeAttribute("data-mirach-details-open");
+    };
+  }, []);
+
+  // 右侧栏收起 = 详情面板的宿主消失 → 联动关闭官方 details（订阅同步清标记）
+  useEffect(() => {
+    if (!showRight && document.body.hasAttribute("data-mirach-details-open")) {
+      nativeCloseDetails();
+    }
+  }, [showRight]);
 
   // ---- 引擎网关探活 / 故障浮层（真实模式；mock 恒 open 不触发） ----
   // 首启不再引导填地址：直接用默认引擎地址（config engineBase，默认 http://127.0.0.1:8787）
   // 探活，不通走 BootFailure（重试 / 去设置连接）。打包后的安装位置等由系统安装器负责。
+  // 启动首探给 30s 宽限（sidecar 冷启动）：期间保持 connecting（缓冲页），
+  // 宽限耗尽才进 error——避免引擎还在启动就直进主页面/弹故障。
   const gatewayState = useStore($gatewayState);
   // 启动门阶段（splash/locked/ready）：真实网关浮层在 ready 后才显示，避免与启动动画叠加
   const startupPhase = useStore($startupPhase);
   const [bootDismissed, setBootDismissed] = useState(false);
   useEffect(() => {
     if (MOCK) return;
-    void pingGateway();
+    void pingGateway(40);
   }, []);
   // 新窗口深链：?sessionId=xxx → 激活对应会话（Tauri 新窗口 / 浏览器降级新标签页共用）
   useEffect(() => {
@@ -549,7 +581,7 @@ export function AppLayout() {
                 role: "member",
                 text: generateMemberReply(member ?? ({ name: "成员" } as ConvItem), text),
                 time: now(),
-                ...(member && isGroup ? { from: { name: member.name, initials: member.initials, avatarBg: member.avatarBg } } : {}),
+                ...(member && isGroup ? { from: { name: member.name, initials: member.initials, avatarBg: member.avatarBg, avatarShape: member.avatarShape, avatarImage: member.avatarImage } } : {}),
               },
             ],
           },
@@ -597,61 +629,188 @@ export function AppLayout() {
     })();
   };
 
-  // ---- 列间分隔条拖拽：CSS 变量直驱（拖拽中不触发 React 重渲染，跟手且快） ----
-  // 列宽写为卡片上的 --col-member-w / --col-right-w，各栏 width 与分隔条 left 用 var() 引用；
-  // 拖拽时只 setProperty 改变量（合成器级），松手才提交 React 状态。
-  const dragWRef = useRef({ member: memberW, right: rightW });
-  dragWRef.current = { member: memberW, right: rightW };
+  // ---- 列间拖拽（hermes pane-shell 的 sash 模式原样移植）----
+  // 拖动中只写内联预览（flex-basis / width，rafCoalesce 每帧一次），
+  // 松手才提交 React 状态（一次重渲染恢复 React 接管的样式）；
+  // 起点+位移（无增量累积）；min/max 钳制在手势开始时一次算好；
+  // 生命周期多路收尾（pointerup/cancel/blur/lostpointercapture，幂等）。
+  const memberWrapRef = useRef<HTMLDivElement | null>(null);
+  const rightWrapRef = useRef<HTMLDivElement | null>(null);
 
-  const applyColVar = useCallback((name: "member" | "right", px: number) => {
-    panelRef.current?.style.setProperty(
-      name === "member" ? "--col-member-w" : "--col-right-w",
-      `${Math.round(px)}px`,
-    );
-  }, []);
+  // 主|子 sash：重分配「主对话区 ↔ 成员子栏」。边界跟指针：指针右移 =
+  // 主区变宽、子栏变窄。子栏是固定轨（预览写 flex-basis），主区宽度同帧
+  // 预览（双钉，总和恒定）；松手提交 setMemberW。钳制：子栏 ≥ 350、
+  // 主区 ≥ minMainW（706 展开 / 430 折叠）。
+  const startMemberSash = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sash = e.currentTarget;
+    const { pointerId } = e;
+    const mainEl = document.querySelector("main");
+    const memberEl = memberWrapRef.current;
+    if (!mainEl || !memberEl) return;
+    const start = e.clientX;
+    const member0 = Math.round(memberEl.getBoundingClientRect().width);
+    const main0 = Math.round(mainEl.getBoundingClientRect().width);
+    const pool = member0 + main0; // 主+子 总宽恒定
+    // 钳制范围（手势开始时一次算好）：shift = clientX - start
+    //   主区 ≥ 350 → shift ≥ 350 - main0（左移下限）；子栏 ≥ 350 → shift ≤ member0 - 350（右移上限）
+    const lo = minMainW - main0;
+    const hi = member0 - MIN_COL_W;
+    const apply = (shift: number) => {
+      // 边界跟指针：主区 = main0 + shift（钳 ≥350），子栏拿剩余
+      const mainW = Math.max(minMainW, Math.min(main0 + shift, pool - MIN_COL_W));
+      const memberW2 = pool - mainW;
+      memberEl.style.flexBasis = `${Math.round(memberW2)}px`;
+      mainEl.style.width = `${Math.round(mainW)}px`;
+    };
+    const styleMain = mainEl.getAttribute("style");
+    const styleMember = memberEl.getAttribute("style");
+    let done = false;
+    let lastShift: number | null = null;
 
-  // 主对话栏 | 子对话栏：右拖 dx>0 → 子对话栏变窄（主栏变宽）
-  const handleMemberDrag = useCallback((dx: number) => {
-    const { rightW, showRight } = layoutRef.current;
-    const maxByMain = panelW - LEFT_TOOLBAR_WIDTH - RIGHT_TOOLBAR_WIDTH - MIN_MAIN_W
-      - (showRight ? rightW : 0);
-    const n = Math.min(Math.max(dragWRef.current.member - dx, MIN_COL_W), Math.max(MIN_COL_W, maxByMain));
-    dragWRef.current.member = n;
-    applyColVar("member", n);
-  }, [applyColVar]);
+    const coalesce = rafCoalesce(apply);
 
-  // 子对话栏 | 右侧栏：拖拽在两栏之间重新分配宽度，主对话栏保持不变
-  const handleRightDrag = useCallback((dx: number) => {
-    const { hasMember } = layoutRef.current;
-    if (hasMember) {
-      const sum = dragWRef.current.member + dragWRef.current.right;
-      const nm = Math.min(Math.max(dragWRef.current.member + dx, MIN_COL_W), sum - MIN_COL_W);
-      const nr = sum - nm;
-      dragWRef.current.member = nm;
-      dragWRef.current.right = nr;
-      applyColVar("member", nm);
-      applyColVar("right", nr);
-      return;
-    }
-    const maxRight = panelW - LEFT_TOOLBAR_WIDTH - MIN_MAIN_W - RIGHT_TOOLBAR_WIDTH;
-    const nr = Math.min(Math.max(dragWRef.current.right - dx, MIN_COL_W), maxRight);
-    dragWRef.current.right = nr;
-    applyColVar("right", nr);
-  }, [applyColVar]);
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      coalesce.finish();
+      if (lastShift !== null) {
+        // 一次性提交：主区 = clamp(main0 + lastShift)，子栏拿剩余
+        const mainW = Math.max(minMainW, Math.min(main0 + lastShift, pool - MIN_COL_W));
+        setMemberW(Math.round(pool - mainW));
+      } else {
+        // 无位移点击：React 不会重渲染，恢复被预览覆盖的内联样式
+        if (styleMain === null) mainEl.removeAttribute("style");
+        else mainEl.setAttribute("style", styleMain);
+        if (styleMember === null) memberEl.removeAttribute("style");
+        else memberEl.setAttribute("style", styleMember);
+      }
+      try { sash.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onCancel, true);
+      window.removeEventListener("blur", onEnd);
+      sash.removeEventListener("lostpointercapture", onEnd);
+    };
+    const onMove = (ev: PointerEvent) => {
+      lastShift = Math.max(lo, Math.min(hi, ev.clientX - start));
+      coalesce.push(lastShift);
+    };
+    const onUp = () => cleanup();
+    const onCancel = () => cleanup();
+    const onEnd = () => cleanup();
 
-  // 松手：把拖拽后的宽度提交到 React 状态（各栏 width 变量经渲染同步，无跳变）
-  const commitColDrag = useCallback(() => {
-    setMemberW(dragWRef.current.member);
-    setRightW(dragWRef.current.right);
-  }, []);
+    try { sash.setPointerCapture?.(pointerId); } catch { /* synthetic events */ }
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onCancel, true);
+    window.addEventListener("blur", onEnd);
+    sash.addEventListener("lostpointercapture", onEnd);
+  };
+
+  // 子|右 sash：边界跟指针。成员开 = 子栏↔右栏互换（子+右 总和恒定）；
+  // 成员关 = 主区↔右栏（主+右 总和恒定，主区 ≥ minMainW）。
+  // 右栏是固定轨（预览写 flex-basis），另一侧同帧预览；松手一次提交。
+  const startRightSash = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const sash = e.currentTarget;
+    const { pointerId } = e;
+    const mainEl = document.querySelector("main");
+    const memberEl = memberWrapRef.current;
+    const rightEl = rightWrapRef.current;
+    if (!mainEl || !rightEl) return;
+    const hasMember = memberEl !== null;
+    const start = e.clientX;
+    const right0 = Math.round(rightEl.getBoundingClientRect().width);
+    const main0 = Math.round(mainEl.getBoundingClientRect().width);
+    const member0 = hasMember ? Math.round(memberEl.getBoundingClientRect().width) : 0;
+    // 钳制范围：right ∈ [350, 另一侧取剩余全部]
+    // 另一侧 = 成员面板（开）或主区（关，最小 350）
+    const otherMin = hasMember ? MIN_COL_W : minMainW;
+    const other0 = hasMember ? member0 : main0;
+    // 钳制范围：shift = clientX - start（右移 = 右栏变窄）
+    //   另一侧 ≥ 其最小值 → shift ≥ -（other0 - otherMin）（左移下限）
+    //   右栏 ≥ 350 → shift ≤ right0 - MIN_COL_W（右移上限）
+    const lo = -(other0 - otherMin);
+    const hi = right0 - MIN_COL_W;
+    const apply = (shift: number) => {
+      // 边界跟指针：指针右移 = 左侧（子/主）变宽、右栏变窄
+      const rightW2 = Math.max(MIN_COL_W, right0 - shift);
+      rightEl.style.flexBasis = `${Math.round(rightW2)}px`;
+      // 同步 --col-right-w：详情面板托管时（body[data-mirach-details-open]）
+      // 面板宽度 = 该变量，拖动预览期间跟着走（提交后 React 重写）
+      panelRef.current?.style.setProperty("--col-right-w", `${Math.round(rightW2)}px`);
+      if (hasMember && memberEl) {
+        memberEl.style.flexBasis = `${Math.round(member0 + right0 - rightW2)}px`;
+      } else {
+        mainEl.style.width = `${Math.round(main0 + right0 - rightW2)}px`;
+      }
+    };
+    const styleMain = mainEl.getAttribute("style");
+    const styleRight = rightEl.getAttribute("style");
+    const styleMember = memberEl?.getAttribute("style") ?? null;
+    let done = false;
+    let lastShift: number | null = null;
+
+    const coalesce = rafCoalesce(apply);
+
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      coalesce.finish();
+      if (lastShift !== null) {
+        // 一次性提交：右栏 = clamp(right0 − lastShift)，另一侧拿剩余
+        const rightW2 = Math.max(MIN_COL_W, Math.round(right0 - lastShift));
+        setRightW(rightW2);
+        if (hasMember && memberEl) {
+          setMemberW(Math.round(member0 + right0 - rightW2));
+        }
+      } else {
+        if (styleMain === null) mainEl.removeAttribute("style");
+        else mainEl.setAttribute("style", styleMain);
+        if (styleRight === null) rightEl.removeAttribute("style");
+        else rightEl.setAttribute("style", styleRight);
+        if (memberEl) {
+          if (styleMember === null) memberEl.removeAttribute("style");
+          else memberEl.setAttribute("style", styleMember);
+        }
+      }
+      try { sash.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onCancel, true);
+      window.removeEventListener("blur", onEnd);
+      sash.removeEventListener("lostpointercapture", onEnd);
+    };
+    const onMove = (ev: PointerEvent) => {
+      lastShift = Math.max(lo, Math.min(hi, ev.clientX - start));
+      coalesce.push(lastShift);
+    };
+    const onUp = () => cleanup();
+    const onCancel = () => cleanup();
+    const onEnd = () => cleanup();
+
+    try { sash.setPointerCapture?.(pointerId); } catch { /* synthetic events */ }
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onCancel, true);
+    window.addEventListener("blur", onEnd);
+    sash.addEventListener("lostpointercapture", onEnd);
+  };
 
   // ---- 主对话栏最小宽度保护：子对话栏/右侧栏同时占宽导致主栏过窄时，优先压缩子对话栏，其次右侧栏 ----
-  // 单次计算同时确定两个目标宽度（避免分两步压导致收敛到次优解）
+  // 单次计算同时确定两个目标宽度（避免分两步压导致收敛到次优解）。
+  // 成员关闭（selectedMember=null，子栏 flex 0 0 0 不占宽）时 nMember 必须按
+  // 0 计 —— 此前 memberW state 残留 380 被当真实占宽压进 avail，把右栏钳回
+  // 390，sash 拖宽主栏的提交被吞（表现为"主栏缩不下去/弹回"）。
   useEffect(() => {
-    const fixed = LEFT_TOOLBAR_WIDTH + RIGHT_TOOLBAR_WIDTH + MIN_MAIN_W;
+    const hasMember = selectedMember !== null;
+    const fixed = LEFT_TOOLBAR_WIDTH + RIGHT_TOOLBAR_WIDTH + minMainW;
     const avail = panelW - fixed; // 子对话栏 + 右侧栏 可占用的总宽度
-    const nMember = Math.min(memberW, Math.max(MIN_COL_W, avail - (showRight ? rightW : 0)));
-    setMemberW(nMember);
+    const nMember = hasMember ? Math.min(memberW, Math.max(MIN_COL_W, avail - (showRight ? rightW : 0))) : 0;
+    if (hasMember) setMemberW(nMember);
     if (showRight) {
       setRightW(Math.min(rightW, Math.max(MIN_COL_W, avail - nMember)));
     }
@@ -903,9 +1062,7 @@ export function AppLayout() {
           height: panelH,
           borderRadius: panelRadius,
           transform: "translateZ(0)",
-          // 列宽 CSS 变量：各栏 width 与分隔条 left 用 var() 引用；
-          // 拖拽时只 setProperty 改变量（不触发 React 重渲染，跟手且快）
-          "--col-member-w": `${selectedMember ? memberW : 0}px`,
+          // --col-right-w 仍被 details 面板固定定位的 CSS 宽度公式引用
           "--col-right-w": `${showRight ? rightW : 0}px`,
         } as React.CSSProperties}
       >
@@ -928,12 +1085,12 @@ export function AppLayout() {
           sidebarVisible={!sidebarCollapsedState}
         />
 
-        {/* ---- 主内容区（宽度用 CSS 变量 calc，拖拽中变量变化即生效、不重渲染；
-              左侧栏 = 官方 AppFrame sidebar 列（mirach 外壳），在主内容区内部） ---- */}
+        {/* ---- 主内容区（hermes flex 原生：flex:1 吸收剩余，min-width 保护。
+              左侧栏 = 官方 AppFrame sidebar 列，内部；左|主手柄 = 官方手柄） ---- */}
         <MainPanel
           style={{
-            width:
-              "calc(100% - 70px - var(--col-member-w) - var(--col-right-w) - 60px)",
+            flex: "1 1 0px",
+            minWidth: "350px",
           }}
           mainWidth={mainWidth}
           showLeft
@@ -947,27 +1104,44 @@ export function AppLayout() {
             onClose: () => setPaletteOpen(false),
           }}
         />
-        {/* 子内容区：选中成员时显示对话面板；再次点击成员或关闭后收起 */}
+        {/* 子内容区：选中成员时显示对话面板（Sash 骑左缘，hermes 式拖动）。
+            wrapper = 固定轨（flex-basis = memberW），拖动中写内联预览，松手提交 */}
         {selectedMember && (
-          <MemberChatPanel
-            key={selectedMember.id}
-            width="var(--col-member-w)"
-            member={selectedMember}
-            messages={projectSession.memberThreads[selectedMember.id] ?? []}
-            busy={!!memberBusy[selectedMember.id]}
-            onClose={closeMemberPanel}
-            onSend={sendMemberMessage}
-          />
+        <div
+          ref={memberWrapRef}
+          className="relative flex min-h-0 shrink-0 overflow-hidden"
+          style={{ flex: `0 0 ${memberW}px` }}
+        >
+            <Sash onPointerDown={startMemberSash} onDoubleClick={() => setMemberW(COL_W)} />
+            <MemberChatPanel
+              key={selectedMember.id}
+              width="100%"
+              member={selectedMember}
+              messages={projectSession.memberThreads[selectedMember.id] ?? []}
+              busy={!!memberBusy[selectedMember.id]}
+              onClose={closeMemberPanel}
+              onSend={sendMemberMessage}
+            />
+          </div>
         )}
-        {/* 右侧栏（收起时隐藏不卸载，保留标签状态；同时由 RightSidebar 清理浏览器 webview） */}
-        <RightSidebar
-          className={showRight ? undefined : "hidden"}
-          showRight={showRight}
-          openReq={rightOpenReq}
-          onActiveTabChange={setRightTab}
-          onCollapse={() => setShowRight(false)}
-          style={{ width: "var(--col-right-w)" }}
-        />
+        {/* 右侧栏（收起时隐藏不卸载，保留标签状态；同时由 RightSidebar 清理浏览器 webview）。
+            Sash 骑左缘；成员关闭时拖动 = 右栏↔主对话区互换，成员打开 = 子栏↔右栏互换 */}
+        <div
+          ref={rightWrapRef}
+          className={cn("relative flex min-h-0 shrink-0 overflow-hidden", showRight ? undefined : "hidden")}
+          style={{ flex: `0 0 ${showRight ? rightW : 0}px` }}
+        >
+          {showRight && (
+            <Sash onPointerDown={startRightSash} onDoubleClick={() => { setRightW(COL_W); setMemberW(COL_W); }} />
+          )}
+          <RightSidebar
+            className="w-full"
+            showRight={showRight}
+            openReq={rightOpenReq}
+            onActiveTabChange={setRightTab}
+            onCollapse={() => setShowRight(false)}
+          />
+        </div>
 
         {/* ---- 右侧工具栏 (60px，全高) ---- */}
         <RightToolbar
@@ -975,31 +1149,9 @@ export function AppLayout() {
           onPanelChange={handleRightPanelChange}
         />
 
-        {/* ---- 列间拖拽分隔条（主|子 / 子|右；左|主 之间不提供，左侧栏固定宽） ---- */}
-        {selectedMember && (
-          <ColumnResizeHandle
-            style={{
-              left: "calc(100% - 60px - var(--col-right-w) - var(--col-member-w) - 4px)",
-              top: 85,
-              bottom: 0,
-              width: 8,
-            }}
-            onDrag={handleMemberDrag}
-            onDragEnd={commitColDrag}
-          />
-        )}
-        {showRight && (
-          <ColumnResizeHandle
-            style={{
-              left: "calc(100% - 60px - var(--col-right-w) - 4px)",
-              top: 85,
-              bottom: 0,
-              width: 8,
-            }}
-            onDrag={handleRightDrag}
-            onDragEnd={commitColDrag}
-          />
-        )}
+        {/* ---- 列间拖拽（hermes sash）：主|子 与 子|右 的 Sash 内嵌在各栏
+             wrapper 左缘（见上方 member/right wrapper）；左|主 沿用官方手柄
+             （官方树内，位置/钳制/store 提交全官方） ---- */}
 
         {/* ---- 功能 Overlay（消息平台/命令中心/技能与工具/排程/产物，按需加载） ---- */}
         {/* 设置页所有权已移交官方：入口经 settings-surface 浮出镜像树里的官方 SettingsRoot */}

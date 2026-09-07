@@ -579,6 +579,34 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
     return () => window.removeEventListener("mirach:toggle-terminal", onToggle);
   }, []);
 
+  // 滚动条智能显隐（对话区 + 左侧栏，共用）：滚动中给容器打
+  // data-mirach-scrolling（index.css 的 thumb 只在它/悬停时显示），
+  // 2 秒无滚动移除 → 自动隐藏。各自独立计时（两个容器同时滚动互不干扰）。
+  useEffect(() => {
+    const timers = new Map<Element, number>();
+    const onScroll = (e: Event) => {
+      const sb = (e.target as HTMLElement | null)?.closest?.(
+        '.dsh-native-area [class*="_scrollBody"], .dsh-native-area [data-slot="sidebar"] .overflow-y-auto',
+      );
+      if (!sb) return;
+      sb.setAttribute("data-mirach-scrolling", "true");
+      const prev = timers.get(sb);
+      if (prev !== undefined) window.clearTimeout(prev);
+      timers.set(
+        sb,
+        window.setTimeout(() => {
+          sb.removeAttribute("data-mirach-scrolling");
+          timers.delete(sb);
+        }, 2000),
+      );
+    };
+    document.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("scroll", onScroll, true);
+      for (const t of timers.values()) window.clearTimeout(t);
+    };
+  }, []);
+
   // 6 个 Mirach 环境（hermes 主环境 + chat/code/work/finance/write 5 模式）对应独立环境：
   // 切换模式 = 切换环境身份（左侧栏团队名联动），主内容区保持对话区。
   // 仅工具类视图（收藏/知识库等）渲染专属视图页。
@@ -619,8 +647,29 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
                 mirach 顶栏以覆盖层形式悬浮在官方对话列顶部
                 （官方 titleRow 由 index.css 隐藏，官方"对话/轨迹"tabs
                 位于顶栏会话名称下方） */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              className="relative flex min-h-0 flex-1 flex-col"
+              style={{ "--mirach-terminal-h": terminalOpen ? `${terminalH + 20}px` : undefined } as React.CSSProperties}
+            >
               <NativeChatArea sessionId={activeId} />
+              {/* 终端区：盖在对话列下方（absolute + 只压缩 centerCol 内部：
+                  centerCol 底部 padding-bottom 由 --mirach-terminal-h 让位，
+                  侧栏列保持全高，不随终端压缩"跟着上去"） */}
+              {terminalOpen && (
+                <div
+                  className="absolute bottom-0 z-10 flex flex-col"
+                  style={{
+                    left: "var(--mirach-internal-sidebar-w, 280px)",
+                    right: 0,
+                    height: terminalH + 20,
+                  }}
+                >
+                  <ResizeHandle onDrag={dragTerminal} />
+                  <div className="flex-1 min-h-0">
+                    <TerminalPanel height={terminalH} onClose={() => setTerminalOpen(false)} />
+                  </div>
+                </div>
+              )}
 
               {/* 顶栏（项目名/会话名/插件条/命令搜索）：覆盖官方对话列顶部，
                   left 从官方侧栏列右缘起（展开 var 同步 280；折叠时用 React
@@ -698,8 +747,6 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
                   可折叠 + 自动展开开关；官方树不提供此面板，属 mirach 自有功能） */}
               <StatusWindow />
             </div>
-            <ResizeHandle onDrag={dragTerminal} />
-            {terminalOpen && <TerminalPanel height={terminalH} onClose={() => setTerminalOpen(false)} />}
           </>
         )}
       </div>

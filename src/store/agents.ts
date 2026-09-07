@@ -8,6 +8,7 @@
 
 import { atom } from "nanostores";
 import { MOCK } from "@/lib/mock";
+import { $environments } from "@/store/environments";
 
 export type AgentStatus = "generating" | "completed" | "pending";
 
@@ -32,6 +33,15 @@ export interface ConvItem {
   /** 酒馆预设 id（来源为酒馆预设时携带）：成员会话空白期绑定它，
    *  点亮引擎侧酒馆功能（世界书智能注入/记忆总结/关系网/剧情选项） */
   tavernPresetId?: string;
+  /** 头像形状（hermes avatar 词汇：circle/blob/squircle/pill/triangle/
+   *  hexagon/cloud/drop/多面体/sigil-N）；缺省按名字派生 */
+  avatarShape?: string;
+  /** 头像照片（data URL，上传时压缩到 256px） */
+  avatarImage?: string;
+  /** 环境主人格（每环境一个；主环境团队聚合它的跨环境成员行） */
+  primary?: boolean;
+  /** 聚合名册的临时标记：该行来自哪个环境（主环境团队视图；不持久化） */
+  fromEnv?: string;
 }
 
 const STORAGE_KEY = "mirach.agents.v1";
@@ -51,7 +61,9 @@ const agentsEnvKey = (env: string) => `${STORAGE_KEY}.${env}`;
 const TEAM_SEED_CHAT: ConvItem[] = [
   {
     id: "team-kui", name: "奎木狼", initials: "奎", avatarBg: "#6366F1",
-    preview: "全能助理就绪，直接输入任务开始", desc: "主代理 · 统筹分派 · 整合结果", time: "刚刚", status: "generating", tab: "read",
+    preview: "全能助理就绪，直接输入任务开始", desc: "主人格 · 主代理 · 统筹分派 · 整合结果", time: "刚刚", status: "generating", tab: "read",
+    primary: true,
+    avatarShape: "squircle",
     systemPrompt:
       "你是奎木狼（Mirach 主代理），一位全能个人助理。你统筹全局：复杂任务拆解并交给合适的团队成员，自己直接处理日常对话与轻量任务。" +
       "回答用简体中文；先给结论再给细节；不确定时明确说不确定，绝不编造。",
@@ -123,9 +135,102 @@ const TEAM_SEED_CHAT: ConvItem[] = [
   },
 ];
 
-/** 某环境的团队种子（只有聊天环境带完整团队；其他环境从空开始） */
+/** 某环境的团队种子：每个环境都带一个主人格（primary）——聊天环境是
+ *  奎木狼（完整团队），main 是 Mirach 总管，code/work/finance/write 各一位
+ *  领域总管。主环境团队视图聚合全部环境的主人格。 */
+const ENV_PRIMARY_SEEDS: Record<string, ConvItem> = {
+  main: {
+    id: "primary-main", name: "Mirach", initials: "M", avatarBg: "#026CFE",
+    preview: "六环境统筹就绪", desc: "主人格 · 统筹全部环境的领域总管", time: "刚刚", status: "generating", tab: "read",
+    primary: true,
+    avatarShape: "squircle",
+    systemPrompt:
+      "你是 Mirach（主环境主人格），统筹六个环境（聊天/代码/工作/金融/写作）的领域总管。" +
+      "你了解每个环境的职责边界，负责跨环境任务的拆解、指派与结果整合；自己直接处理全局性对话。" +
+      "回答用简体中文；结论前置；涉及具体环境任务时建议转给对应环境总管。",
+    model: "deepseek-v4-flash-0731",
+    tools: ["bash", "文件", "搜索", "网络", "代码"],
+  },
+  code: {
+    id: "primary-code", name: "代码总管", initials: "码", avatarBg: "#10B981",
+    preview: "代码环境统筹就绪", desc: "主人格 · 代码环境 · 工程实现统筹", time: "刚刚", status: "pending", tab: "read",
+    primary: true,
+    avatarShape: "hexagon",
+    systemPrompt:
+      "你是代码总管（代码环境主人格），统筹代码环境的全部工程任务：需求分析、方案设计、" +
+      "实现与调试的拆解分派，自己直接处理轻量编码问题。工作区即代码环境工作区；用简体中文。",
+    model: "deepseek-v4-flash-0731",
+    tools: ["bash", "文件", "搜索", "代码"],
+  },
+  work: {
+    id: "primary-work", name: "工作总管", initials: "工", avatarBg: "#F59E0B",
+    preview: "工作环境统筹就绪", desc: "主人格 · 工作环境 · 任务与文档统筹", time: "刚刚", status: "pending", tab: "read",
+    primary: true,
+    avatarShape: "squircle",
+    systemPrompt:
+      "你是工作总管（工作环境主人格），统筹工作环境的任务管理、日程安排与文档处理，" +
+      "自己直接处理轻量整理类任务。工作区即工作环境工作区；用简体中文。",
+    model: "deepseek-v4-flash-0731",
+    tools: ["文件", "搜索"],
+  },
+  finance: {
+    id: "primary-finance", name: "金融总管", initials: "金", avatarBg: "#EF4444",
+    preview: "金融环境统筹就绪", desc: "主人格 · 金融环境 · 数据与市场统筹", time: "刚刚", status: "pending", tab: "read",
+    primary: true,
+    avatarShape: "drop",
+    systemPrompt:
+      "你是金融总管（金融环境主人格），统筹金融环境的数据分析、风险评估与市场研究任务，" +
+      "自己直接处理轻量查询。输出附数据出处，不做投资建议承诺；用简体中文。",
+    model: "deepseek-v4-flash-0731",
+    tools: ["文件", "搜索", "网络"],
+  },
+  write: {
+    id: "primary-write", name: "写作总管", initials: "文", avatarBg: "#8B5CF6",
+    preview: "写作环境统筹就绪", desc: "主人格 · 写作环境 · 文案与内容统筹", time: "刚刚", status: "pending", tab: "read",
+    primary: true,
+    avatarShape: "pill",
+    systemPrompt:
+      "你是写作总管（写作环境主人格），统筹写作环境的文案创作、内容优化与多语翻译任务，" +
+      "自己直接处理轻量润色。写作原则：结构清晰、结论前置、示例优先；用简体中文。",
+    model: "deepseek-v4-flash-0731",
+    tools: ["文件"],
+  },
+};
+
+/** 某环境的团队种子：环境主人格 + （聊天环境的）完整专家团队 */
 function teamSeedFor(env: string): ConvItem[] {
-  return env === "chat" ? TEAM_SEED_CHAT : [];
+  const primary = ENV_PRIMARY_SEEDS[env];
+  if (env === "chat") {
+    // 奎木狼即聊天环境主人格（种子内已标 primary）
+    return TEAM_SEED_CHAT;
+  }
+  return primary ? [primary] : [];
+}
+
+/** 指定环境的主人格（无显式标记时回落第一个成员） */
+export function primaryAgentOf(envId: string): ConvItem | null {
+  const list = loadAgentsOf(envId);
+  return list.find((a) => a.primary) ?? list[0] ?? null;
+}
+
+/**
+ * 环境团队名册：主环境 = 本环境成员 ⊕ 其他每个环境的主人格（跨环境成员行，
+ * 带 fromEnv 标记与唯一 id）；其他环境返回自己的成员。跨环境行不持久化，
+ * 每次从各环境分片现取（hermes roster 的多来源模式）。
+ */
+export function teamRosterFor(envId: string): ConvItem[] {
+  const own = loadAgentsOf(envId);
+  if (envId !== "main") return own;
+  const cross = $environments
+    .get()
+    .filter((e) => e.id !== "main" && e.visible !== false)
+    .map((e): ConvItem | null => {
+      const primary = loadAgentsOf(e.id).find((a) => a.primary);
+      if (!primary) return null;
+      return { ...primary, id: `fromEnv:${e.id}`, fromEnv: e.id };
+    })
+    .filter((a): a is ConvItem => a !== null);
+  return [...own, ...cross];
 }
 
 /** 读取指定环境的成员分片（不切换当前分片——设置页环境标签用） */
@@ -162,6 +267,10 @@ export function setAgentsEnv(envId: string): void {
 
 export const $agents = atom<ConvItem[]>(load());
 
+/** 成员分片写入版本号：任意环境的写入都 bump——主环境聚合的跨环境主人格行
+ *  （读其他环境分片）不经过 $agents，侧栏/设置页订阅本版本号获得刷新信号。 */
+export const $agentsVersion = atom<number>(0);
+
 let idSeq = 0;
 
 function buildAgent(
@@ -169,6 +278,8 @@ function buildAgent(
     name: string;
     desc?: string;
     avatarBg?: string;
+    avatarShape?: string;
+    avatarImage?: string;
     tab?: ConvItem["tab"];
     systemPrompt?: string;
     model?: string;
@@ -182,6 +293,8 @@ function buildAgent(
     name,
     initials: name.slice(0, 2).toUpperCase(),
     avatarBg: input.avatarBg ?? AVATAR_COLORS[list.length % AVATAR_COLORS.length],
+    avatarShape: input.avatarShape || undefined,
+    avatarImage: input.avatarImage || undefined,
     preview: "（新智能体，等待分配任务）",
     desc: input.desc?.trim() || "智能体 · 待配置职责",
     time: "刚刚",
@@ -200,6 +313,7 @@ export function saveAgentsOf(envId: string, list: ConvItem[]): void {
   } catch {
     /* 存储失败忽略 */
   }
+  $agentsVersion.set($agentsVersion.get() + 1);
   if (envId === currentAgentsEnv) $agents.set(list);
 }
 
@@ -210,6 +324,8 @@ export function addAgentIn(
     name: string;
     desc?: string;
     avatarBg?: string;
+    avatarShape?: string;
+    avatarImage?: string;
     tab?: ConvItem["tab"];
     systemPrompt?: string;
     model?: string;
@@ -227,6 +343,8 @@ export function addAgent(input: {
   name: string;
   desc?: string;
   avatarBg?: string;
+  avatarShape?: string;
+  avatarImage?: string;
   tab?: ConvItem["tab"];
   systemPrompt?: string;
   model?: string;
@@ -235,11 +353,11 @@ export function addAgent(input: {
   return addAgentIn(currentAgentsEnv, input);
 }
 
-/** 修改指定环境的智能体（name/desc/avatarBg/status/tab/systemPrompt/model/tools/source） */
+/** 修改指定环境的智能体（name/desc/avatar 三件套/status/tab/systemPrompt/model/tools/source） */
 export function updateAgentIn(
   envId: string,
   id: string,
-  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
+  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "avatarShape" | "avatarImage" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
 ): void {
   saveAgentsOf(
     envId,
@@ -258,7 +376,7 @@ export function updateAgentIn(
 /** 修改智能体——写当前激活环境分片 */
 export function updateAgent(
   id: string,
-  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
+  patch: Partial<Pick<ConvItem, "name" | "desc" | "avatarBg" | "avatarShape" | "avatarImage" | "status" | "tab" | "preview" | "systemPrompt" | "model" | "tools" | "source">>,
 ): void {
   updateAgentIn(currentAgentsEnv, id, patch);
 }

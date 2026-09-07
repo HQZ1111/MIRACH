@@ -5,9 +5,9 @@
  * right 子槽（left = 工具组、right = 模型/发送组）。本模块把 mirach 有、
  * 官方没有的输入框控件以官方槽位条目形态注册进去。
  *
- * 注入布局（用户指定）：
+ * 注入布局（用户指定，从右往左 = 发送 → 唤醒 → 朗读 → 听写 → 模型 → 用量）：
  *   left 工具组:  +号(built-in) → 权限预设(official) → 终端(our)
- *   right 尾组:   听写(our) → 唤醒(our) → 朗读(our) → 模型(official) → 上下文(official) → 发送(built-in)
+ *   right 尾组:   用量(official, CSS order 前移) → 模型(official) → 听写(our) → 朗读(our) → 唤醒(our) → 发送(built-in)
  *
  * 组件本体保持 mirach 实现（nanostores/lucide 在同一 React 树），只借官方
  * 槽位获得官方排布与主题令牌（容器由官方渲染，无需自挂 DSW alias）。
@@ -232,13 +232,13 @@ function LeftExtras() {
   return <TerminalToggle />;
 }
 
-/** right 槽：听写 → 唤醒 → 朗读（模型左边） */
+/** right 槽：听写 → 朗读 → 唤醒（模型左边；用户定序从右往左 = 发送/唤醒/朗读/听写/模型/用量） */
 function RightExtras() {
   return (
     <>
       <DictationToggle />
-      <WakeToggle />
       <SpeakToggle />
+      <WakeToggle />
     </>
   );
 }
@@ -355,10 +355,184 @@ export function OfficialVoiceSend(): null {
 }
 
 /**
+ * 工具行自适应折叠观察器（官方源码零改动；渲染 null，纯副作用）。
+ *
+ * 用户定序：收窄时永不折行，先模型按钮收成图标、再模式 chip 收成图标、
+ * 省略兜底。断点必须随内容变化（模型名长短不同），固定宽度断点做不到——
+ * 这里用"开始省略"作为信号：
+ *   stage 0 → 1：模型文字出现截断（flexbox 先挤模型——唯一可缩长文本）；
+ *   stage 1 → 2：模式 chip 文字出现截断（stage 0 时它故意不可缩）。
+ * 放宽时按行内剩余空间逐级回退（8px 迟滞防抖动）；一次只走一级。
+ * 结果写到 composer 卡片的 data-mirach-collapse（"model" / "model mode"），
+ * CSS 据此折叠文字、给模型钮补 cpu 图标；折叠态 label 用 max-width:0 留场，
+ * scrollWidth 可测自然宽供回退判断。
+ */
+export function ComposerRowAdaptive(): null {
+  useEffect(() => {
+    const area = document.querySelector(".dsh-native-area");
+    if (area === null) return;
+
+    let raf = 0;
+    let stage = 0;
+    let upStreak = 0;
+    let downStreak = 0;
+    let observedRow: Element | null = null;
+
+    const ellipsized = (el: Element | null): boolean =>
+      el !== null && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1;
+
+    const tick = (): void => {
+      raf = 0;
+      const card = area.querySelector("[data-composer-card]") as HTMLElement | null;
+      const tools = card?.querySelector("[class*='_tools']") ?? null;
+      const row = tools?.parentElement ?? null;
+      if (card === null || tools === null || row === null) return;
+      if (observedRow !== row) {
+        observedRow = row;
+        ro.observe(row);
+      }
+      const trailing = row.querySelector("[class*='_trailing']");
+      const modelBtn = trailing?.querySelector("button[class*='_trigger'][aria-haspopup='menu']") ?? null;
+      const modelLabel = modelBtn?.querySelector("[class*='_triggerLabel']") ?? null;
+      const modelEffort = modelBtn?.querySelector("[class*='_triggerEffort']") ?? null;
+      const modes = row.querySelector("[class*='_modes']");
+      const accessLabel = modes?.querySelector("button[class*='_trigger'] [class*='_triggerLabel']") ?? null;
+      if (trailing === null || modelBtn === null || modes === null || accessLabel === null) return;
+
+      // 行内剩余空间（padding+gap 用 16px 估算，迟滞 margin 主导精度）
+      const free =
+        row.clientWidth -
+        (tools as HTMLElement).offsetWidth -
+        (trailing as HTMLElement).offsetWidth -
+        16;
+
+      // 升/回退都要求连续两帧成立：菜单弹出等瞬时重排只产生一次 tick，
+      // 不会误折叠；拖拽是连续事件，实际折叠仍即时
+      let next = stage;
+      if (stage === 0) {
+        const hot = ellipsized(modelLabel) || ellipsized(modelEffort);
+        if (hot) {
+          upStreak += 1;
+          if (upStreak >= 2) { next = 1; upStreak = 0; }
+        } else upStreak = 0;
+      } else if (stage === 1) {
+        if (ellipsized(accessLabel)) {
+          upStreak += 1;
+          if (upStreak >= 2) { next = 2; upStreak = 0; }
+        } else {
+          upStreak = 0;
+          // 回退 0：恢复模型文字的代价 = 文字自然宽 - 图标态多占的宽（icon14+gap5+pad5≈24）
+          const cost = (modelLabel?.scrollWidth ?? 0) + (modelEffort?.scrollWidth ?? 0) - 24;
+          if (free - cost > 8) {
+            downStreak += 1;
+            if (downStreak >= 2) { next = 0; downStreak = 0; }
+          } else downStreak = 0;
+        }
+      } else {
+        // 回退 1：恢复模式文字的代价 = 其自然宽
+        if (free - accessLabel.scrollWidth > 8) {
+          downStreak += 1;
+          if (downStreak >= 2) { next = 1; downStreak = 0; }
+        } else downStreak = 0;
+      }
+
+      if (next !== stage) {
+        stage = next;
+        if (stage === 0) delete card.dataset.mirachCollapse;
+        else card.dataset.mirachCollapse = stage === 1 ? "model" : "model mode";
+      }
+    };
+
+    const schedule = (): void => {
+      if (!raf) raf = window.requestAnimationFrame(tick);
+    };
+    const ro = new ResizeObserver(schedule);
+    const mo = new MutationObserver(schedule);
+    mo.observe(area, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+    schedule();
+
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      ro.disconnect();
+      mo.disconnect();
+      observedRow = null;
+      const card = area.querySelector("[data-composer-card]");
+      if (card instanceof HTMLElement) delete card.dataset.mirachCollapse;
+    };
+  }, []);
+  return null;
+}
+
+/**
+ * mirach-auto 图标注入（官方源码零改动；渲染 null）。
+ *
+ * 官方 permissionGlyphs 只给三个内置预设配了盾形图标，profile 补丁注入的
+ * mirach-auto 没有字形：闭合触发钮由 CSS 按 aria-label 补闪电（index.css），
+ * 下拉菜单行官方 Menu 没有 DOM 钩子（id 只是 React key），这里观察菜单
+ * 弹出，给 label 为 "Mirach Auto" 的行首插一个同款闪电 span（内联样式，
+ * 不依赖哈希类名；官方 itemIcon 是 14px 行内块，这里对齐）。
+ */
+const MIRACH_AUTO_LABEL = "Mirach Auto";
+
+const boltIconStyle: Partial<CSSStyleDeclaration> = {
+  width: "14px",
+  height: "14px",
+  flex: "none",
+  marginRight: "6px",
+  background: "currentColor",
+  webkitMask:
+    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L3 14h9l-1 8 10-12h-9l1-8z' fill='black'/%3E%3C/svg%3E\") center / contain no-repeat",
+  mask: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M13 2L3 14h9l-1 8 10-12h-9l1-8z' fill='black'/%3E%3C/svg%3E\") center / contain no-repeat",
+};
+
+export function MirachAutoGlyph(): null {
+  useEffect(() => {
+    const area = document.querySelector(".dsh-native-area");
+    if (area === null) return;
+
+    let raf = 0;
+    const injected = new Set<HTMLElement>();
+
+    const tick = (): void => {
+      raf = 0;
+      for (const btn of area.querySelectorAll<HTMLElement>("button[role='menuitem']")) {
+        if ((btn.textContent ?? "").trim() !== MIRACH_AUTO_LABEL) continue;
+        if (btn.querySelector("[data-mirach-glyph]") !== null) continue;
+        const icon = document.createElement("span");
+        icon.dataset.mirachGlyph = "";
+        Object.assign(icon.style, boltIconStyle);
+        btn.insertBefore(icon, btn.firstChild);
+        injected.add(icon);
+      }
+    };
+    const schedule = (): void => {
+      if (!raf) raf = window.requestAnimationFrame(tick);
+    };
+    const mo = new MutationObserver(schedule);
+    mo.observe(area, { childList: true, subtree: true });
+    schedule();
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      mo.disconnect();
+      for (const el of injected) el.remove();
+      injected.clear();
+    };
+  }, []);
+  return null;
+}
+
+/**
  * 注册 mirach 附加控件进官方输入条子槽（boot 后调用一次；幂等——
  * 重复注册被官方 register 拒绝并告警）。
  * left: 终端（权限预设右边，order 100 排官方后）
- * right: 听写/唤醒/朗读（模型左边，负 order 排官方前）
+ * right: 听写/朗读/唤醒（模型右边、用量左边，负 order 排官方模型前；
+ *        用量环再经 mirach CSS order 前移到模型左边——官方 DOM 固定模型→用量）
  *
  * 幂等保护：boot 失败重试会再次进入本函数，具名监听器 + 模块级标志保证
  * voice-request 只挂一次（重复挂载 = toggleDictation 双触发 = 开即关）。

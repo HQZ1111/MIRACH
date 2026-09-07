@@ -178,3 +178,35 @@ mirach 对齐原则（2026-09-05 全面收紧后）：
 10. **grid 列不能 display:none**：AppFrame 三列是 grid item，首列 `display:none`
     会让 center/details 整体左移一位（center 掉进 0px 轨道、details 吃掉 1fr）。
     隐藏 rail 只能压轨道宽度 + 隐藏列内子元素。
+11. **composer 工具行适配四招（不改官方源码）**：
+    ① 官方 `.row` 是 `container-type: inline-size` 的匿名容器、类哈希一律
+    `[class*='_xxx']` 结构匹配（同 `_primary` 惯例）；ContextMeter 触发钮同为
+    `_trigger` 哈希，用 `aria-haspopup menu/dialog` 区分；`.row` 不能裸匹配
+    `_row`（ContextMeter 面板图例也占 `_row/_rows`），用 `:has(> _tools)` 锚定。
+    ② **永不折行**：官方 `.row flex-wrap:wrap` + `.trailing flex:none` 收窄时
+    先把尾组折到第二排（用户否决）→ nowrap + 尾组 `flex:0 1 auto`。
+    ③ **自适应折叠级联**（用户定序：模型→图标 → 模式→图标 → 省略兜底；模型名
+    长短不同，固定断点不行）：composer-extras `ComposerRowAdaptive` 观察器以
+    "文字开始省略"为信号升阶（stage0 模式 chip 故意不可缩保证先模型）、按行内
+    剩余空间逐级回退（8px 迟滞），结果写卡片 `data-mirach-collapse` 驱动 CSS；
+    折叠态 label 用 `max-width:0` 留场测 scrollWidth。模型钮官方无图标，折叠态
+    `::before` mask 补 cpu 图形；模型根 `flex-shrink:8` 抢占收缩份额。
+    ④ 尾组顺序官方 DOM 固定 [right槽]→模型→用量→发送；用户定序（从右往左：
+    发送/唤醒/朗读/听写/模型/用量）用 `order` 重排：ContextMeter `:has(dialog)`
+    order -2、ModelSelect `:has(menu)` order -1；mirach 三钮（RightExtras）=
+    听写/朗读/唤醒。间距：row/tools 6、modes/trailing 4（index.css）。
+    ⑤ **终端漂移**：tools 盒子官方 `min-width:0` + 子元素全 flex:none——盒子
+    缩得比内容小时末端终端钮溢出向右漂、盖到权限 chip 上。stage0 给 tools
+    `flex-shrink:0`（赤字全交尾组），`[data-mirach-collapse]` 态才恢复 1
+    （此时权限 chip 文字可缩，终端无需漂移）。
+    ⑥ **mirach-auto 图标**：官方 `permissionGlyphs` 只认 read-only /
+    workspace-write / danger-full-access，host 配置预设无字形。闭合触发钮用
+    CSS `[aria-label*='Mirach Auto']::before` 补闪电（预设名经 displayName
+    进 aria-label，语言无关）；菜单行官方 Menu 无 DOM 钩子（id 仅 React key），
+    `MirachAutoGlyph` 观察器给 "Mirach Auto" 行注入内联样式闪电 span。
+    ⑦ **覆盖窗口**：模型根官方 `display:block`——收缩时根盒变窄而内部
+    inline-flex 触发钮不跟缩，文字/chevron 溢出根盒盖到相邻图标（"先覆盖再
+    折叠"），且截断信号此时未触发。模型根改 `display:flex`：触发钮作为子项
+    同步收缩，文字在根盒内被裁剪，截断信号 = "间距已到最小"的折叠时机。
+    升/回退需连续两帧成立（upStreak/downStreak），菜单弹出等单次 tick 的瞬时
+    重排不会误折叠。

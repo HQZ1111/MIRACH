@@ -22,8 +22,11 @@ let probing = false;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 探活：idle/error → connecting → ping → open/error（防并发） */
-export async function pingGateway(): Promise<boolean> {
+/** 探活：idle/error → connecting → ping → open/error（防并发）。
+ *  maxTries：就绪轮询次数（750ms/次）。启动首探给长宽限（sidecar 冷启动
+ *  数秒～数十秒），期间保持 connecting（缓冲页），宽限耗尽才进 error
+ *  （故障浮层）；手动"重试"用短轮询快速反馈。 */
+export async function pingGateway(maxTries = 8): Promise<boolean> {
   if (MOCK) {
     $gatewayState.set("open");
     $gatewayError.set(null);
@@ -37,7 +40,7 @@ export async function pingGateway(): Promise<boolean> {
     // 唯一后端 = dsh sidecar：探测 dsh_sidecar_ready（sidecar 由 Rust 启动，
     // 需片刻就绪，故短轮询重试），引擎（DeepSeek Harness）按需惰性启动。
     let ok = false;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < maxTries; i++) {
       try {
         if (await invoke<boolean>("dsh_sidecar_ready")) {
           ok = true;

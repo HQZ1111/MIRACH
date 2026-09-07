@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AgentTeam — 智能体团队面板（按环境实例化，嵌入环境设置面板）
  *
  * 一个 AgentTeamPanel = 一个环境的完整团队管理：
@@ -28,6 +28,8 @@ import {
 } from "@/store/agents";
 import { $providerConfig } from "@/store/providerConfig";
 import { $groups, createGroup, removeGroup, type GroupMode } from "@/store/groups";
+import { BotFace, defaultShapeFor } from "@/components/layout/AgentAvatar";
+import { AgentAvatarPicker } from "@/components/layout/AgentAvatarPicker";
 import {
   listTavernPresets,
   parseCharacterCard,
@@ -859,6 +861,8 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
     name: string;
     desc: string;
     avatarBg: string;
+    avatarShape?: string;
+    avatarImage?: string;
     systemPrompt?: string;
     model?: string;
     tools?: string[];
@@ -868,6 +872,8 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
         name: data.name,
         desc: data.desc,
         avatarBg: data.avatarBg,
+        avatarShape: data.avatarShape,
+        avatarImage: data.avatarImage,
         systemPrompt: data.systemPrompt,
         model: data.model,
         tools: data.tools,
@@ -877,6 +883,8 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
         name: data.name,
         desc: data.desc,
         avatarBg: data.avatarBg,
+        avatarShape: data.avatarShape,
+        avatarImage: data.avatarImage,
         systemPrompt: data.systemPrompt,
         model: data.model,
         tools: data.tools,
@@ -958,10 +966,10 @@ export function AgentTeamPanel({ env }: { env: EnvProfile }) {
           <div key={a.id} className="flex flex-col rounded-lg border border-black/10 bg-white p-3 shadow-sm transition-shadow hover:shadow-md">
             <div className="flex items-start gap-2.5">
               <span
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                style={{ backgroundColor: a.avatarBg }}
+                className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full"
+                style={{ backgroundColor: a.avatarImage ? "transparent" : a.avatarBg }}
               >
-                {a.initials}
+                <BotFace color={a.avatarBg} image={a.avatarImage} name={a.name} shape={a.avatarShape || defaultShapeFor(a.name)} size={36} />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-semibold text-[#303030]">{a.name}</p>
@@ -1198,6 +1206,8 @@ function AgentEditModal({
     name: string;
     desc: string;
     avatarBg: string;
+    avatarShape?: string;
+    avatarImage?: string;
     systemPrompt?: string;
     model?: string;
     tools?: string[];
@@ -1207,10 +1217,11 @@ function AgentEditModal({
   const [name, setName] = useState(agent?.name ?? "");
   const [desc, setDesc] = useState(agent?.desc ?? "");
   const [color, setColor] = useState(agent?.avatarBg ?? "#6366F1");
+  const [shape, setShape] = useState(agent?.avatarShape ?? "");
+  const [image, setImage] = useState<string | null>(agent?.avatarImage ?? null);
   const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt ?? "");
   const [model, setModel] = useState(agent?.model ?? "");
   const [tools, setTools] = useState<string[]>(agent?.tools ?? []);
-  const COLORS = ["#6366F1", "#F59E0B", "#10B981", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316"];
   const TOOL_OPTIONS = ["bash", "文件", "搜索", "浏览器", "网络", "代码"];
   // 全部可用模型（来自已配置的提供商）
   const modelOptions = providerConfigs.flatMap((c) => c.models.map((m) => ({ id: m.id, provider: c.name })));
@@ -1222,6 +1233,8 @@ function AgentEditModal({
       name,
       desc,
       avatarBg: color,
+      avatarShape: shape || undefined,
+      avatarImage: image || undefined,
       systemPrompt: systemPrompt.trim() || undefined,
       model: model || undefined,
       tools: tools.length ? tools : undefined,
@@ -1265,23 +1278,18 @@ function AgentEditModal({
           />
         </label>
 
-        {/* 头像色 */}
+        {/* 头像（hermes avatar：形状网格 + 色板 + 上传照片，实时预览） */}
         <div className="mt-2">
-          <span className="mb-1 block text-[11px] text-muted-foreground">头像颜色</span>
-          <div className="flex flex-wrap gap-1.5">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                onClick={() => setColor(c)}
-                className={cn(
-                  "h-6 w-6 rounded-full border-2 transition-colors",
-                  color === c ? "border-[#303030]" : "border-transparent",
-                )}
-                style={{ backgroundColor: c }}
-                aria-label={c}
-              />
-            ))}
-          </div>
+          <span className="mb-1 block text-[11px] text-muted-foreground">头像</span>
+          <AgentAvatarPicker
+            color={color}
+            image={image}
+            name={name || "agent"}
+            onColor={setColor}
+            onImage={setImage}
+            onShape={setShape}
+            shape={shape || "circle"}
+          />
         </div>
 
         {/* 模型选择 */}
