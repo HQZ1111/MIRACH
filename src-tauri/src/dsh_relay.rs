@@ -512,8 +512,9 @@ pub async fn dsh_prewarm(s: State<'_, DshAppState>) -> Result<Value, String> {
 }
 
 /// 内部预热（Rust setup 自主调用，对齐 hermes"createWindow 时立即拉起后端"）：
-/// 不经前端 invoke，sidecar ready 后即刻预热引擎；失败不重试（dsh_prewarm
-/// 与重启循环会兜底），engine_ready 置位后前端探测自然通过。
+/// 不经前端 invoke，sidecar ready 后即刻预热引擎；engine_ready 置位后
+/// 前端探测自然通过。可重入：每轮 sidecar respawn 后由重启循环重新调用
+/// （hermes startHermes() 可重入 + backendConnectionState 共享 promise 同语义）。
 async fn prewarm_inner(h: &tauri::AppHandle) {
     let state: State<DshAppState> = h.state();
     if !state.sidecar.ready.load(Ordering::Acquire) {
@@ -531,36 +532,23 @@ async fn prewarm_inner(h: &tauri::AppHandle) {
             state.sidecar.engine_ready.store(true, Ordering::Release);
             eprintln!("[dsh_relay] engine prewarmed (auto) — engine_ready=true");
         }
-        Err(e) => eprintln!("[dsh_relay] auto prewarm failed: {e} (前端 dsh_prewarm 可重试)"),
+        Err(e) => eprintln!("[dsh_relay] auto prewarm failed: {e}"),
     }
 }
 
 /// 在 setup 中启动 sidecar 并注册 stdout 读线程。
 /// sidecar 退出后自动重建（崩溃自愈）：重 spawn + 换 stdin + 起新读循环；
 /// ready 仅由 sidecar 的 ready 信封置位（避免"spawn 即 ready"竞态）。
-/// sidecar ready 后**自主预热引擎**（不等前端）：冷启动与前端渲染并行，
-/// 用户进主界面时引擎已就绪（hermes startHermes() 同款时序）。
+/// 每轮 sidecar ready 后**自主预热引擎**（不等前端、每轮 respawn 都重新预热）：
+/// 冷启动与前端渲染并行，用户进主界面时引擎已就绪（hermes startHermes()
+/// 同款时序；startHermes 可重入语义由循环内的 prewarm 等待实现）。
 pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
     let pp = st.pending_prompts.clone();
     let pr = st.pending_requests.clone();
     let rd = st.sidecar.ready.clone();
     let lr = st.sidecar.last_ready_epoch.clone();
-    let auto_prewarm = app.clone();
-    let wait_ready = st.sidecar.ready.clone();
     app.manage(st);
     let h = app.clone();
-    // 预热线程：等 sidecar ready 信封 → 自主预热引擎（与前端渲染并行）
-    tauri::async_runtime::spawn(async move {
-        // 最多等 60s（sidecar node 冷起 + 首条 ready 信封）
-        for _ in 0..80 {
-            if wait_ready.load(Ordering::Acquire) {
-                prewarm_inner(&auto_prewarm).await;
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-        }
-        eprintln!("[dsh_relay] auto prewarm skipped: sidecar not ready in 60s");
-    });
     tauri::async_runtime::spawn(async move {
         // 崩溃自愈退避：连续失败按 2^n 秒增长、封顶 30s。
         // Restart loop guard（对照 Hermes restart_loop_guard 语义）：固定窗口内
@@ -589,6 +577,21 @@ pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
                     rd.store(false, Ordering::Release); // 等 ready 信封再置位
                     let pid = c.id();
                     read_stdout(o, pp.clone(), pr.clone(), rd.clone(), lr.clone(), h.clone());
+                    // 自主预热引擎（hermes startHermes() 同款时序，且每轮 respawn
+                    // 都重新预热——startHermes 可重入语义）：等本轮 ready 信封
+                    // （sidecar node 冷起，最多 60s）→ prewarm 拉起引擎 runtime。
+                    // 预热失败只记日志（重启循环的 next 迭代会再次尝试）。
+                    for _ in 0..80 {
+                        if rd.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+                    }
+                    if rd.load(Ordering::Acquire) {
+                        prewarm_inner(&h).await;
+                    } else {
+                        eprintln!("[dsh_relay] auto prewarm skipped: sidecar not ready in 60s");
+                    }
                     match c.wait() {
                         Ok(status) => eprintln!("[dsh_relay] sidecar pid={pid} EXITED: {status:?} — respawning"),
                         Err(e) => eprintln!("[dsh_relay] sidecar pid={pid} wait error: {e} — respawning"),

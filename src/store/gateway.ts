@@ -148,11 +148,37 @@ export async function ensureGatewayReady(): Promise<boolean> {
 
 let reconnectAttempt = 0;
 let reconnectTimer: number | null = null;
+/** 重连首次失败时刻（升级提示计时用；成功重连清零。hermes RECONNECT_ESCALATE_AFTER_MS 语义） */
+let reconnectStartedAt = 0;
+
+/** 重连 5 分钟仍失败 → 一条非阻塞升级提示（hermes RECONNECT_ESCALATE_AFTER_MS=300_000）。
+ *  聊天保持可读可打字，后台静默重试。 */
+const RECONNECT_ESCALATE_AFTER_MS = 300_000;
+
+/** 引擎真探活（hermes liveness-policy 语义：5s 有界 ping 往返，不是 flag 读——
+ *  flag 无法发现"进程活着但 event loop 僵死"；RPC 往返超时即视为失联）。 */
+async function probeEngineLiveness(): Promise<boolean> {
+  try {
+    await invoke("get_active_model");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** 引擎失联（liveness 失败 / dsh_lost 事件）→ 退避重连；boot 已完成时
- *  不弹全屏（hermes"冷启动后永不复活全屏"闩锁语义），只更新状态点。 */
+ *  不弹全屏（hermes"冷启动后永不复活全屏"闩锁语义），只更新状态点；
+ *  5 分钟失败升级为一条非阻塞提示。 */
 function scheduleReconnect(reason: string): void {
   if (MOCK || reconnectTimer !== null) return;
+  if (reconnectStartedAt === 0) reconnectStartedAt = Date.now();
+  // 升级提示：每 5 分钟一条（不在 scheduleReconnect 里重复弹，靠此闸门）
+  const elapsed = Date.now() - reconnectStartedAt;
+  if (elapsed >= RECONNECT_ESCALATE_AFTER_MS && (reconnectAttempt % BOOT_RETRY_MAX_ATTEMPTS === 0)) {
+    import("@/lib/notify").then(({ notify }) => {
+      notify("与引擎断开较久", "正在后台重试重连，你可以继续浏览和草拟内容。");
+    }).catch(() => {});
+  }
   const attempt = reconnectAttempt++;
   const delay = reconnectBackoffDelayMs(attempt);
   applyDesktopBootProgress({
@@ -180,7 +206,7 @@ registerGatewayReconnect(async () => {
     let ok = false;
     const deadline = Date.now() + ENGINE_BOOT_WAIT_MS;
     while (Date.now() < deadline) {
-      if (await probeEngineReady()) {
+      if (await probeEngineLiveness()) {
         ok = true;
         break;
       }
@@ -190,22 +216,29 @@ registerGatewayReconnect(async () => {
     $gatewayState.set("open");
     $gatewayError.set(null);
     reconnectAttempt = 0;
+    reconnectStartedAt = 0;
     completeDesktopBoot("引擎已重连");
   } catch (err) {
     $gatewayState.set("error");
     $gatewayError.set(String(err));
-    // 有界自愈：连续 5 次失败升级为可见失败面（boot 重试门）
-    if (reconnectAttempt >= BOOT_RETRY_MAX_ATTEMPTS) {
-      failDesktopBoot(`重连失败：${String(err)}`);
-    }
     throw err;
   }
 });
 
-/** liveness 探测（composer 发送前/窗口聚焦时调用）：引擎不可达即触发重连。 */
+/** liveness 探测（composer 发送前/窗口聚焦时调用）：真 RPC 往返（hermes
+ *  liveness-policy：5s 有界 ping，flag 读发现不了"活着但僵死"的引擎）。
+ *  失联即触发退避重连。 */
 export async function ensureEngineAlive(): Promise<boolean> {
   if (MOCK) return true;
-  if (await probeEngineReady()) return true;
+  // 快路径：两层 flag 任一为 false → 直接失联（进程没了，无需 5s 往返）
+  if (!(await probeEngineReady())) {
+    $gatewayState.set("error");
+    $gatewayError.set("引擎无响应 — 正在重连");
+    scheduleReconnect("引擎无响应");
+    return false;
+  }
+  // 慢路径：flag 为 true 也要真往返（僵死检测）
+  if (await probeEngineLiveness()) return true;
   $gatewayState.set("error");
   $gatewayError.set("引擎无响应 — 正在重连");
   scheduleReconnect("引擎无响应");
