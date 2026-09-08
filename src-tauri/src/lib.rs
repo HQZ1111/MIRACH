@@ -1224,6 +1224,8 @@ pub fn run() {
             dsh_relay::dsh_rpc,
             dsh_relay::dsh_list_sessions,
             dsh_relay::dsh_sidecar_ready,
+            dsh_relay::dsh_engine_ready,
+            dsh_relay::dsh_prewarm,
             dsh_relay::toggle_main_maximize,
             open_url,
             write_user_file,

@@ -549,6 +549,18 @@ class RealClient implements MirachClient {
         }
       }
     };
+    // 引擎未就绪（启动门假阴性/断线）时 prewarm 后重试一次，而不是静默失败：
+    // 对齐 hermes liveness 语义——失败必须可见（message.error → 聊天区系统消息
+    // + 重试条 + busy 释放，handleMirachEvent 已有承接）。
+    const { ensureEngineAlive } = await import("@/store/gateway");
+    if (!(await ensureEngineAlive())) {
+      onEvent({
+        type: "message.error",
+        sessionId,
+        message: "引擎未就绪（正在自动重连，稍后重发即可）",
+      });
+      return;
+    }
     try {
       await invoke("send_prompt", { text, ch, provider, model });
     } catch (err) {

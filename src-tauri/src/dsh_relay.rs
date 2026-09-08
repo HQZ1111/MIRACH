@@ -23,6 +23,9 @@ use tauri::{Emitter, Manager, State};
 pub struct DshRelayState {
     pub stdin: Mutex<Option<ChildStdin>>,
     pub ready: Arc<AtomicBool>,
+    /// 引擎 runtime 就绪（prewarm/prompt 首次成功后置位；对齐 hermes
+    /// "后端 ready 才算连接"语义——sidecar 进程存活 ≠ 引擎可服务）。
+    pub engine_ready: Arc<AtomicBool>,
     /// 最近一次 ready 信封的 UNIX 秒（restart loop guard 判定"健康长跑"用；
     /// 每轮 spawn 前清零，只反映当前进程）
     pub last_ready_epoch: Arc<AtomicU64>,
@@ -321,6 +324,9 @@ pub async fn send_prompt(text: String, ch: tauri::ipc::Channel<Value>, provider:
         s.pending_prompts.lock().unwrap().remove(&id);
         return Err(e);
     }
+    // 首个成功下发的 prompt 意味着引擎 runtime 正在（或已经）服务：
+    // 置位引擎就绪（与 dsh_prewarm 等价；惰性启动路径的兜底标记）
+    s.sidecar.engine_ready.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -469,22 +475,92 @@ pub async fn dsh_list_sessions(s: State<'_, DshAppState>) -> Result<Value, Strin
     scmd_r(&s, &serde_json::json!({"type":"list_sessions","id":format!("lss-{}", uuid_v4())}), std::time::Duration::from_secs(10)).await
 }
 
-/// sidecar 是否就绪（前端启动时探测）。
+/// sidecar 是否就绪（进程级；前端启动门轮询用）。
 #[tauri::command]
 pub fn dsh_sidecar_ready(s: State<'_, DshAppState>) -> bool {
     s.sidecar.ready.load(Ordering::Acquire)
 }
 
+/// 引擎 runtime 是否就绪（对齐 hermes 三层就绪门的最内层）。
+/// sidecar ready ≠ 引擎 ready：runtime 由第一个 prompt / prewarm 惰性拉起
+/// （冷启动 ~30s），"已连接"假阳性即源于把进程存活当引擎就绪。
+/// 启动门必须探本命令；预热走 dsh_prewarm。
+#[tauri::command]
+pub fn dsh_engine_ready(s: State<'_, DshAppState>) -> bool {
+    s.sidecar.ready.load(Ordering::Acquire) && s.sidecar.engine_ready.load(Ordering::Acquire)
+}
+
+/// 预热引擎（启动即调用，对齐 hermes "启动即拉起后端"：冷启动在启动门内完成，
+/// 进主界面即可用，无"首条消息卡死"窗口）。超时按冷启动预算放宽（90s）。
+#[tauri::command]
+pub async fn dsh_prewarm(s: State<'_, DshAppState>) -> Result<Value, String> {
+    if !s.sidecar.ready.load(Ordering::Acquire) {
+        return Err("not ready".into());
+    }
+    let result = scmd_r(
+        &s,
+        &serde_json::json!({"type":"prewarm","id":format!("pw-{}", uuid_v4())}),
+        std::time::Duration::from_secs(90),
+    )
+    .await;
+    if result.is_ok() {
+        s.sidecar.engine_ready.store(true, Ordering::Release);
+        Ok(serde_json::json!({"engineReady": true}))
+    } else {
+        Err(result.err().unwrap_or_else(|| "prewarm failed".into()))
+    }
+}
+
+/// 内部预热（Rust setup 自主调用，对齐 hermes"createWindow 时立即拉起后端"）：
+/// 不经前端 invoke，sidecar ready 后即刻预热引擎；失败不重试（dsh_prewarm
+/// 与重启循环会兜底），engine_ready 置位后前端探测自然通过。
+async fn prewarm_inner(h: &tauri::AppHandle) {
+    let state: State<DshAppState> = h.state();
+    if !state.sidecar.ready.load(Ordering::Acquire) {
+        return;
+    }
+    let id = format!("pw-auto-{}", uuid_v4());
+    let result = scmd_r(
+        &state,
+        &serde_json::json!({"type":"prewarm","id":id}),
+        std::time::Duration::from_secs(90),
+    )
+    .await;
+    match result {
+        Ok(_) => {
+            state.sidecar.engine_ready.store(true, Ordering::Release);
+            eprintln!("[dsh_relay] engine prewarmed (auto) — engine_ready=true");
+        }
+        Err(e) => eprintln!("[dsh_relay] auto prewarm failed: {e} (前端 dsh_prewarm 可重试)"),
+    }
+}
+
 /// 在 setup 中启动 sidecar 并注册 stdout 读线程。
 /// sidecar 退出后自动重建（崩溃自愈）：重 spawn + 换 stdin + 起新读循环；
 /// ready 仅由 sidecar 的 ready 信封置位（避免"spawn 即 ready"竞态）。
+/// sidecar ready 后**自主预热引擎**（不等前端）：冷启动与前端渲染并行，
+/// 用户进主界面时引擎已就绪（hermes startHermes() 同款时序）。
 pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
     let pp = st.pending_prompts.clone();
     let pr = st.pending_requests.clone();
     let rd = st.sidecar.ready.clone();
     let lr = st.sidecar.last_ready_epoch.clone();
+    let auto_prewarm = app.clone();
+    let wait_ready = st.sidecar.ready.clone();
     app.manage(st);
     let h = app.clone();
+    // 预热线程：等 sidecar ready 信封 → 自主预热引擎（与前端渲染并行）
+    tauri::async_runtime::spawn(async move {
+        // 最多等 60s（sidecar node 冷起 + 首条 ready 信封）
+        for _ in 0..80 {
+            if wait_ready.load(Ordering::Acquire) {
+                prewarm_inner(&auto_prewarm).await;
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        }
+        eprintln!("[dsh_relay] auto prewarm skipped: sidecar not ready in 60s");
+    });
     tauri::async_runtime::spawn(async move {
         // 崩溃自愈退避：连续失败按 2^n 秒增长、封顶 30s。
         // Restart loop guard（对照 Hermes restart_loop_guard 语义）：固定窗口内
@@ -497,12 +573,14 @@ pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
         const THRESHOLD: usize = 5;
         const SUSPEND_COOLDOWN_SECS: u64 = 300;
         const HEALTHY_SECS: u64 = 60;
+        let er = h.state::<DshAppState>().sidecar.engine_ready.clone();
         let mut backoff_secs: u64 = 1;
         let mut crash_times: Vec<u64> = Vec::new();
         let mut suspended = false;
         loop {
             // 本轮进程的 ready 时刻从零计：上一进程的旧值不许污染健康判定
             lr.store(0, Ordering::Release);
+            er.store(false, Ordering::Release); // 引擎就绪同样随 sidecar 生命周期重置
             match spawn_sidecar() {
                 Ok((mut c, o, i)) => {
                     let s: State<DshAppState> = h.state();
