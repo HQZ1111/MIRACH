@@ -84,9 +84,9 @@
 ## 三、mirach 自有协议层（与官方无关）
 
 - Tauri ↔ sidecar：stdin/stdout JSONL（`ready/event/result/done/error` 信封，
-  `src-tauri/src/dsh_relay.rs`）
-- 旧 hermes 遗留通道：`relay.rs`（8787 `/v1/rpc`）、`relay_cron.rs`（8090
-  `/api/jobs`）——非 dsh 官方，升级 dsh 不影响
+  `src-tauri/src/dsh_relay.rs`）——唯一引擎通道
+- `relay.rs` 仅剩 `relay_probe`（供应商端点探测，与引擎无关）；`relay_cron.rs`
+  已删除（定时任务由 dsh 引擎侧 schedule 插件提供，send_prompt 语义）
 
 ## 四、升级回归清单（照做）
 

@@ -1,16 +1,28 @@
-# Mirach（奎木狼）— DSH 桌面版交接文档
+# Mirach — DSH 桌面版交接文档
 
-## 第二十三批：设置页接入官方 settings.section 槽位 + 样式适配层
+## 第二十四批：hermes 功能批量移植 + 官方工作区切换器 + 收敛 dsh 单核心
 
-- 设置侧栏动态读取 `ctx.slots.entries("settings.section")`——官方 5 个内置分区
-  （general/models/plugins/agent-presets/tavern-manager）+ 任何第三方插件注册的
-  分区自动出现在设置侧栏「官方 / 插件」分组下。
-- renderContent 优先匹配官方分区：走 `ctx.slots.renderSlot` 正确绑定 locale/inject
-  席位，失败回退直调组件；宿主容器补齐 DSW_ALIAS_VARS + CSS 适配层
-  （按钮/输入框/表格/字体对齐 mirach 视觉）。
-- 官方更新设置面板内容时重启自动对齐（slot 系统随版本更新）。
-- 修复 nativeTavernSection 的 getSlots 不存在 bug → 改用 entries API。
-- tsc 通过；sidecar 变更需重启应用。
+- **hermes 功能批量移植**（源 D:\hermes-agent-main，均做成 mirach 自有组件/插件）：
+  - 唤醒词插件（`plugins/plugin-wake-word.ts`，默认短语 "hey hermes"，Composer 唤醒按钮右键换短语，连续检测 one-shot 触发）
+  - 提示音系统插件（`plugins/plugin-sound-cues.ts`，WebAudio 合成 14 种完成音变体 + 思考音/唤醒音，顶栏触感开关 = 总静音）
+  - 语音对话补全（`lib/speech-text.ts` 句子切分 + `lib/voice-playback.ts` TTS 管线 + `lib/voice-stop-word.ts` 中文停止词；回复完自动朗读）
+  - 快捷键系统（`lib/keybinds/` + `hooks/useKeybinds.ts` + `store/keybinds.ts`，hermes combo/capture/conflicts 全套，设置页可改键）
+  - 抓取滚动（`hooks/useGrabScroll.ts`）+ 会话星图（`components/starmap/`，d3-force 力导渲染管线完整移植）
+  - 通知中心（`components/notifications.tsx` + `store/notifications.ts`，TopCenter/BottomRight 栈，替代旧 Toaster）
+  - 国产内嵌卡片（`components/chat/markdown/embeds/`：哔哩哔哩/网易云/高德/抖音/红果短剧 + 同意卡）
+  - HUD 悬浮窗（`components/hud/` + Tauri `hud_*` 命令：透明置顶小窗、拖动/八向缩放/点击穿透）
+  - 会话环境隔离（`lib/session-env.ts` `$sessionEnvIndex`：引擎 `envId::sessionId` 映射驱动，非客户端过滤）
+  - 主人格命名跟随环境（`store/agents.ts` ENV_PRIMARY_SEEDS：Mirach / Mirach chat / code / work / finance / write）
+- **侧栏工作区切换器替换为官方组件**：dsh ui-workspace 的 WorkspaceBrowser 整块
+  经 `sidebar.workspaces` 槽位渲染（列表/添加/重命名/删除/排序/视图选项），mirach
+  搜索/置顶/成员标签原样保留。
+- **收敛 dsh 单核心**：删除 `acp.rs`（hermes ACP 边车，从未激活）与 `relay_cron.rs`
+  （8090 /api/jobs，已被 dsh schedule 插件取代）；`relay.rs` 只留 `relay_probe`
+  （供应商端点探测，与引擎无关）；AppConfig 去掉 engineBase/apiBase/apiToken/hermesBin；
+  client.ts 移除 ping/submitPrompt(整段)/skills/cron/runCommand/getAuthStatus 等死面，
+  getModels 改走 sidecar catalog；命令面板引擎命令改道 nativeExecuteCommand
+  （dsh commands.execute）；快捷入口改走 submitPromptStream；会话转发改本地追加；
+  JobsOverlay 改 dsh_rpc 透传。`更新dsh核心.bat` 删除（引擎更新只有 npm alpha 通道）。
 
 ---
 
@@ -103,14 +115,26 @@ Tauri 壳（Rust）
 | 文件 | 说明 |
 |---|---|
 | `dsh-kernel/boot.ts` | 内核启动：加载官方 client 栈 + 酒馆 bundle + slots |
+| `dsh-kernel/sidebar-shell.tsx` | mirach 侧栏外壳（官方 WorkspaceBrowser 经 sidebar.workspaces 槽位渲染） |
+| `dsh-kernel/composer-extras.tsx` | Composer 附加件（听写/朗读/唤醒/模型选型，官方 input 槽位注入） |
 | `dsh-kernel/module-loader-shim.ts` | __ModuleLoader__ shim（收集 factory，PLATFORM 种子表） |
 | `dsh-kernel/adapter.ts` | sidecar adapter 本地副本（pi→MirachEvent 转换） |
 | `dsh-kernel/dsh-bridge.ts` | 内核事件桥（boundSid 会话绑定 + 后台簿记） |
+| `plugins/plugin-wake-word.ts` | 唤醒词插件（连续检测，one-shot 触发听写） |
+| `plugins/plugin-sound-cues.ts` | 提示音插件（WebAudio 合成，14 完成音变体 + 思考/唤醒音） |
+| `components/hud/` | HUD 悬浮窗（聚光灯外壳/拖动/缩放/点击穿透/线程聚焦） |
+| `components/starmap/` | 会话星图（d3-force 移植管线 + 时间轴 + 分享码） |
+| `components/notifications.tsx` | 通知中心（TopCenter/BottomRight 栈 + 桌面通知桥） |
+| `lib/keybinds/` + `hooks/useKeybinds.ts` + `store/keybinds.ts` | 快捷键系统（combo/capture/conflicts + 全局监听分发） |
+| `lib/session-env.ts` | 会话环境索引（引擎 envId::sessionId 映射驱动） |
+| `lib/voice-playback.ts` + `lib/speech-text.ts` + `lib/voice-stop-word.ts` | 语音朗读管线（句子切分 TTS + 中文停止词） |
+| `lib/voice-dictation.ts` | 语音听写（Web Speech API，IME 守卫） |
+| `components/chat/markdown/embeds/` | 国产内嵌卡片（bilibili/ncm/amap/douyin/hongguo + 同意卡） |
 | `store/chat-events.ts` | 统一事件处理器（sidecar/内核双管道共用，background 模式） |
 | `store/agent.ts` | busy 分桶（$busyMap 按会话，$agentBusy=computed 任一忙） |
 | `store/engine-session.ts` | bindEngineSession（set_env + load_session 两连） |
 | `store/environments.ts` | 环境分片（SEED_ENV_IDS 内置不可删） |
-| `store/agents.ts` | 智能体团队（按环境分片读写 + upsertTavernMember） |
+| `store/agents.ts` | 智能体团队（按环境分片读写 + ENV_PRIMARY_SEEDS 主人格 + upsertTavernMember） |
 | `store/groups.ts` | 群聊定义（participants + mode） |
 | `store/session-events.ts` | 原始事件日志（装配层底座） |
 | `components/layout/MainPanel.tsx` | 对话区主面板（消息列表/等待指示/文件更改/定位器） |
@@ -123,6 +147,7 @@ Tauri 壳（Rust）
 | `lib/tavern-characters.ts` | 内置角色库（22 角色 6 分类） |
 | `lib/paths.ts` | 用户主目录推导（tavern/记忆路径） |
 | `hooks/useStreamingReply.ts` | sidecar 管道消费（绑定→事件→handleMirachEvent） |
+| `hooks/useGrabScroll.ts` | 抓取滚动（hermes 原样移植） |
 
 ### sidecar（agent-sidecar/src/）
 | 文件 | 说明 |
@@ -138,9 +163,10 @@ Tauri 壳（Rust）
 ### Rust（src-tauri/src/）
 | 文件 | 说明 |
 |---|---|
-| `dsh_relay.rs` | sidecar 管理（spawn/重启循环防护/scmd_r/命令透传） |
-| `lib.rs` | 主入口（git/文件/浏览器/手机接入 web_host/fetch_text/read_file_bytes） |
-| `relay_cron.rs` | 定时任务（api_server /api/jobs CRUD 透传） |
+| `dsh_relay.rs` | sidecar 管理（spawn/重启循环防护/命令透传），唯一引擎通道 |
+| `lib.rs` | 主入口（配置/终端/git/文件/浏览器/手机接入 web_host/HUD/多窗口） |
+| `relay.rs` | 仅 `relay_probe`（供应商端点探测，与引擎无关） |
+| `sessions.rs` | 会话检索（FTS5 / 快照降级） |
 
 ---
 

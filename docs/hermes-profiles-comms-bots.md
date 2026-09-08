@@ -1,5 +1,8 @@
 # hermes 配置档案（Profile）/ 环境分离与通讯 · Bots 实现研究
 
+> ⚠️ **存档说明**：本文为外部代码库（D:\hermes-agent-main）的调研快照，
+> 仅供 mirach 演进参考；mirach 现状以 `HANDOVER.md` 与 `docs/official-internals-map.md` 为准。
+
 > 对 `D:\hermes-agent-main`（hermes desktop + Python 引擎）的深度调研，
 > 目标：弄清"配置档案/环境怎么隔离、怎么按档案分离通讯、bots 怎么实现"，
 > 作为 mirach 环境系统演进的参考。文件路径均为 hermes 仓库内相对路径。

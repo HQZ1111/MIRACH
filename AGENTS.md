@@ -1,4 +1,4 @@
-# AGENTS.md — mirach（原 my-hermes-rs） 工作规则（永远生效）
+# AGENTS.md — mirach 工作规则（永远生效）
 
 > 本文件为 ZCode agent 在本项目工作时的**永久规则**，每次会话自动加载，优先于临时上下文。
 
@@ -15,12 +15,13 @@
 - **tauri dev 前必须先清 1420 端口**（vite strictPort 冲突 → 白屏）：`netstat -ano | findstr :1420` 找 PID → `taskkill /PID <pid> /F`；TaskStop 停不掉 vite 子进程。
 - **findstr 搜中文匹配不可靠**（ANSI 码页）：用 PowerShell `Select-String` 或 Read 工具。
 - **cargo build 报 exe 被占用（os error 5）**：旧进程在跑 → `taskkill /PID <pid> /F`。
-- **ACP 边车别用 tokio::process**：std::process + 线程 + mpsc（见 acp.rs，避免 MutexGuard 跨 await 的 Send 问题）。
+- **引擎边车进程别用 tokio::process**：std::process + 线程 + mpsc（见 dsh_relay.rs，避免 MutexGuard 跨 await 的 Send 问题）。
 - **AppConfig 双端同步**：Rust `lib.rs` 与前端 `useAppConfig.ts` 字段必须一致。
 - **用户改动的文件可能被用户自行恢复覆盖**：编辑前先 Read 最新状态。
 
 ## 架构速览（详见 HANDOVER.md），G:\deepseek-harness-master\apps\mirach\docs里是已调研过的文档。
 
-- UI → Tauri Relay → 引擎四路：hermes-http(8787) / api_server(8090) / sessions.db(FTS5) / `hermes acp start`(stdio)。
-- 前端 `HermesClient`（Mock/Real），VITE_MOCK 切换；mock 合成日期/图片/文件供演示。
+- UI → Tauri（dsh_relay.rs）→ agent-sidecar（Node，stdio JSONL）→ npm 全局 dsh 引擎（`dsh --profile mirach`，sidecar 注入 `DSH_HOME=~/.mirach`）。单核心，无第二引擎通道。
+- `relay.rs` 仅剩 `relay_probe`（供应商端点探测，与引擎无关）；会话检索走 sessions.rs（FTS5）；定时任务走 dsh schedule 插件（send_prompt 语义）。
+- 前端 `src/lib/api/client.ts`（MirachClient：Mock/Real），VITE_MOCK 演示开关；mock 合成日期/图片/文件供演示。
 - 启动门：`StartupGate`（登录页 LoginPage / 连接动画 SplashGate）；provider 引导 `OnboardingOverlay` + `ProviderConnectPanel`（配置存 providerConfig.ts）。

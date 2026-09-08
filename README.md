@@ -1,4 +1,4 @@
-# Mirach（奎木狼） — 多 Agent 智能体系统
+# Mirach — 多 Agent 智能体系统
 
 > 多 Agent 协作 · 多工作环境 · 自进化 harness。一套**前后端一体**的 AI Agent 桌面应用：React 19 界面与交互 + Tauri(Rust) 通信中继 + agent-sidecar 桥接服务 + **dsh（DeepSeek Harness）引擎运行时**。
 
@@ -6,7 +6,7 @@
 
 ## 一、产品定位
 
-Mirach（奎木狼）是面向「多 Agent 协作工作流」的完整智能体系统，核心三件事：
+Mirach 是面向「多 Agent 协作工作流」的完整智能体系统，核心三件事：
 
 1. **多 Agent 协作**——主对话与成员会话、子代理（subagent）、用户提问闭环（ask_user_question）、工具调用与产物（deliverables）全链路呈现与编排；
 2. **多工作环境**——每个视图/项目对应独立引擎环境（按工作区 cwd 隔离的引擎 namespace、会话持久化分片、互不串扰），支持多工作区并行；
@@ -75,8 +75,9 @@ mirach/
 ├── src-tauri/                # Tauri 中继层(Rust)
 │   └── src/
 │       ├── lib.rs            # 命令注册表(前端 invoke 入口)
-│       ├── dsh_relay.rs      # sidecar 生命周期 / JSON-RPC 信封分派 / 事件转发
-│       └── relay_cron.rs     # 定时任务
+│       ├── dsh_relay.rs      # sidecar 生命周期 / JSON-RPC 信封分派 / 事件转发（唯一引擎通道）
+│       ├── relay.rs          # 供应商端点探测(relay_probe，与引擎无关)
+│       └── sessions.rs       # 会话检索(FTS5 / 快照降级)
 ├── agent-sidecar/            # 桥接服务(Node)
 │   └── src/
 │       ├── index.ts          # 命令循环 / 运行编排 / 崩溃自愈
@@ -112,6 +113,14 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 - [x] 看板 / 产物接真实数据；会话回放按回合合并
 - [x] 虚拟滚动 + delta 合帧 + 流式渲染优化（长会话流畅）
 - [x] 便携分享包（Gitee Release 分发）
-- [ ] 会话多标签页完善 / 可重绑定快捷键
-- [ ] 内嵌终端 / SSH / 自动更新
-- [ ] 更多引擎适配位（中继层已预留）
+- [x] 可重绑定快捷键（hermes combo/capture/conflicts 全套，设置页改键）
+- [x] 内嵌终端（portable-pty 多实例）
+- [x] 引擎一键更新（npm alpha 通道 + 版本检查）
+- [x] hermes 功能移植：唤醒词插件 / 提示音系统（14 完成音变体）/ 语音听写与朗读 / 抓取滚动 / 通知中心 / 会话星图 / HUD 悬浮窗 / 国产内嵌卡片（哔哩哔哩/网易云/高德/抖音/红果）
+- [x] 侧栏工作区切换器 = 官方 dsh WorkspaceBrowser（槽位渲染，随官方更新）
+- [ ] SSH 远程 / 应用自更新（Tauri updater）
+- [ ] 引擎任务面板真实数据（待引擎暴露 jobs.list RPC）
+
+## 七、同步到新机器
+
+见 `docs/sync-procedure.md`（四层结构 + 首装/日常同步步骤；**不能直接复制文件夹**）。

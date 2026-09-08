@@ -1,5 +1,10 @@
 # mirach 环境主人格移植方案（参考 hermes Profile/Bots 架构）
 
+> **状态（2026-09）：阶段 1 已落地** —— `store/agents.ts` ENV_PRIMARY_SEEDS
+> 每环境种子主人格（primary: true），命名跟随环境：Mirach / Mirach chat /
+> Mirach code / Mirach work / Mirach finance / Mirach write；姓名迁移表
+> PRIMARY_NAME_MIGRATIONS 兼容旧命名。阶段 2/3 仍为计划。
+
 > 目标：把 hermes 的 Profile/Bots 架构映射到 mirach 的 6 个环境
 > （main 主环境 + chat/code/work/finance/write），做到：
 > ① 每个环境有一个**主人格**（该环境的常驻主 agent）；
