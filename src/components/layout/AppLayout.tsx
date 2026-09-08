@@ -298,8 +298,8 @@ export function AppLayout() {
   }, [showRight]);
 
   // ---- 引擎网关探活 / 故障浮层（真实模式；mock 恒 open 不触发） ----
-  // 首启不再引导填地址：直接用默认引擎地址（config engineBase，默认 http://127.0.0.1:8787）
-  // 探活，不通走 BootFailure（重试 / 去设置连接）。打包后的安装位置等由系统安装器负责。
+  // 探活对象 = dsh sidecar（dsh_sidecar_ready），不通走 BootFailure
+  // （重试 / 去设置连接）。打包后的安装位置等由系统安装器负责。
   // 启动首探给 30s 宽限（sidecar 冷启动）：期间保持 connecting（缓冲页），
   // 宽限耗尽才进 error——避免引擎还在启动就直进主页面/弹故障。
   const gatewayState = useStore($gatewayState);
@@ -937,12 +937,12 @@ export function AppLayout() {
     add("panel.review", "审查", "右侧面板", () => openPanel("review"), { keywords: "review git diff" });
     add("panel.browser", "浏览器", "右侧面板", () => openPanel("browser"), { keywords: "webview 网页" });
 
-    // 引擎斜杠命令（真实模式 POST /v1/commands；输出追加到聊天区）
+    // 引擎斜杠命令（dsh 官方 commands.execute，sidecar 透传；会话 id 前端→dsh 映射）
     const engineCmd = (cmd: string) => () => {
       void getApi()
-        .runCommand(SESSION_ID, cmd)
-        .then((r) => {
-          appendSystemMessage(r.accepted ? `⚡ /${cmd} → ${r.output}` : `/${cmd} 未接受：${r.output}`);
+        .nativeExecuteCommand(SESSION_ID, `/${cmd}`)
+        .then((ok) => {
+          appendSystemMessage(ok ? `⚡ /${cmd} 已执行（输出见会话流）` : `/${cmd} 执行失败`);
         })
         .catch((e: unknown) => {
           appendSystemMessage(`/${cmd} 执行失败：${String(e)}`);

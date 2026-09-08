@@ -120,7 +120,7 @@ const ADD_ITEMS: AddItem[] = [
 // 模型目录（模拟 gateway model.options 返回，按供应商分组）
 // ================================================================
 
-// 真实模型列表 → 按供应商分组（relay_models 返回的 ModelOption[]）
+// 真实模型列表 → 按供应商分组（sidecar catalog 返回的 ModelOption[]）
 // provider 名归一：sidecar catalog 的 id（deepseek 小写）与内置表（DeepSeek）
 // 曾分裂成两组"多余 deepseek"——统一映射显示名后再分组
 const PROVIDER_DISPLAY: Record<string, string> = {
@@ -912,7 +912,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     if (import.meta.env.VITE_KERNEL === "1") void kernelStop();
     // 有排队消息时停车，防止 auto-drain 立即发送
     if ($queueState.get().items.length > 0) parkQueuedPrompts();
-    // 注：引擎侧中止（acp_stop）无现成调用，前端先收尾；后续补 Rust 命令
+    // 注：引擎侧中止走 abort_prompt（dsh_relay），前端同步收尾
   };
 
   // ---- 语音听写：Web Speech API 实时转写（浏览器不支持时回退模拟） ----

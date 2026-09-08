@@ -3,31 +3,23 @@
  *
  * 两种实现：
  * - MockClient（VITE_MOCK=1，默认）：本地演示数据，不发起任何网络请求
- * - RealClient（VITE_MOCK=0）：经 Tauri Relay（relay.rs）转发到引擎，
- *   引擎地址为 lib.rs 配置的 engine_base（默认 http://127.0.0.1:8787，
- *   即 constants.ts 的 API_BASE 预留端口）
+ * - RealClient（VITE_MOCK=0）：经 Tauri sidecar 中继（dsh_relay.rs）与
+ *   dsh 引擎通信（send_prompt / dsh_rpc 等 stdin JSONL 通道）
  *
  * 通过 getApi()（adapter.ts）获取单例；接真实后端时前端各 store
- * 改为调用本客户端并消费事件（映射表见 docs/api-contract.md）。
+ * 改为调用本客户端并消费事件。
  */
 
 import type {
-  AcpStatus,
-  AuthStatus,
-  CommandResult,
-  CronJob,
   MirachEvent,
   ModelOption,
   SessionHistoryMessage,
   SessionHit,
   SessionSummary,
-  SkillSummary,
 } from "./types";
 
 export interface MirachClient {
   readonly mode: "mock" | "real";
-  /** 探活：引擎是否可达（网关状态点用） */
-  ping(): Promise<boolean>;
   listSessions(): Promise<SessionSummary[]>;
   createSession(): Promise<SessionSummary>;
   /** 会话全文搜索（真实模式走 sessions.db FTS5） */
@@ -38,7 +30,6 @@ export interface MirachClient {
   renameSession(sessionId: string, title: string): Promise<void>;
   /** 删除会话（真实模式删引擎 sessions.db + 快照） */
   deleteSession(sessionId: string): Promise<void>;
-  submitPrompt(sessionId: string, text: string): Promise<void>;
   /** 流式提交：事件经 onEvent 逐条回调（message.delta / message.complete / message.error …）；
    *  options.reasoningEffort 随请求下发（低/中/高，对齐引擎 reasoning_effort） */
   submitPromptStream(
@@ -50,30 +41,8 @@ export interface MirachClient {
   getModels(): Promise<ModelOption[]>;
   /** dsh 引擎模型目录（sidecar catalog：内置 deepseek + 设置页配置的提供商） */
   getDSHModels(): Promise<ModelOption[]>;
-  listSkills(): Promise<SkillSummary[]>;
-  /** 技能正文（详情区预览；真实模式走 RPC skills.get） */
-  getSkill(name: string): Promise<{ name: string; category?: string; description?: string; content: string } | null>;
-  /** 删除/归档技能（真实模式走 RPC skills.delete；受保护技能由引擎拒绝） */
-  deleteSkill(name: string): Promise<boolean>;
-  /** 任务列表（真实模式接 api_server /api/jobs；引擎不可达时抛错） */
-  listCronJobs(): Promise<CronJob[]>;
-  /** cron 操作（真实模式写 api_server；mock 为无操作，本地状态由 store 维护） */
-  createCron(payload: Record<string, unknown>): Promise<void>;
-  updateCron(id: string, payload: Record<string, unknown>): Promise<void>;
-  deleteCron(id: string): Promise<void>;
-  pauseCron(id: string): Promise<void>;
-  resumeCron(id: string): Promise<void>;
-  runCron(id: string): Promise<void>;
-  /** 执行引擎斜杠命令（/usage /stop /queue …；真实模式 POST /v1/commands） */
-  runCommand(sessionId: string, command: string): Promise<CommandResult>;
-  /** ACP 边车可用性（thinking/tool 流式；真实模式探测并启动） */
-  acpAvailable(): Promise<AcpStatus>;
-  /** 强制刷新 ACP 探测缓存（连接设置保存后调用） */
-  acpRefresh(): void;
-  /** ACP 转向（/steer，运行中真打断注入纠偏） */
+  /** 转向纠偏（steer_prompt，运行中真打断注入纠偏） */
   steer(guidance: string): Promise<void>;
-  /** 引擎认证状态（GET /auth/status；引擎不可达返回 null） */
-  getAuthStatus(): Promise<AuthStatus | null>;
   /** 消息反馈上报（dsh messageFeedback.put；messageId 用引擎 assistant 消息 id） */
   sendMessageFeedback(messageId: string, rating: "positive" | "negative"): Promise<boolean>;
   /** 社区插件清单（dsh-plugins 目录扫描 + 激活状态） */
@@ -156,10 +125,6 @@ class MockClient implements MirachClient {
     return [];
   }
 
-  async ping(): Promise<boolean> {
-    return true;
-  }
-
   async listSessions(): Promise<SessionSummary[]> {
     return [
       { id: "s1", title: "前端架构重构方案", createdAt: Date.now() - 3600_000, updatedAt: Date.now() },
@@ -198,11 +163,6 @@ class MockClient implements MirachClient {
     /* mock：无操作 */
   }
 
-  async submitPrompt(_sessionId: string, _text: string): Promise<void> {
-    /* mock：非流式提交无订阅者可演示，静默（旧实现广播孤儿 delta 且无
-       complete 收尾，一旦有订阅方会把 $aiStreaming 永久卡在 true） */
-  }
-
   async submitPromptStream(
     _sessionId: string,
     _text: string,
@@ -236,77 +196,8 @@ class MockClient implements MirachClient {
     return this.getModels();
   }
 
-  async listSkills(): Promise<SkillSummary[]> {
-    return [
-      { id: "terminal", name: "终端执行", enabled: true, usage: 24 },
-      { id: "file-edit", name: "文件编辑", enabled: true, usage: 18 },
-      { id: "web-search", name: "网页搜索", enabled: false, usage: 6 },
-    ];
-  }
-
-  async getSkill(_name: string): Promise<{ name: string; category?: string; description?: string; content: string } | null> {
-    return { name: _name, category: "coding", description: "（mock）技能演示正文。", content: `# ${_name}\n\n（mock 内容）接入引擎后这里返回 SKILL.md 全文。` };
-  }
-
-  async deleteSkill(_name: string): Promise<boolean> {
-    return true; // mock：本地过滤即可
-  }
-
-  async listCronJobs(): Promise<CronJob[]> {
-    return [
-      { id: "c1", name: "每日报告", schedule: "0 9 * * *", enabled: true, lastRunAt: Date.now() - 86400_000, nextRunAt: Date.now() + 3600_000 },
-    ];
-  }
-
-  async createCron(_payload: Record<string, unknown>): Promise<void> {
-    /* mock：由 store 本地维护 */
-  }
-
-  async updateCron(_id: string, _payload: Record<string, unknown>): Promise<void> {
-    /* mock */
-  }
-
-  async deleteCron(_id: string): Promise<void> {
-    /* mock */
-  }
-
-  async pauseCron(_id: string): Promise<void> {
-    /* mock */
-  }
-
-  async resumeCron(_id: string): Promise<void> {
-    /* mock */
-  }
-
-  async runCron(_id: string): Promise<void> {
-    /* mock */
-  }
-
-  async runCommand(_sessionId: string, command: string): Promise<CommandResult> {
-    const cmd = command.startsWith("/") ? command : `/${command}`;
-    return { accepted: true, output: `（mock）已执行 ${cmd}，接入引擎后这里会返回真实输出。` };
-  }
-
-  async acpAvailable(): Promise<AcpStatus> {
-    return { available: true, reason: null, version: "0.22.0 (mock)" };
-  }
-
-  acpRefresh(): void {
-    /* mock：无缓存 */
-  }
-
   async steer(_guidance: string): Promise<void> {
     /* mock：无操作 */
-  }
-
-  async getAuthStatus(): Promise<AuthStatus | null> {
-    return {
-      status: "ok",
-      mode: "bearer",
-      configured: true,
-      authenticated: true,
-      identity: "demo@mirach.local",
-    };
   }
 
   async sendMessageFeedback(_messageId: string, _rating: "positive" | "negative"): Promise<boolean> {
@@ -364,83 +255,19 @@ class MockClient implements MirachClient {
 }
 
 // ================================================================
-// 真实实现（VITE_MOCK=0：经 Tauri Relay → 引擎）
-// 前端不直接请求引擎，而是走 Rust 侧 relay 命令（relay.rs），
-// 保持 UI → Relay → 引擎 三层架构；换引擎只改 Relay 适配端。
+// 真实实现（VITE_MOCK=0：经 Tauri sidecar 中继 → dsh 引擎）
+// 前端不直接请求引擎，而是走 Rust 侧命令（dsh_relay.rs），
+// 保持 UI → 中继 → 引擎 三层架构。
 // ================================================================
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 class RealClient implements MirachClient {
   readonly mode = "real" as const;
   private listeners = new Set<(e: MirachEvent) => void>();
-  private unlisten: (() => void) | null = null;
-  /** Tauri listen 注册中标记：resolve 前的并发订阅不得重复发起 listen */
-  private unlistenPromise: Promise<unknown> | null = null;
-  /** ACP 可用性缓存（探测一次；不可用时自动降级 8787 整段） */
-  private acpCache: AcpStatus | null = null;
-  /** ACP 探测时间戳：缓存 TTL 10s，避免 ACP 边车后续启动后前端永久拿着失败结果 */
-  private acpCachedAt = 0;
-  private static readonly ACP_TTL = 10_000;
 
-  /** 强制刷新 ACP 探测（连接设置保存后调用，丢旧缓存） */
-  acpRefresh(): void {
-    this.acpCache = null;
-    this.acpCachedAt = 0;
-  }
-
-  async ping(): Promise<boolean> {
-    try {
-      const st = await invoke<{ ok: boolean }>("relay_ping");
-      return st.ok === true;
-    } catch {
-      return false;
-    }
-  }
-
-  async acpAvailable(): Promise<AcpStatus> {
-    if (this.acpCache && Date.now() - this.acpCachedAt < RealClient.ACP_TTL) return this.acpCache;
-    try {
-      const st = await invoke<AcpStatus>("acp_status");
-      this.acpCache = st;
-      this.acpCachedAt = Date.now();
-      return st;
-    } catch {
-      this.acpCache = { available: false, reason: "ACP 调用失败" };
-      this.acpCachedAt = Date.now();
-      return this.acpCache;
-    }
-  }
-
-  async steer(guidance: string): Promise<void> {
-    // dsh 引擎转向（steer_prompt → sidecar → 运行时插话纠偏）
-    if (!guidance.trim()) return;
-    try {
-      await invoke("steer_prompt", { text: guidance });
-    } catch {
-      /* 引擎不可达忽略 */
-    }
-  }
-
-  // 引擎会话列表：ACP 优先（真实会话），不可用降级直读 sessions.db
+  // 引擎会话列表：直读 sessions.db（sessions_list）
   async listSessions(): Promise<SessionSummary[]> {
-    const st = await this.acpAvailable();
-    if (st.available) {
-      try {
-        const raw = await invoke<unknown>("acp_sessions_list");
-        const list = ((raw as { sessions?: unknown[] } | null)?.sessions ?? []) as Record<string, unknown>[];
-        const mapped = list.map((o) => ({
-          id: String(o.sessionId ?? o.session_id ?? ""),
-          title: String(o.title ?? "未命名会话"),
-          createdAt: typeof o.createdAt === "string" ? Date.parse(o.createdAt) || 0 : 0,
-          updatedAt: typeof o.updatedAt === "string" ? Date.parse(o.updatedAt) || 0 : 0,
-        }));
-        if (mapped.length > 0) return mapped;
-      } catch {
-        /* 落到本地 sessions.db */
-      }
-    }
     try {
       const raw = await invoke<unknown>("sessions_list");
       const list = Array.isArray(raw) ? raw : [];
@@ -488,8 +315,14 @@ class RealClient implements MirachClient {
     return { id, title: "新会话", createdAt: Date.now(), updatedAt: Date.now() };
   }
 
-  async submitPrompt(sessionId: string, text: string): Promise<void> {
-    await invoke("relay_submit", { sessionId, text, model: null, reasoningEffort: null });
+  async steer(guidance: string): Promise<void> {
+    // dsh 引擎转向（steer_prompt → sidecar → 运行时插话纠偏）
+    if (!guidance.trim()) return;
+    try {
+      await invoke("steer_prompt", { text: guidance });
+    } catch {
+      /* 引擎不可达忽略 */
+    }
   }
 
   async submitPromptStream(
@@ -723,22 +556,9 @@ class RealClient implements MirachClient {
     }
   }
 
+  /** 模型目录（dsh 单核心：sidecar catalog = 内置 deepseek + 设置页配置的提供商） */
   async getModels(): Promise<ModelOption[]> {
-    try {
-      const raw = await invoke<unknown>("relay_models");
-      // 兼容 {data:[...]}（OpenAI 风格）与裸数组两种返回
-      const list = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] })?.data ?? []);
-      return list.map((m) => {
-        const o = m as Record<string, unknown>;
-        return {
-          id: String(o.id ?? ""),
-          provider: String(o.provider ?? o.owned_by ?? "engine"),
-          label: String(o.label ?? o.name ?? o.id ?? ""),
-        };
-      });
-    } catch {
-      return [];
-    }
+    return this.getDSHModels();
   }
 
   /** dsh 引擎模型目录（sidecar catalog()：内置 deepseek + 设置页配置的提供商） */
@@ -792,99 +612,6 @@ class RealClient implements MirachClient {
   async uninstallCommunityPlugin(name: string): Promise<string[]> {
     const raw = await invoke<unknown>("dsh_rpc", { method: "plugins.uninstall", params: { name } });
     return ((raw as { logs?: string[] } | null)?.logs ?? []).map(String);
-  }
-
-  // 技能目录：引擎 RPC skills.list（~/.hermes/skills 递归扫描 + usage 记录）；不可达时返回空
-  async listSkills(): Promise<SkillSummary[]> {
-    try {
-      const raw = await invoke<unknown>("relay_rpc", { method: "skills.list", params: null });
-      const skills = ((raw as { result?: { skills?: unknown[] } } | null)?.result?.skills) ?? [];
-      return skills.map((s) => {
-        const o = s as Record<string, unknown>;
-        const name = String(o.name ?? "");
-        return {
-          id: name,
-          name: String(o.name ?? ""),
-          category: o.category ? String(o.category) : undefined,
-          description: o.description ? String(o.description) : undefined,
-          enabled: String(o.state ?? "active") !== "archived",
-          usage: typeof o.usage === "number" ? o.usage : 0,
-          state: o.state ? String(o.state) : "active",
-          agentCreated: Boolean(o.agent_created),
-        };
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  async getSkill(name: string): Promise<{ name: string; category?: string; description?: string; content: string } | null> {
-    try {
-      const raw = await invoke<unknown>("relay_rpc", { method: "skills.get", params: { name } });
-      const res = (raw as { result?: Record<string, unknown> } | null)?.result;
-      if (!res || typeof res.name !== "string") return null;
-      return {
-        name: String(res.name),
-        category: res.category ? String(res.category) : undefined,
-        description: res.description ? String(res.description) : undefined,
-        content: String(res.content ?? ""),
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  async deleteSkill(name: string): Promise<boolean> {
-    try {
-      const raw = await invoke<unknown>("relay_rpc", { method: "skills.delete", params: { name } });
-      return Boolean((raw as { result?: { deleted?: unknown } } | null)?.result?.deleted);
-    } catch {
-      return false;
-    }
-  }
-
-  // api_server /api/jobs：引擎不可达（网络/认证失败）时抛错，调用方降级
-  async listCronJobs(): Promise<CronJob[]> {
-    const raw = await invoke<unknown>("relay_cron_list");
-    const jobs = ((raw as { jobs?: unknown[] } | null)?.jobs ?? []) as CronJob[];
-    return jobs;
-  }
-
-  async createCron(payload: Record<string, unknown>): Promise<void> {
-    await invoke("relay_cron_create", { payload });
-  }
-
-  async updateCron(id: string, payload: Record<string, unknown>): Promise<void> {
-    await invoke("relay_cron_update", { jobId: id, payload });
-  }
-
-  async deleteCron(id: string): Promise<void> {
-    await invoke("relay_cron_delete", { jobId: id });
-  }
-
-  async pauseCron(id: string): Promise<void> {
-    await invoke("relay_cron_pause", { jobId: id });
-  }
-
-  async resumeCron(id: string): Promise<void> {
-    await invoke("relay_cron_resume", { jobId: id });
-  }
-
-  async runCron(id: string): Promise<void> {
-    await invoke("relay_cron_run", { jobId: id });
-  }
-
-  async runCommand(sessionId: string, command: string): Promise<CommandResult> {
-    return invoke<CommandResult>("relay_command", { sessionId, command });
-  }
-
-  async getAuthStatus(): Promise<AuthStatus | null> {
-    try {
-      const st = await invoke<AuthStatus>("relay_auth_status");
-      return st.reachable === false ? null : st;
-    } catch {
-      return null;
-    }
   }
 
   /** 消息反馈上报（dsh messageFeedback.put，sidecar 通用 rpc 透传；
@@ -985,22 +712,9 @@ class RealClient implements MirachClient {
   }
 
   subscribe(onEvent: (e: MirachEvent) => void): () => void {
+    // dsh 通道的回复经 submitPromptStream 的 onEvent 回调逐条送达，
+    // 这里保留订阅口（供上层统一挂事件处理器）；当前无服务端推送事件源。
     this.listeners.add(onEvent);
-    if (!this.unlisten && !this.unlistenPromise) {
-      // Relay 回复事件（Rust 侧 emit("relay:reply")）→ 统一 MirachEvent 流。
-      // unlistenPromise 防竞态：resolve 前的并发订阅不得重复发起 Tauri listen
-      this.unlistenPromise = listen<{ session_id: string; reply: string }>("relay:reply", (e) => {
-        const ev: MirachEvent = {
-          type: "relay.reply",
-          sessionId: e.payload.session_id,
-          reply: e.payload.reply,
-        };
-        this.listeners.forEach((l) => l(ev));
-      }).then((u) => {
-        this.unlisten = u;
-        return u;
-      });
-    }
     return () => this.listeners.delete(onEvent);
   }
 }

@@ -1,9 +1,9 @@
 /**
  * chat - 实时聊天消息 store（VITE_MOCK=0 时使用）
  *
- * 用户消息由 Composer 发送时写入；AI 回复由 relay:reply 事件写入。
+ * 用户消息由 Composer 发送时写入；AI 回复由 submitPromptStream 的事件写入。
  * mock 模式按会话隔离，走 session-chat store（本 store 不被使用）。
- * 会话 id 暂用固定 "main"（hermes-http 按 session_id 隐式建会话）。
+ * 会话 id 暂用固定 "main"（dsh 引擎按会话环境映射）。
  */
 
 import { atom } from "nanostores";

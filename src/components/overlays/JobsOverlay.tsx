@@ -86,7 +86,7 @@ export function JobsOverlay({ onClose }: { onClose: () => void }) {
               <p className="text-xs font-medium text-[#303030]">引擎未暴露 jobs RPC</p>
               <p className="max-w-[420px] text-[11px] leading-relaxed text-muted-foreground">
                 当前引擎没有 jobs.list 方法（官方 checkout 未内置通用远端分发）。
-                使用带 mirach-patches 分支的 vendored 引擎后，此面板会自动显示真实的引擎后台任务。
+                引擎侧提供该 RPC 后，此面板会自动显示真实的引擎后台任务。
               </p>
             </div>
           ) : jobs.length === 0 ? (

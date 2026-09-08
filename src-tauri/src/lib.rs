@@ -5,14 +5,12 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
-mod acp;
 mod dsh_relay;
 mod relay;
-mod relay_cron;
 mod sessions;
 
 // ================================================================
-// 应用配置（工作目录 / Hermes 文件夹 / 浏览器首页 / 引擎地址）
+// 应用配置（工作目录 / Hermes 文件夹 / 浏览器首页）
 // 解析顺序：环境变量 → %APPDATA%\my-hermes-rs\config.json → 内置默认值
 // ================================================================
 
@@ -24,14 +22,6 @@ struct AppConfig {
     hermes_home: String,
     /// 浏览器默认首页
     browser_home: String,
-    /// Agent 引擎地址（Relay 转发目标，见 relay.rs）
-    engine_base: String,
-    /// 平台 api_server 基址（8090，cron /api/jobs 等）
-    api_base: String,
-    /// api_server Bearer token（API_SERVER_KEY；可选）
-    api_token: String,
-    /// hermes CLI 可执行文件路径（ACP 边车用；留空 = 走 PATH）
-    hermes_bin: String,
     /// 应用数据目录（%APPDATA%\my-hermes-rs，日志/配置存放处）
     data_dir: String,
     /// 核心 web 面监听地址（127.0.0.1 = 仅本机；0.0.0.0 = 局域网手机可访问）
@@ -68,10 +58,6 @@ fn load_config() -> AppConfig {
         workspace: get("workspace", "MIRACH_WORKSPACE", "D:\\hermes-agent-main"),
         hermes_home: get("mirachHome", "MIRACH_HOME", "C:\\Users\\Administrator\\Hermes"),
         browser_home: get("browserHome", "HERMES_BROWSER_HOME", "https://www.bing.com"),
-        engine_base: get("engineBase", "HERMES_ENGINE", "http://127.0.0.1:8787"),
-        api_base: get("apiBase", "HERMES_API_BASE", "http://127.0.0.1:8090"),
-        api_token: get("apiToken", "HERMES_API_TOKEN", ""),
-        hermes_bin: get("hermesBin", "HERMES_BIN", ""),
         data_dir: app_config_dir().to_string_lossy().to_string(),
         web_host: get("webHost", "MIRACH_WEB_HOST", "127.0.0.1"),
     }
@@ -377,16 +363,12 @@ fn check_git_workspace() -> GitStatus {
 }
 
 /// 运行时更新配置（写入 %APPDATA%\my-hermes-rs\config.json，局部合并）
-/// 用于 UI 里切换工作区 / 引擎地址等；环境变量优先级更高，会覆盖文件值。
+/// 用于 UI 里切换工作区等；环境变量优先级更高，会覆盖文件值。
 #[tauri::command]
 fn set_config(
     workspace: Option<String>,
     hermes_home: Option<String>,
     browser_home: Option<String>,
-    engine_base: Option<String>,
-    api_base: Option<String>,
-    api_token: Option<String>,
-    hermes_bin: Option<String>,
     web_host: Option<String>,
 ) -> Result<(), String> {
     let dir = app_config_dir();
@@ -409,18 +391,6 @@ fn set_config(
     }
     if let Some(v) = browser_home {
         obj.insert("browserHome".into(), serde_json::Value::String(v));
-    }
-    if let Some(v) = engine_base {
-        obj.insert("engineBase".into(), serde_json::Value::String(v));
-    }
-    if let Some(v) = api_base {
-        obj.insert("apiBase".into(), serde_json::Value::String(v));
-    }
-    if let Some(v) = api_token {
-        obj.insert("apiToken".into(), serde_json::Value::String(v));
-    }
-    if let Some(v) = hermes_bin {
-        obj.insert("hermesBin".into(), serde_json::Value::String(v));
     }
     if let Some(v) = web_host {
         obj.insert("webHost".into(), serde_json::Value::String(v));
@@ -1188,35 +1158,12 @@ pub fn run() {
             Ok(())
         })
         .manage(TerminalState(Mutex::new(HashMap::new())))
-        .manage(acp::AcpState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             get_config,
             set_config,
             reset_config,
-            relay::relay_ping,
-            relay::relay_submit,
-            relay::relay_stream_submit,
-            relay::relay_models,
-            relay::relay_rpc,
-            relay::relay_command,
-            relay::relay_auth_status,
             relay::relay_probe,
-            relay_cron::relay_cron_ping,
-            relay_cron::relay_cron_list,
-            relay_cron::relay_cron_create,
-            relay_cron::relay_cron_update,
-            relay_cron::relay_cron_delete,
-            relay_cron::relay_cron_pause,
-            relay_cron::relay_cron_resume,
-            relay_cron::relay_cron_run,
-            acp::acp_status,
-            acp::acp_request,
-            acp::acp_submit,
-            acp::acp_sessions_list,
-            acp::acp_steer,
-            acp::acp_cancel,
-            acp::acp_stop_cmd,
             open_terminal,
             terminal_write,
             terminal_resize,
@@ -1295,11 +1242,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
-            // 退出时清理 ACP 子进程 + dsh sidecar 进程树（node/dsh runtime 会残留）
+            // 退出时清理 dsh sidecar 进程树（node/dsh runtime 会残留）
             if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<acp::AcpState>() {
-                    acp::acp_stop(state.inner());
-                }
                 if app.try_state::<dsh_relay::DshAppState>().is_some() {
                     dsh_relay::shutdown_sidecar(app);
                 }

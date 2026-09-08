@@ -3,9 +3,8 @@
  *
  * 数据源：引擎 ctx.jobs（LocalJobRegistry，kind=bash/subagent/…）。
  * 面板只读，对齐官方 ui-jobs 语义（启停由引擎工具自身负责，面板不操作）。
- * RPC：jobs.list 经 sidecar 通用 rpc 透传到运行时——vendored 引擎
- * （mirach-patches 分支）的通用远端分发可直连；官方 checkout 未暴露该方法，
- * 调用失败即 available=false（面板给出说明，不灌假数据）。
+ * RPC：jobs.list 经 sidecar 通用 rpc 透传（dsh_rpc）到运行时——官方 checkout
+ * 未暴露该方法，调用失败即 available=false（面板给出说明，不灌假数据）。
  */
 
 import { atom } from "nanostores";
@@ -77,8 +76,8 @@ export async function loadEngineJobs(): Promise<boolean> {
   }
   $jobsLoading.set(true);
   try {
-    const raw = await invoke<unknown>("relay_rpc", { method: "jobs.list", params: null });
-    // sidecar rpc 信封：{result: <payload>}；payload 可能是数组或 {jobs: [...]}
+    const raw = await invoke<unknown>("dsh_rpc", { method: "jobs.list", params: null });
+    // rpc 返回：payload 可能是数组或 {jobs: [...]}
     const payload = (raw as { result?: unknown } | null)?.result ?? raw;
     const list = Array.isArray(payload)
       ? payload

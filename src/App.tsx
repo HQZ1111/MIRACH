@@ -7,11 +7,11 @@ import { AppLayout } from "@/components/layout";
 import { KernelMirrorHost } from "@/components/layout/KernelMirrorHost";
 import { MOCK } from "@/lib/mock";
 import { getApi } from "@/lib/api";
-import { appendAiMessage, appendSystemMessage, appendUserMessage, SESSION_ID } from "@/store/chat";
+import { appendSystemMessage, appendUserMessage, SESSION_ID } from "@/store/chat";
 import { initLogger } from "@/lib/logger";
 import { initUiSettings } from "@/store/ui-settings";
 import { initConversationWidthAutoscale } from "@/lib/conversation-width";
-import { ensureNotifyPermission, notify } from "@/lib/notify";
+import { notify } from "@/lib/notify";
 import { initWindowState, initQuitGuard } from "@/lib/windowState";
 import { $bgState, type BackgroundProcess } from "@/store/background-processes";
 import { openSessionWindow } from "@/lib/sessionWindow";
@@ -20,30 +20,6 @@ import { ResizeHandles } from "@/components/window/ResizeHandles";
 import "@/plugins/samples/hello";
 import "@/plugins/plugin-wake-word";
 import "@/plugins/plugin-sound-cues";
-
-/**
- * RelayBridge — 订阅引擎事件流（仅 VITE_MOCK=0）：
- * relay:reply（引擎整段回复）→ 追加到实时聊天 store + 桌面通知
- */
-function RelayBridge() {
-  useEffect(() => {
-    if (MOCK) return;
-    const api = getApi();
-    let notified = false;
-    const unsub = api.subscribe((e) => {
-      if (e.type === "relay.reply") {
-        appendAiMessage(e.reply);
-        if (!notified) {
-          notified = true;
-          void ensureNotifyPermission();
-        }
-        notify("Mirach 回复", e.reply.slice(0, 80));
-      }
-    });
-    return () => unsub();
-  }, []);
-  return null;
-}
 
 /** 后台进程完成/失败 → 桌面通知 */
 function NotifyBridge() {
@@ -68,16 +44,23 @@ function NotifyBridge() {
   return null;
 }
 
-/** 处理 quick entry 提交（全局快捷键迷你窗 → 主窗口发送） */
+/** 处理 quick entry 提交（全局快捷键迷你窗 → 主窗口 dsh 引擎流式发送） */
 function handleQuickSubmit(text: string): void {
   appendUserMessage(text);
   if (MOCK) {
-    appendAiMessage(`（quick entry）已收到：${text.slice(0, 40)}`);
-  } else {
-    void getApi()
-      .submitPrompt(SESSION_ID, text)
-      .catch(() => appendSystemMessage("提交失败"));
+    appendSystemMessage(`（quick entry）已收到：${text.slice(0, 40)}`);
+    return;
   }
+  // 真实模式：走 dsh 流式通道（与主对话区同管道），完成/失败落一条系统消息
+  void getApi()
+    .submitPromptStream(SESSION_ID, text, (e) => {
+      if (e.type === "message.complete") {
+        if (e.text) appendSystemMessage(`⚡ ${e.text.slice(0, 200)}`);
+      } else if (e.type === "message.error") {
+        appendSystemMessage(`提交失败：${e.message}`);
+      }
+    })
+    .catch(() => appendSystemMessage("提交失败"));
 }
 
 /**
@@ -154,7 +137,6 @@ function App() {
   return (
     <ThemeProvider>
       <TerminalStatusProvider>
-        <RelayBridge />
         <NotifyBridge />
         <ResizeHandles />
         <KernelMirrorHost />

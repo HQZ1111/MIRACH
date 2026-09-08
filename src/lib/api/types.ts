@@ -85,44 +85,6 @@ export interface SkillSummary {
   agentCreated?: boolean;
 }
 
-export interface CronJob {
-  id: string;
-  name: string;
-  schedule: string;
-  enabled: boolean;
-  lastRunAt?: number;
-  nextRunAt?: number;
-}
-
-// ----------------------------------------------------------------
-// 引擎斜杠命令 / 认证
-// ----------------------------------------------------------------
-
-/** POST /v1/commands 的响应（引擎斜杠命令面：/usage /stop /queue …） */
-export interface CommandResult {
-  accepted: boolean;
-  output: string;
-}
-
-/** GET /auth/status 透传（mode: bearer | none） */
-export interface AuthStatus {
-  /** 引擎不可达时的兜底标记 */
-  reachable?: boolean;
-  status?: string;
-  mode?: "bearer" | "none";
-  configured?: boolean;
-  authenticated?: boolean;
-  identity?: string | null;
-  config_error?: string | null;
-}
-
-/** ACP 边车可用性（acp_status） */
-export interface AcpStatus {
-  available: boolean;
-  reason?: string | null;
-  version?: string | null;
-}
-
 // ----------------------------------------------------------------
 // 事件（服务端 → 前端推送）
 // ----------------------------------------------------------------
@@ -132,7 +94,6 @@ export type MirachEvent =
   | { type: "message.delta"; sessionId: string; messageId: string; partType: "text" | "thinking"; delta: string }
     | { type: "message.complete"; sessionId: string; messageId: string; text?: string; engineMessageId?: string }
   | { type: "message.error"; sessionId: string; messageId?: string; code?: string; retryable?: boolean; message: string }
-  | { type: "relay.reply"; sessionId: string; reply: string }
   | { type: "tool.start"; sessionId: string; tool: ToolCallInfo }
   | { type: "tool.update"; sessionId: string; tool: ToolCallInfo }
   | { type: "tool.complete"; sessionId: string; tool: ToolCallInfo }

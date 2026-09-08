@@ -15,14 +15,6 @@ export interface AppConfig {
   mirachHome: string;
   /** 浏览器默认首页 */
   browserHome: string;
-  /** Agent 引擎地址（hermes-http） */
-  engineBase: string;
-  /** api_server 基址（8090，cron /api/jobs） */
-  apiBase: string;
-  /** api_server Bearer token（可选） */
-  apiToken: string;
-  /** hermes CLI 可执行文件路径（ACP 边车用；留空走 PATH） */
-  hermesBin: string;
   /** 应用数据目录（%APPDATA%\my-hermes-rs，日志/配置存放处） */
   dataDir: string;
 }
@@ -31,10 +23,6 @@ const DEFAULT_CONFIG: AppConfig = {
   workspace: "",
   mirachHome: "",
   browserHome: "https://www.bing.com",
-  engineBase: "",
-  apiBase: "",
-  apiToken: "",
-  hermesBin: "",
   dataDir: "",
 };
 

@@ -36,8 +36,6 @@ import {
 import { $favorites, toggleFavoriteBatch, type FavoriteRecord } from "@/store/favorites";
 import { $sessions } from "@/store/sessions";
 import { appendSessionUserMessage } from "@/store/session-chat";
-import { getApi } from "@/lib/api";
-import { MOCK } from "@/lib/mock";
 import { $activeSessionId } from "@/store/session";
 import { notify } from "@/lib/notify";
 
@@ -166,14 +164,8 @@ export function ChatHistoryOverlay({ onClose }: { onClose?: () => void }) {
   const doForward = (targetId: string) => {
     const text = selectedEntries.map((e) => `[转发] ${entryText(e)}`).join("\n\n");
     if (text.trim()) {
-      if (MOCK) {
-        appendSessionUserMessage(targetId, text);
-      } else {
-        // 真实模式：目标会话消息在引擎侧，转发 = 向目标会话提交该内容
-        void getApi()
-          .submitPrompt(targetId, text)
-          .catch(() => notify("转发失败", "引擎不可达，内容未送达"));
-      }
+      // dsh 通道无跨会话注入 RPC：转发 = 本地追加到目标会话记录（与 mock 同路径）
+      appendSessionUserMessage(targetId, text);
     }
     setForwardOpen(false);
     setSelected(new Set());

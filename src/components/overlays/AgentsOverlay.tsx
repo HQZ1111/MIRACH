@@ -5,15 +5,11 @@
  * - 递归目录树：每行 = 展开箭头（有子级时）+ 状态点 + 主标签 +
  *   副行（title · mode · activity）+ 右侧指标（tokens · duration）
  * - 懒展开：仅展开的父节点加载/显示其子目录
- * - 真实模式：引擎 /bg list 后台任务作为根目录（刷新按钮重拉）；
- *   mock 模式：SEED 委派分组树（含流式行/文件明细）
+ * - 数据：SEED 委派分组树（含流式行/文件明细）
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { OverlayShell } from "@/components/overlays/OverlayShell";
-import { getApi } from "@/lib/api";
-import { MOCK } from "@/lib/mock";
-import { SESSION_ID } from "@/store/chat";
 import {
   AlertCircle,
   Check,
@@ -22,7 +18,6 @@ import {
   Circle,
   Loader2,
   MoreHorizontal,
-  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -209,33 +204,6 @@ function formatTokens(value: number): string {
   return `${scaled(value / 1_000_000)}M`;
 }
 
-/** 解析引擎 /bg list 输出（- id [Status] prompt）为叶子节点 */
-function parseBgTasks(output: string): CatalogNode[] {
-  const lines = output.split("\n");
-  const nodes: CatalogNode[] = [];
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line.startsWith("- ")) continue;
-    const body = line.slice(2);
-    const match = /^(\S+)\s+\[([^\]]+)\]\s*(.*)$/.exec(body);
-    if (!match) continue;
-    const [, id, statusRaw, prompt] = match;
-    const status = statusRaw.toLowerCase();
-    const failed = status.startsWith("failed");
-    const running = status.startsWith("running");
-    const cancelled = status.startsWith("cancelled");
-    nodes.push({
-      id,
-      label: prompt.trim() || id,
-      mode: "continuable",
-      activity: running ? "running" : "inactive",
-      status: failed ? "failed" : cancelled ? "error" : running ? "running" : "done",
-      hasChildren: false,
-    });
-  }
-  return nodes;
-}
-
 /** 树统计（dsh indexSubagentDescendants 对齐：count + runningCount） */
 function indexDescendants(nodes: CatalogNode[]): { count: number; runningCount: number } {
   let count = 0;
@@ -385,7 +353,7 @@ function NodeDetail({ node }: { node: CatalogNode }) {
 
 /** 代理派生树内容（无外壳，供 OverlayShell 或拓展标签页内嵌复用） */
 export function AgentsTreeContent() {
-  // mock：SEED 分组树（分组 → 子代理叶子）；real：引擎 /bg list 后台任务
+  // SEED 分组树（分组 → 子代理叶子）
   const seedTree: CatalogNode[] = SEED.map((g) => ({
     id: g.id,
     label: g.title,
@@ -411,31 +379,9 @@ export function AgentsTreeContent() {
     })),
   }));
 
-  const [roots, setRoots] = useState<CatalogNode[]>(seedTree);
+  const [roots] = useState<CatalogNode[]>(seedTree);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(SEED.map((g) => g.id)));
   const [selected, setSelected] = useState<CatalogNode>(seedTree[0]?.children?.[0] ?? seedTree[0]);
-  const [bgError, setBgError] = useState<string | null>(null);
-
-  // ---- 真实模式：引擎后台任务目录（/bg list） ----
-  const loadBg = (): void => {
-    if (MOCK) return;
-    setBgError(null);
-    void getApi()
-      .runCommand(SESSION_ID, "/bg list")
-      .then((res) => {
-        const nodes = parseBgTasks(res.output);
-        if (nodes.length === 0) {
-          setRoots([{ id: "__empty", label: "暂无后台任务（/btw 或 /bg 启动）", mode: "continuable", activity: "inactive", status: "done", hasChildren: false }]);
-        } else {
-          setRoots(nodes);
-        }
-      })
-      .catch(() => setBgError("引擎不可达：无法读取后台任务"));
-  };
-  useEffect(() => {
-    if (!MOCK) loadBg();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const toggle = (id: string): void => {
     setExpanded((prev) => {
@@ -475,16 +421,6 @@ export function AgentsTreeContent() {
           Tokens <span className="font-medium text-[#303030]">{formatTokens(stats.tokens)}</span>
         </span>
         <div className="ml-auto flex items-center gap-2">
-          {bgError && <span className="text-[11px] text-[#EF4444]">{bgError}</span>}
-          {!MOCK && (
-            <button
-              onClick={loadBg}
-              className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-[#464646] transition-colors hover:bg-muted"
-            >
-              <RefreshCw className="h-3 w-3" strokeWidth={2} />
-              刷新
-            </button>
-          )}
           {/* 目录触发器（dsh SubagentCatalogAction trigger：计数 + 运行中点） */}
           <span
             className="flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-[#303030]"
