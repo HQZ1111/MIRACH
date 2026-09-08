@@ -20,7 +20,7 @@ import { openOfficialSettings } from "@/dsh-kernel/settings-surface";
 import { $gatewayState, pingGateway } from "@/store/gateway";
 import { GatewayConnectingOverlay } from "@/components/overlays/GatewayConnectingOverlay";
 import { StartupGate } from "@/components/layout/StartupGate";
-import { Toaster } from "@/components/ui/Toaster";
+import { NotificationStack } from "@/components/notifications";
 import { $startupPhase } from "@/store/password";
 import { BootFailureOverlay } from "@/components/overlays/BootFailureOverlay";
 import { QuitConfirmOverlay } from "@/components/overlays/QuitConfirmOverlay";
@@ -41,7 +41,7 @@ import { type CommandPaletteAction } from "@/components/command-palette/CommandP
 import { useTheme } from "@/hooks/useTheme";
 import { $sessions, hasSessionContent } from "@/store/sessions";
 import { $activeSessionId, setActiveSession } from "@/store/session";
-import { KEYBIND_ACTIONS, bindings, matchCombo } from "@/lib/keybinds";
+import { useKeybinds } from "@/hooks/useKeybinds";
 import { SessionSwitcher } from "@/components/session/SessionSwitcher";
 import { SessionDialogOverlay } from "@/components/overlays/SessionDialogOverlay";
 import { $sessionDialog, closeSessionDialog } from "@/store/session-dialog";
@@ -96,7 +96,7 @@ const AgentsOverlay = lazy(() =>
   import("@/components/overlays/AgentsOverlay").then((m) => ({ default: m.AgentsOverlay })),
 );
 const StarmapOverlay = lazy(() =>
-  import("@/components/starmap/StarmapView").then((m) => ({ default: m.StarmapView })),
+  import("@/components/starmap").then((m) => ({ default: m.StarmapView })),
 );
 const ChatHistoryOverlay = lazy(() =>
   import("@/components/overlays/ChatHistoryOverlay").then((m) => ({ default: m.ChatHistoryOverlay })),
@@ -328,54 +328,48 @@ export function AppLayout() {
   // 主题（命令面板"外观"分组用）
   const { toggle: toggleTheme, setTheme } = useTheme();
 
-  // 全局快捷键：由可重绑定动作表驱动（设置页 Keybinds 可改绑定）。
-  // ⌘K 命令面板 / ⌘N 新会话 / ⌘] 切会话 / ⌘J 会话切换器 / ⌘B 左栏 /
-  // ⌘⇧B 右栏 / ⇧X 主题
+  // 全局快捷键：hermes 引擎（hooks/useKeybinds 单监听分发 + capture 捕获 +
+  // IME 守卫 + 输入框放行矩阵），绑定在设置页 Keybinds 可改（store/keybinds）。
+  // ⌘K 命令面板 / ⌘N 新任务 / ⌃Tab 切会话 / ^1-^9 直达 / ⌘J 切换器 /
+  // ⌘B 左栏 / ⌘⇧B 右栏 / ⇧X 主题 / ⌘, 设置 / ⌘L 聚焦输入框
   const [jumpOpen, setJumpOpen] = useState(false);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const cur = bindings();
-      const hit = KEYBIND_ACTIONS.find(
-        (a) => !a.fixed && matchCombo(e, cur[a.id] ?? a.defaultCombo),
+  useKeybinds({
+    toggleCommandPalette: () => setPaletteOpen((v) => !v),
+    startFreshSession: () => setActiveSession(newTaskSession()),
+    cycleSession: (direction) => {
+      // 对齐 dsh：只循环有内容的会话（空白会话已从列表隐藏）
+      const list = $sessions.get().filter((s) => !s.archived && hasSessionContent(s.id));
+      if (list.length === 0) return;
+      const idx = list.findIndex((s) => s.id === $activeSessionId.get());
+      const next = list[(idx + direction + list.length) % list.length];
+      setActiveSession(next.id);
+    },
+    jumpSessionSlot: (slot) => {
+      // ^N 直达第 N 近的会话（有内容的，对齐 dsh 空白隐藏语义）
+      const list = $sessions.get().filter((s) => !s.archived && hasSessionContent(s.id));
+      const target = list[slot - 1];
+      if (target) setActiveSession(target.id);
+    },
+    openSessionSwitcher: () => setJumpOpen(true),
+    toggleSidebar: () => {
+      // 侧栏 = 官方 AppFrame sidebar 列（mirach 外壳），⌘B 折叠/展开走官方 layout
+      nativeToggleSidebar();
+    },
+    toggleRightSidebar: () => setShowRight((v) => !v),
+    openSettings: () => {
+      window.dispatchEvent(new CustomEvent("mirach:open-settings"));
+    },
+    openOverlay: (view) => {
+      window.dispatchEvent(new CustomEvent("mirach:open-overlay", { detail: view }));
+    },
+    toggleTheme,
+    focusComposer: () => {
+      const el = document.querySelector<HTMLElement>(
+        "[data-composer-card] [contenteditable='true']",
       );
-      if (!hit) return;
-      // 输入框聚焦时放行纯字符类快捷键（保持输入）；仅动作命中才拦截
-      e.preventDefault();
-      switch (hit.id) {
-        case "commandPalette":
-          setPaletteOpen((v) => !v);
-          break;
-        case "newSession": {
-          setActiveSession(newTaskSession());
-          break;
-        }
-        case "switchSession": {
-          // 对齐 dsh：只循环有内容的会话（空白会话已从列表隐藏）
-          const list = $sessions.get().filter((s) => !s.archived && hasSessionContent(s.id));
-          if (list.length === 0) break;
-          const idx = list.findIndex((s) => s.id === $activeSessionId.get());
-          const next = list[(idx + 1) % list.length];
-          setActiveSession(next.id);
-          break;
-        }
-        case "jumpSession":
-          setJumpOpen(true);
-          break;
-        case "toggleSidebar":
-          // 侧栏 = 官方 AppFrame sidebar 列（mirach 外壳），⌘B 折叠/展开走官方 layout
-          nativeToggleSidebar();
-          break;
-        case "toggleRightSidebar":
-          setShowRight((v) => !v);
-          break;
-        case "toggleTheme":
-          toggleTheme();
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleTheme]);
+      el?.focus({ preventScroll: true });
+    },
+  });
   // 项目固定会话（跟随主项目建立；成员对话是其下的成员线程）
   const [projectSession, setProjectSession] = useState<ProjectSession>(() => createProjectSession());
   // 持久化成员线程：任何线程变化即写 localStorage（重启恢复会话记录）
@@ -873,7 +867,7 @@ export function AppLayout() {
   useEffect(() => {
     const onOpenOverlay = (e: Event) => {
       const view = (e as CustomEvent<string>).detail;
-      if (view === "artifacts" || view === "kanban" || view === "cron") {
+      if (view === "artifacts" || view === "kanban" || view === "cron" || view === "knowledge") {
         setOverlayView(view);
       }
     };
@@ -1194,11 +1188,7 @@ export function AppLayout() {
         {overlayView === "plugins" && (
           <PluginsOverlay onClose={() => setOverlayView(null)} onOpenPluginView={handleOpenPluginView} />
         )}
-        {overlayView === "knowledge" && (
-          <OverlayShell title="知识星空图" width={1100} height={760} onClose={() => setOverlayView(null)}>
-            <StarmapOverlay />
-          </OverlayShell>
-        )}
+        {overlayView === "knowledge" && <StarmapOverlay onClose={() => setOverlayView(null)} />}
         {overlayView === "kanban" && (
           <OverlayShell title="看板" width={1280} height={780} onClose={() => setOverlayView(null)}>
             <KanbanBoardLazy />
@@ -1246,8 +1236,9 @@ export function AppLayout() {
         {/* ---- 启动门：登录页/过渡页 = 壳内全屏状态，盖住整个软件面板（含顶栏），不碰阴影 ---- */}
         <StartupGate />
 
-        {/* ---- 全局通知浮层（替换 window.alert 的信息提示） ---- */}
-        <Toaster />
+        {/* ---- 全局通知中心（hermes NotificationStack：置顶堆叠 + "+N" 展开 +
+              动作按钮 + 底右常驻确认栈；pushToast 桥接同源） ---- */}
+        <NotificationStack />
       </div>
     </div>
   );

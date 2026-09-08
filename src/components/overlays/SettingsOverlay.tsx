@@ -1794,7 +1794,7 @@ export function AboutContent() {
       <div className="flex flex-col items-center gap-2">
         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#303030] text-xl font-bold text-white">M</div>
         <p className="text-subheading font-bold text-[#303030]">Mirach Harness</p>
-        <p className="text-[11px] text-muted-foreground">奎木狼全能个人助理</p>
+        <p className="text-[11px] text-muted-foreground">Mirach 全能个人助理</p>
         <p className="text-body-sm text-muted-foreground">{t("settings.version")} v0.1.0</p>
       </div>
       {/* 更新检查：双标签 Mirach / 引擎 */}

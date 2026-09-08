@@ -18,6 +18,8 @@ import { openSessionWindow } from "@/lib/sessionWindow";
 import { ResizeHandles } from "@/components/window/ResizeHandles";
 // 插件注册（模块导入即注册到 registry）
 import "@/plugins/samples/hello";
+import "@/plugins/plugin-wake-word";
+import "@/plugins/plugin-sound-cues";
 
 /**
  * RelayBridge — 订阅引擎事件流（仅 VITE_MOCK=0）：

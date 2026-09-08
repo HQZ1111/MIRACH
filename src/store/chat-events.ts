@@ -22,7 +22,10 @@ import { setLastFailedPrompt } from "@/store/retry";
 import { setPendingQuestions } from "@/store/user-questions";
 import { addArtifacts } from "@/store/artifacts";
 import { detectArtifacts } from "@/lib/artifact-detect";
-import { speak } from "@/lib/tts";
+import { isHapticsMuted } from "@/lib/haptics";
+import { playSpeechText } from "@/lib/voice-playback";
+import { dispatchNativeNotification } from "@/store/native-notifications";
+import { $activeSessionId } from "@/store/session";
 import { pushConsole } from "@/store/console";
 import type { MirachEvent } from "@/lib/api/types";
 
@@ -86,7 +89,18 @@ export function handleMirachEvent(
       if (e.text) addArtifacts(detectArtifacts(e.text, opts.requestSession));
       setAgentBusy(false, opts.requestSession);
       setLastFailedPrompt(null);
-      if ($autoSpeak.get() && e.text) void speak(e.text);
+      // 朗读走 hermes 播放管线（sanitize → 句子切分 → 状态机/中断闩锁）；
+      // 静音开关（顶栏触感按钮）打开时不播
+      if ($autoSpeak.get() && e.text && !isHapticsMuted()) {
+        void playSpeechText(e.text, { source: "read-aloud" });
+      }
+      // 原生 OS 通知（hermes native-notifications 门控：仅后台时响，kind 可独立关）
+      dispatchNativeNotification({
+        kind: "turnDone",
+        title: "任务完成",
+        body: e.text ? e.text.slice(0, 80) : undefined,
+        sessionId: $activeSessionId.get(),
+      });
       pushConsole("event", `消息完成 · ${e.text?.length ?? 0} 字符`);
       break;
     }
@@ -104,6 +118,13 @@ export function handleMirachEvent(
       appendSystemMessage(`⚠️ ${e.message}`);
       setLastFailedPrompt(opts.sendText);
       setAgentBusy(false, opts.requestSession);
+      // 原生 OS 通知（后台错误；hermes turnError 语义）
+      dispatchNativeNotification({
+        kind: "turnError",
+        title: "任务失败",
+        body: e.message?.slice(0, 80),
+        sessionId: $activeSessionId.get(),
+      });
       pushConsole("error", e.message);
       break;
     }

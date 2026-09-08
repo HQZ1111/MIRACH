@@ -55,6 +55,13 @@ export function setHapticsMuted(value: boolean) {
   } catch {
     /* 忽略存储失败 */
   }
+  // 广播同步：plugin-sound-cues 菜单等非 React 调用方切静音时，
+  // TopBar 按钮状态经此事件保持一致（hermes 共享 $hapticsMuted 的语义）
+  try {
+    window.dispatchEvent(new CustomEvent("mirach:haptics-muted", { detail: value }));
+  } catch {
+    /* 忽略 */
+  }
 }
 
 // ===== WebAudio 点击声 =====

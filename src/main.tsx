@@ -1,10 +1,12 @@
 // 主应用不包 StrictMode：其开发期"挂载→卸载→重挂"双跑会释放仍在使用的终端 id
-// （unmount cleanup 被伪卸载执行），随后新终端复用该号 → 命名重复/跳号
+// （unmount cleanup 被伪卸载执行），随后新终端复用该号 → 崛名重复/跳号
 import "@/lib/migrate-keys";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { OverlayApp } from "./components/overlay/OverlayApp";
 import { QuickEntryApp } from "./components/quick-entry/QuickEntryApp";
+import { HudShell } from "./components/hud/HudShell";
+import "./components/hud/hud-styles.css";
 import { LoginPage } from "./components/layout/LoginPage";
 import "./index.css";
 import { HapticsProvider } from "./hooks/useHaptics";
@@ -19,6 +21,12 @@ const isOverlay =
 const isQuickEntry =
   new URLSearchParams(window.location.search).get("win") === "quick-entry";
 
+// HUD 悬浮窗（?win=hud）：chrome-less 浮动会话（hermes HUD 模式移植）。
+// HUD 与主窗共享同一 store 单例（同 bundle 同 localStorage），会话状态天然
+// 同步；不 boot 内核镜像（主窗驱动引擎，HUD 消费实时消息流）。
+const isHud =
+  new URLSearchParams(window.location.search).get("win") === "hud";
+
 // 登录页独立预览（?win=login）：不启动完整应用，只渲染登录页，方便单独打磨 UI
 const isLogin =
   new URLSearchParams(window.location.search).get("win") === "login";
@@ -29,7 +37,7 @@ const isLogin =
 const kernelEnabled =
   import.meta.env.VITE_KERNEL === "1"
   || (import.meta.env.VITE_KERNEL === undefined && import.meta.env.VITE_MOCK !== "1");
-if (kernelEnabled && !isOverlay && !isQuickEntry) {
+if (kernelEnabled && !isOverlay && !isQuickEntry && !isHud) {
   void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => {
     console.warn(String(e));
     // 内核失败诊断信号：标题末尾标注原因（默认标题 "Mirach Dashboard"）
@@ -61,6 +69,10 @@ if (alreadyRooted) {
       <OverlayApp />
     ) : isQuickEntry ? (
       <QuickEntryApp />
+    ) : isHud ? (
+      <I18nProvider>
+        <HudShell />
+      </I18nProvider>
     ) : isLogin ? (
       <I18nProvider>
         <LoginPage preview />

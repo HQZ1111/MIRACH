@@ -138,10 +138,12 @@ export function TopBar({ className, style, showRight = true, onToggleRight }: To
           <span>Mirach</span>
         </button>
 
-        {/* 触感反馈开关（未静音显示 Volume2，静音显示 VolumeX） */}
+        {/* 提示音/触感总开关（hermes 共享 $hapticsMuted 语义：同一开关
+            管触感反馈 + plugin-sound-cues 的全部提示音；未静音 Volume2，
+            静音 VolumeX） */}
         <button
           onClick={toggleHaptics}
-          title={muted ? "开启触感反馈" : "关闭触感反馈"}
+          title={muted ? "开启提示音（含触感反馈）" : "关闭提示音（含触感反馈）"}
           className={cn(
             "flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-black/5",
             muted ? "text-[#9CA3AF]" : "text-[#464646]",

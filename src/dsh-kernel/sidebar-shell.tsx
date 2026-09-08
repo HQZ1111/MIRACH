@@ -90,12 +90,13 @@ import {
 } from "@/store/sessions";
 import { setActiveSession } from "@/store/session";
 import { envIdForView, $environments } from "@/store/environments";
-import { $agents, $agentsVersion, teamRosterFor } from "@/store/agents";
+import { $agents, $agentsVersion, teamRosterFor, primaryAgentOf } from "@/store/agents";
 import { BotFace, defaultShapeFor } from "@/components/layout/AgentAvatar";
 import { currentView } from "@/store/current-view";
 import { setSidebarCollapsed } from "@/store/layout-mirror";
 import { toggleMemberPanel } from "@/store/member-panel";
 import { openSessionWindow } from "@/lib/sessionWindow";
+import { importEngineSessionEnv, $sessionEnvIndex, sessionBelongsToEnv } from "@/lib/session-env";
 import { useAppConfig } from "@/hooks/useAppConfig";
 import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
@@ -442,7 +443,11 @@ function useMirachSessionInteractions(view: string) {
       "dsh_list_sessions",
     )
       .then((r) => {
-        for (const s of r?.sessions ?? []) {
+        const rows = r?.sessions ?? [];
+        // 全量并入归属索引（引擎 envId 是权威；其他环境的行也入索引，
+        // 供官方单列表按环境过滤），再只把当前环境的条目并进本地会话表
+        importEngineSessionEnv(rows.map((s) => ({ frontendId: s.frontendId, envId: s.envId })));
+        for (const s of rows) {
           if (!s.frontendId || (s.envId && s.envId !== curEnv)) continue;
           const createdAt = s.createdAt || Date.now();
           upsertEngineSession({
@@ -640,9 +645,7 @@ function MirachSidebar(props: SidebarRootComponentProps) {
   const [sessionTab, setSessionTab] = useState<"conv" | "member">("conv");
   const [activeTab, setActiveTab] = useState<"all" | "read" | "unread">("all");
   const [query, setQuery] = useState("");
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [addWsOpen, setAddWsOpen] = useState(false);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | undefined>(undefined);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 行相对时间基准（每次渲染取一次，与官方 FlatList 同款）
@@ -662,10 +665,17 @@ function MirachSidebar(props: SidebarRootComponentProps) {
     (c) => activeTab === "all" || c.tab === activeTab,
   );
 
-  // ---- 官方 flat 单列表（最新优先，无分组） ----
+  // ---- 官方 flat 单列表（最新优先，无分组）；按环境落归属 ----
+  // 引擎 envId 映射（session-env）是权威归属：官方内核会话列表是全局的，
+  // 这里把它落到"当前环境的会话"——环境生效即隔离，非客户端自造分组。
+  const sessionEnvIndex = useStore($sessionEnvIndex);
+  const currentEnvId = envIdForView(view);
   const flatRows = useMemo(
-    () => deriveFlat(list, archivedSessionIds, pendingInteractions),
-    [list, archivedSessionIds, pendingInteractions],
+    () =>
+      deriveFlat(list, archivedSessionIds, pendingInteractions).filter((node) =>
+        sessionBelongsToEnv(node.id, currentEnvId, list.current),
+      ),
+    [list, archivedSessionIds, pendingInteractions, currentEnvId, sessionEnvIndex],
   );
 
   // ---- 搜索：本地名称/工作区匹配 + 远程内容搜索（防抖 250ms，失败回退本地） ----
@@ -702,23 +712,12 @@ function MirachSidebar(props: SidebarRootComponentProps) {
       { items: remoteSearch?.items ?? [], hasMore: remoteSearch?.hasMore ?? false },
       actions?.searchResultLimit ?? 20,
     );
+  // 搜索结果同样按环境落归属（含当前会话例外），不跨环境串列表
+  const envSearchRows = searchRows === null
+    ? null
+    : { ...searchRows, items: searchRows.items.filter((r) => sessionBelongsToEnv(r.id, currentEnvId, list.current)) };
 
-  // ---- 工作区切换器：当前 = 选中项 ?? 当前会话所属工作区；新任务归属选中项 ----
-  const currentWorkspaceId = (() => {
-    const cur = list.current;
-    if (cur === undefined) return undefined;
-    return workspaces.find((w) => w.sessionIds.includes(cur))?.workspaceId;
-  })();
-  const displayWorkspace = workspaces.find(
-    (w) => w.workspaceId === (selectedWorkspaceId ?? currentWorkspaceId),
-  );
-
-  // 添加工作区：弹出目录浏览（官方 browse 型 picker；本装配无 native pick 能力）
-  const addWorkspace = () => {
-    setWorkspaceOpen(false);
-    setAddWsOpen(true);
-  };
-
+  // 添加工作区（AddWorkspaceDialog 仍由本组件承载；官方浏览器未接管本装配的添加流）
   const pickWorkspacePath = async (path: string) => {
     setAddWsOpen(false);
     try {
@@ -828,13 +827,28 @@ function MirachSidebar(props: SidebarRootComponentProps) {
           {/* ======== 团队概览视图（点击标题切换；原 LeftSidebar team 视图） ======== */}
           {viewMode === "team" && (
             <div className="flex flex-col items-stretch">
-              <div className="relative mb-4 self-center" style={{ width: 80, height: 80 }}>
-                <div
-                  className="flex h-full w-full items-center justify-center rounded-full text-white font-bold text-2xl"
-                  style={{ backgroundColor: cfg.avatarBg }}
-                >
-                  {cfg.initials}
-                </div>
+              {/* 团队头像 = 当前环境主人格头像（BotFace 同款，只放大到 84px）；
+                  无主人格数据时回退环境配置字母圆。 */}
+              <div className="relative mb-4 self-center" style={{ width: 84, height: 84 }}>
+                {(() => {
+                  const primary = primaryAgentOf(currentEnvId);
+                  return primary ? (
+                    <BotFace
+                      color={primary.avatarBg}
+                      image={primary.avatarImage}
+                      name={primary.name}
+                      shape={primary.avatarShape || defaultShapeFor(primary.name)}
+                      size={84}
+                    />
+                  ) : (
+                    <div
+                      className="flex h-full w-full items-center justify-center rounded-full text-white font-bold text-2xl"
+                      style={{ backgroundColor: cfg.avatarBg }}
+                    >
+                      {cfg.initials}
+                    </div>
+                  );
+                })()}
                 <span
                   className="absolute block rounded-full border-[3px] border-white"
                   style={{ width: 18, height: 18, bottom: -5, right: -5, backgroundColor: "#10B981" }}
@@ -917,13 +931,13 @@ function MirachSidebar(props: SidebarRootComponentProps) {
             </div>
           )}
 
-          {/* ======== 会话列表视图（默认；置顶 → 工作区 → tabs → 官方单列表） ======== */}
+          {/* ======== 会话列表视图（默认；快捷入口 → 官方浏览区 → 成员） ======== */}
           {viewMode === "sessions" && (
             <>
           {/* 新建任务 + 产物 + 看板 + 定时任务（竖向排列，与旧 LeftSidebar 一致） */}
-          <div className="flex flex-col gap-1 pb-2">
+          <div className="flex flex-col gap-1 pb-2 shrink-0">
             <button
-              onClick={() => startSession(selectedWorkspaceId as Parameters<typeof startSession>[0])}
+              onClick={() => startSession()}
               className="flex w-full items-center gap-[16px] rounded-lg py-1.5 text-member text-[#303030] hover:bg-muted transition-colors text-left"
             >
               <Plus className="h-4 w-4 shrink-0" strokeWidth={2} />
@@ -983,7 +997,7 @@ function MirachSidebar(props: SidebarRootComponentProps) {
           </div>
 
           {/* 已置顶会话（mirach 自有） */}
-          <div className="dropdown-card mb-2">
+          <div className="dropdown-card mb-2 shrink-0">
             <Collapsible defaultOpen>
               <CollapsibleTrigger className="dropdown-card-trigger py-1.5 group/pinned">
                 <Pin className="dropdown-card-icon" strokeWidth={2} />
@@ -1019,61 +1033,16 @@ function MirachSidebar(props: SidebarRootComponentProps) {
             </Collapsible>
           </div>
 
-          {/* 当前工作区切换器 */}
-          <div className="relative mb-2 shrink-0">
-            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/40 px-2 py-1.5">
-              <button
-                onClick={() => setWorkspaceOpen((v) => !v)}
-                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                title={displayWorkspace?.path ?? "选择一个工作区"}
-              >
-                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={2} />
-                <span className="min-w-0 flex-1 truncate text-[12px] text-[#303030]">
-                  {displayWorkspace?.title ?? "选择工作区"}
-                </span>
-                <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", workspaceOpen && "rotate-180")} />
-              </button>
-              <button
-                onClick={() => void addWorkspace()}
-                title={workspaceT("workspace.add")}
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-black/5 hover:text-[#303030]"
-              >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
-              </button>
-            </div>
-            {workspaceOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-30"
-                  onClick={() => setWorkspaceOpen(false)}
-                />
-                <div className="absolute left-0 right-0 z-40 max-h-64 overflow-y-auto rounded-lg border border-border bg-white py-1 shadow-lg">
-                  {workspaces.length === 0 && (
-                    <p className="px-3 py-2 text-[11px] text-muted-foreground/60">暂无工作区</p>
-                  )}
-                  {workspaces.map((w) => (
-                    <button
-                      key={w.workspaceId}
-                      onClick={() => {
-                        setSelectedWorkspaceId(w.workspaceId as string);
-                        setWorkspaceOpen(false);
-                      }}
-                      className={cn(
-                        "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left transition-colors hover:bg-muted",
-                        w.workspaceId === (selectedWorkspaceId ?? currentWorkspaceId) && "bg-muted",
-                      )}
-                    >
-                      <span className="truncate text-[12px] text-[#303030]">{w.title}</span>
-                      <span className="truncate text-[10px] text-muted-foreground/70">{w.path}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+          {/* 官方工作区切换器（dsh ui-workspace 的 WorkspaceBrowser 整块：
+              工作区列表/新增/重命名/删除/排序 + 视图选项，全部官方交互。
+              sidebar.workspaces 槽由 ui-workspace 的 apply 注册占据，
+              renderSlot 出口即官方整块；owner 面与官方 SidebarRoot 同款） */}
+          <div className="mb-2 shrink-0 rounded-lg border border-border" data-mirach-official-browser>
+            {renderSlot("sidebar.workspaces", { wide: true, expandSidebar: () => {} })}
           </div>
 
           {/* Tabs: 所有会话 / 成员 */}
-          <div className="flex items-center w-full">
+          <div className="flex items-center w-full shrink-0">
             {(["conv", "member"] as const).map((tab, i) => {
               const labels = { conv: "所有会话", member: "成员" };
               const active = sessionTab === tab;
@@ -1091,16 +1060,16 @@ function MirachSidebar(props: SidebarRootComponentProps) {
               );
             })}
           </div>
-          <div className="w-full h-px bg-border mb-2" />
+          <div className="w-full h-px bg-border mb-2 shrink-0" />
 
           {/* 所有会话 = 官方单列表（flat 视图，行=官方详细会话条）／搜索态=搜索结果 */}
           {sessionTab === "conv" && (
             <div className="space-y-0.5">
               {normalizedQuery !== "" ? (
-                searchRows === null || searchRows.items.length === 0 ? (
+                envSearchRows === null || envSearchRows.items.length === 0 ? (
                   <p className="px-2 py-2 text-body-sm text-muted-foreground/60">{workspaceT("empty.noMatches")}</p>
                 ) : (
-                  searchRows.items.map((r) => (
+                  envSearchRows.items.map((r) => (
                     <SearchResultItem
                       key={r.id}
                       result={r}

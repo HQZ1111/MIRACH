@@ -13206,3 +13206,5 @@ Error: read ECONNRESET
 [proxy] headers fixed: /api/commands/list cookie= yes
 [proxy] headers fixed: /api/skills/list cookie= yes
 [proxy] headers fixed: /api/agentPresets/list cookie= yes
+
+[exit 1]

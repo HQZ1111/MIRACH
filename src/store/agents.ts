@@ -48,11 +48,17 @@ const STORAGE_KEY = "mirach.agents.v1";
 
 const AVATAR_COLORS = ["#6366F1", "#F59E0B", "#10B981", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316"];
 
-/** 主聊天默认成员（奎木狼）：其 systemPrompt 作为第一个聊天的 persona */
+/** 主聊天默认成员（Mirach chat）：其 systemPrompt 作为第一个聊天的 persona */
 export const DEFAULT_TEAM_ID = "team-kui";
 
 // ---- 环境分片：成员按环境隔离（聊天环境的团队 ≠ 代码/写作环境的团队） ----
 let currentAgentsEnv = "main";
+
+/** 当前成员分片所属环境 id（starmap 适配层等只读消费） */
+export function agentsEnv(): string {
+  return currentAgentsEnv;
+}
+
 const agentsEnvKey = (env: string) => `${STORAGE_KEY}.${env}`;
 
 // 团队种子（聊天环境专属）：参考 dsh-collaboration 的专家名单（主代理/规划师/
@@ -60,12 +66,12 @@ const agentsEnvKey = (env: string) => `${STORAGE_KEY}.${env}`;
 // persona 按各自职责用中文撰写。观察员/画家需视觉模型，暂不列入。
 const TEAM_SEED_CHAT: ConvItem[] = [
   {
-    id: "team-kui", name: "奎木狼", initials: "奎", avatarBg: "#6366F1",
+    id: "team-kui", name: "Mirach chat", initials: "M", avatarBg: "#6366F1",
     preview: "全能助理就绪，直接输入任务开始", desc: "主人格 · 主代理 · 统筹分派 · 整合结果", time: "刚刚", status: "generating", tab: "read",
     primary: true,
     avatarShape: "squircle",
     systemPrompt:
-      "你是奎木狼（Mirach 主代理），一位全能个人助理。你统筹全局：复杂任务拆解并交给合适的团队成员，自己直接处理日常对话与轻量任务。" +
+      "你是 Mirach chat（Mirach 聊天环境主人格），一位全能个人助理。你统筹全局：复杂任务拆解并交给合适的团队成员，自己直接处理日常对话与轻量任务。" +
       "回答用简体中文；先给结论再给细节；不确定时明确说不确定，绝不编造。",
     model: "deepseek-v4-flash-0731",
     tools: ["bash", "文件", "搜索", "网络", "代码"],
@@ -135,9 +141,9 @@ const TEAM_SEED_CHAT: ConvItem[] = [
   },
 ];
 
-/** 某环境的团队种子：每个环境都带一个主人格（primary）——聊天环境是
- *  奎木狼（完整团队），main 是 Mirach 总管，code/work/finance/write 各一位
- *  领域总管。主环境团队视图聚合全部环境的主人格。 */
+/** 某环境的团队种子：每个环境都带一个主人格（primary）——名字跟随环境名
+ *  （Mirach / Mirach chat/code/work/finance/write），聊天环境是 Mirach chat
+ *  （完整团队）。主环境团队视图聚合全部环境的主人格。 */
 const ENV_PRIMARY_SEEDS: Record<string, ConvItem> = {
   main: {
     id: "primary-main", name: "Mirach", initials: "M", avatarBg: "#026CFE",
@@ -152,45 +158,45 @@ const ENV_PRIMARY_SEEDS: Record<string, ConvItem> = {
     tools: ["bash", "文件", "搜索", "网络", "代码"],
   },
   code: {
-    id: "primary-code", name: "代码总管", initials: "码", avatarBg: "#10B981",
+    id: "primary-code", name: "Mirach code", initials: "M", avatarBg: "#10B981",
     preview: "代码环境统筹就绪", desc: "主人格 · 代码环境 · 工程实现统筹", time: "刚刚", status: "pending", tab: "read",
     primary: true,
     avatarShape: "hexagon",
     systemPrompt:
-      "你是代码总管（代码环境主人格），统筹代码环境的全部工程任务：需求分析、方案设计、" +
+      "你是 Mirach code（代码环境主人格），统筹代码环境的全部工程任务：需求分析、方案设计、" +
       "实现与调试的拆解分派，自己直接处理轻量编码问题。工作区即代码环境工作区；用简体中文。",
     model: "deepseek-v4-flash-0731",
     tools: ["bash", "文件", "搜索", "代码"],
   },
   work: {
-    id: "primary-work", name: "工作总管", initials: "工", avatarBg: "#F59E0B",
+    id: "primary-work", name: "Mirach work", initials: "M", avatarBg: "#F59E0B",
     preview: "工作环境统筹就绪", desc: "主人格 · 工作环境 · 任务与文档统筹", time: "刚刚", status: "pending", tab: "read",
     primary: true,
     avatarShape: "squircle",
     systemPrompt:
-      "你是工作总管（工作环境主人格），统筹工作环境的任务管理、日程安排与文档处理，" +
+      "你是 Mirach work（工作环境主人格），统筹工作环境的任务管理、日程安排与文档处理，" +
       "自己直接处理轻量整理类任务。工作区即工作环境工作区；用简体中文。",
     model: "deepseek-v4-flash-0731",
     tools: ["文件", "搜索"],
   },
   finance: {
-    id: "primary-finance", name: "金融总管", initials: "金", avatarBg: "#EF4444",
+    id: "primary-finance", name: "Mirach finance", initials: "M", avatarBg: "#EF4444",
     preview: "金融环境统筹就绪", desc: "主人格 · 金融环境 · 数据与市场统筹", time: "刚刚", status: "pending", tab: "read",
     primary: true,
     avatarShape: "drop",
     systemPrompt:
-      "你是金融总管（金融环境主人格），统筹金融环境的数据分析、风险评估与市场研究任务，" +
+      "你是 Mirach finance（金融环境主人格），统筹金融环境的数据分析、风险评估与市场研究任务，" +
       "自己直接处理轻量查询。输出附数据出处，不做投资建议承诺；用简体中文。",
     model: "deepseek-v4-flash-0731",
     tools: ["文件", "搜索", "网络"],
   },
   write: {
-    id: "primary-write", name: "写作总管", initials: "文", avatarBg: "#8B5CF6",
+    id: "primary-write", name: "Mirach write", initials: "M", avatarBg: "#8B5CF6",
     preview: "写作环境统筹就绪", desc: "主人格 · 写作环境 · 文案与内容统筹", time: "刚刚", status: "pending", tab: "read",
     primary: true,
     avatarShape: "pill",
     systemPrompt:
-      "你是写作总管（写作环境主人格），统筹写作环境的文案创作、内容优化与多语翻译任务，" +
+      "你是 Mirach write（写作环境主人格），统筹写作环境的文案创作、内容优化与多语翻译任务，" +
       "自己直接处理轻量润色。写作原则：结构清晰、结论前置、示例优先；用简体中文。",
     model: "deepseek-v4-flash-0731",
     tools: ["文件"],
@@ -201,7 +207,7 @@ const ENV_PRIMARY_SEEDS: Record<string, ConvItem> = {
 function teamSeedFor(env: string): ConvItem[] {
   const primary = ENV_PRIMARY_SEEDS[env];
   if (env === "chat") {
-    // 奎木狼即聊天环境主人格（种子内已标 primary）
+    // Mirach chat 即聊天环境主人格（种子内已标 primary）
     return TEAM_SEED_CHAT;
   }
   return primary ? [primary] : [];
@@ -233,6 +239,16 @@ export function teamRosterFor(envId: string): ConvItem[] {
   return [...own, ...cross];
 }
 
+/** 存量主人格改名迁移：旧种子名 → 跟随环境名（Mirach chat/code/work/…）。
+ *  只精确匹配旧种子名的主人格行才改，用户自定义名不动；读时迁移、幂等。 */
+const PRIMARY_NAME_MIGRATIONS: Record<string, string> = {
+  "奎木狼": "Mirach chat",
+  "代码总管": "Mirach code",
+  "工作总管": "Mirach work",
+  "金融总管": "Mirach finance",
+  "写作总管": "Mirach write",
+};
+
 /** 读取指定环境的成员分片（不切换当前分片——设置页环境标签用） */
 export function loadAgentsOf(envId: string): ConvItem[] {
   const key = agentsEnvKey(envId);
@@ -245,7 +261,19 @@ export function loadAgentsOf(envId: string): ConvItem[] {
         // 演示种子清洗（真实模式）：id 1~6 是早期硬编码队友。
         // 存储列表为权威（早期的"缺谁补谁"种子并入已退役）——
         // 否则删掉的种子成员会在下次 load 时复活。
-        return MOCK ? arr : arr.filter((a) => !/^[1-6]$/.test(a.id));
+        return arr
+          .filter((a) => MOCK || !/^[1-6]$/.test(a.id))
+          .map((a) => {
+            const newName = a.primary ? PRIMARY_NAME_MIGRATIONS[a.name] : undefined;
+            if (!newName) return a;
+            return {
+              ...a,
+              name: newName,
+              initials: "M",
+              // 人设文本里的自称同步（"你是奎木狼（…）" → "你是 Mirach chat（…）"）
+              systemPrompt: a.systemPrompt?.replace(/^你是[^，。;；]*?（/, `你是 ${newName}（`),
+            };
+          });
       }
     }
   } catch {

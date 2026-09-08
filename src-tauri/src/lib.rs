@@ -1285,7 +1285,12 @@ pub fn run() {
             get_workspace,
             set_analytics_enabled,
             track_analytics_event,
-            open_session_window
+            open_session_window,
+            hud_open,
+            hud_close,
+            hud_set_bounds,
+            hud_begin_move,
+            hud_set_ignore_mouse
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -1353,5 +1358,88 @@ fn open_quick_entry_window(app: tauri::AppHandle) -> Result<(), String> {
         .skip_taskbar(true)
         .build()
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ================================================================
+// HUD 悬浮窗（hermes HUD 模式移植：chrome-less 浮动会话窗）
+// ================================================================
+
+const HUD_LABEL: &str = "hud";
+/// hermes spawnHudWindow 同款最小尺寸（resize-handle.ts 的钳制值一致）
+const HUD_MIN_WIDTH: f64 = 380.0;
+const HUD_MIN_HEIGHT: f64 = 160.0;
+
+/// 打开 HUD 悬浮窗：透明、无边框、置顶、跳过任务栏（已存在则聚焦）。
+/// 与 quick-entry 不同：HUD 是完整渲染器（同一 bundle，?win=hud 分流），
+/// 会话状态由前端 store 共享，不需要跨窗会话 id 传递。
+#[tauri::command]
+async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let url = tauri::WebviewUrl::App("index.html?win=hud".into());
+    tauri::WebviewWindowBuilder::new(&app, HUD_LABEL, url)
+        .title("Mirach HUD")
+        .inner_size(520.0, 420.0)
+        .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false) // hermes 同款：程序化 setBounds，防系统缩放热区
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 关闭 HUD（主窗口或 HUD 自身都可调用）
+#[tauri::command]
+async fn hud_close(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+/// HUD 程序化改位置/尺寸（resize-handle 的 setBounds 面；Windows 透明无边框
+/// 窗禁用 resizable 后 set_bounds 是唯一缩放路径，与 hermes main 进程同责）
+#[tauri::command]
+async fn hud_set_bounds(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+        let _ = win.set_resizable(true);
+        let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+        let _ = win.set_size(tauri::LogicalSize::new(
+            width.max(HUD_MIN_WIDTH),
+            height.max(HUD_MIN_HEIGHT),
+        ));
+        let _ = win.set_resizable(false);
+    }
+    Ok(())
+}
+
+/// 拖动移动窗口（composer-drag 的 beginMove 面 → Tauri 原生拖拽）
+#[tauri::command]
+async fn hud_begin_move(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+        let _ = win.start_dragging();
+    }
+    Ok(())
+}
+
+/// 指针穿透开关（click-through：透明区忽略鼠标）
+#[tauri::command]
+async fn hud_set_ignore_mouse(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+        let _ = win.set_ignore_cursor_events(ignore);
+    }
     Ok(())
 }

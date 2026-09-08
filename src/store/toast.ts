@@ -1,23 +1,19 @@
 /**
- * toast — 轻量全局通知（替换 window.alert 的信息提示）
+ * toast — 轻量全局通知
+ *
+ * mirach 适配：显示层统一走 hermes 通知中心（store/notifications 的
+ * $notifications + NotificationStack，支持置顶堆叠/动作按钮/常驻错误），
+ * pushToast 桥接为 hermes notify()——旧调用点零改动，新老通知同一出口。
  */
 
-import { atom } from "nanostores";
+import { notify } from "@/store/notifications";
 
-export interface Toast {
-  id: number;
-  text: string;
-  type: "info" | "success" | "error";
-}
+export type ToastType = "info" | "success" | "error";
 
-export const $toasts = atom<Toast[]>([]);
-
-let seq = 0;
-
-export function pushToast(text: string, type: Toast["type"] = "info", duration = 2600): void {
-  const id = ++seq;
-  $toasts.set([...$toasts.get(), { id, text, type }]);
-  window.setTimeout(() => {
-    $toasts.set($toasts.get().filter((t) => t.id !== id));
-  }, duration);
+export function pushToast(text: string, type: ToastType = "info", _duration = 2600): void {
+  void _duration; // hermes notify 的时长策略接管（error/warning 常驻）
+  notify({
+    kind: type,
+    message: text,
+  });
 }

@@ -519,7 +519,7 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
     const historySeq = ++historyReqSeq.current;
     (async () => {
       try {
-        // 主聊天 persona：默认成员（奎木狼）或用户设置的默认成员的 systemPrompt
+        // 主聊天 persona：默认成员（Mirach chat）或用户设置的默认成员的 systemPrompt
         const members = $agents.get();
         const persona = members.find((a) => a.id === ($defaultAgent.get() || DEFAULT_TEAM_ID))?.systemPrompt;
         // 写入共享引擎绑定源（成员私聊发送前用它恢复主 persona，见 engine-session）

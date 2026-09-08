@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { FileViewerPanel } from "@/components/files/FileViewerPanel";
 import { MarkdownText } from "@/components/chat/markdown/MarkdownText";
-import { StarmapView } from "@/components/starmap/StarmapView";
+import { StarmapView } from "@/components/starmap";
 import { getPluginViewPage } from "@/plugins/registry";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,7 @@ export function ViewPage({ view }: { view: string }) {
     case "bookmarks":
       return <BookmarksPage />;
     case "knowledge":
-      return <StarmapView />;
+      return <StarmapView onClose={() => window.dispatchEvent(new CustomEvent("mirach:switch-view", { detail: "mirach" }))} />;
     default: {
       // 插件扩展路由：注册表 viewPage 贡献点按 view id 解析
       const page = getPluginViewPage(view);

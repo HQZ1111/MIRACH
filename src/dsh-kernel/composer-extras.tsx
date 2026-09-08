@@ -24,6 +24,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import { useStore } from "@nanostores/react";
 import { Ear, EarOff, Mic, Square, TerminalSquare, Volume2, VolumeX } from "lucide-react";
 import { $autoSpeak } from "@/store/chat";
+import { $wakeWord, toggleWakeWord } from "@/plugins/plugin-wake-word";
 import { logInfo, logWarn } from "./kernel-log";
 
 /** 官方工具行 ghost 按钮的 mirach 视觉（对齐 mirach Composer GHOST_ICON_BTN） */
@@ -41,6 +42,8 @@ let recognition: any = null;
 function setDictation(active: boolean): void {
   dictationState = { active };
   for (const fn of dictationListeners) fn(dictationState);
+  // 麦克风租约广播：唤醒词插件在听写期间让位、结束后自动恢复监听
+  window.dispatchEvent(new CustomEvent("mirach:dictation-active", { detail: active }));
 }
 
 /** 把文本插入官方输入框编辑器（focus + execCommand，Lexical 经 beforeinput 同步草稿） */
@@ -181,25 +184,32 @@ function TerminalToggle() {
   );
 }
 
-/** 唤醒词开关（hey-hermes 引擎侧待接入；UI 开关先行，状态持久化 localStorage） */
+/** 唤醒词开关（plugin-wake-word 消费端：ear = 监听状态，tooltip 带原因/短语；
+ *  右键 = 更换唤醒短语，prompt 输入后立即生效并持久化） */
 function WakeToggle() {
-  const [wakeActive, setWakeActive] = useState(() => {
-    try { return localStorage.getItem("mirach.wakeWord") === "on"; } catch { return false; }
-  });
+  const wake = useStore($wakeWord);
+  const title = wake.listening
+    ? `关闭唤醒词（${wake.phrase}）`
+    : wake.notice || `唤醒词（${wake.phrase}）· 右键更换短语`;
   return (
     <button
       type="button"
-      className={`${EXTRA_BTN} ${wakeActive ? "bg-[#F59E0B]/10 text-[#F59E0B]" : ""}`}
-      title={wakeActive ? "关闭唤醒词" : "唤醒词（待接入 · hey hermes）"}
-      onClick={() => {
-        setWakeActive((v) => {
-          const next = !v;
-          try { localStorage.setItem("mirach.wakeWord", next ? "on" : "off"); } catch { /* ignore */ }
-          return next;
+      className={`${EXTRA_BTN} ${wake.listening ? "bg-[#F59E0B]/10 text-[#F59E0B]" : ""}`}
+      title={title}
+      onClick={toggleWakeWord}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const next = window.prompt("更换唤醒短语（如 hey hermes / 嘿 mirach）", wake.phrase);
+        if (next === null) return;
+        const clean = next.trim();
+        if (!clean || clean === wake.phrase) return;
+        void import("@/plugins/plugin-wake-word").then((m) => {
+          m.setWakePhrase(clean);
+          window.dispatchEvent(new CustomEvent("mirach:toast", { detail: `唤醒词已更换：${clean}` }));
         });
       }}
     >
-      {wakeActive ? (
+      {wake.listening ? (
         <Ear className="h-4 w-4" strokeWidth={2} />
       ) : (
         <EarOff className="h-4 w-4" strokeWidth={2} />

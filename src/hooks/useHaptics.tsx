@@ -36,6 +36,10 @@ export function HapticsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     warmupHaptics();
+    // 外部调用方（提示音插件菜单等）经 setHapticsMuted 切静音时同步按钮状态
+    const sync = (e: Event) => setMuted(Boolean((e as CustomEvent<boolean>).detail));
+    window.addEventListener("mirach:haptics-muted", sync);
+    return () => window.removeEventListener("mirach:haptics-muted", sync);
   }, []);
 
   const trigger = useCallback((intent: HapticIntent, source?: string) => {
