@@ -19,8 +19,16 @@ import { $kernelReady } from "@/store/kernel-ready";
 import { GatewayConnectingOverlay } from "@/components/overlays/GatewayConnectingOverlay";
 import { LoginPage } from "@/components/layout/LoginPage";
 
+let lockDecided = false;
+function lockAppOnce(): void {
+  if (lockDecided) return;
+  lockDecided = true;
+  lockApp();
+}
+
 // 首帧即锁定（模块加载时判定，早于 React 首渲染）：否则第一帧 phase 仍是
 // "unlocked" 且引擎/内核已就绪，会闪一下主页面再被启动页盖住。
+// 注意：必须放在 lockDecided 声明之后（模块顶层调用踩 TDZ 会整页白屏）。
 lockAppOnce();
 
 export function StartupGate() {
@@ -34,11 +42,4 @@ export function StartupGate() {
     return <GatewayConnectingOverlay />;
   }
   return null;
-}
-
-let lockDecided = false;
-function lockAppOnce(): void {
-  if (lockDecided) return;
-  lockDecided = true;
-  lockApp();
 }
