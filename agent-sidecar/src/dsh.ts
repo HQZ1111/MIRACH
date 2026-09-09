@@ -333,52 +333,55 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
 
     // profile 模式启动：优先用全局 npm 安装的 dsh CLI（更新 = npm i -g @deepseek-ai/dsh@alpha
     // 一条命令），无全局安装时回退 workspace 源码（tsx bin.ts）。
-    // 注意：不 spawn %APPDATA%\npm\dsh.cmd——Windows 下 .cmd 不能被子进程 spawn
-    // 直接执行（EINVAL 或引号剥壳冲突）；改由 nodeBin 直接执行全局包的
-    // lib/bin.js（与 dsh.cmd 包装的同一入口，行为完全等价）。
+    // 注意：SDK 0.1.5 重写了启动 API —— DeepSeekHarnessOptions 不再有 launch{command,args}，
+    // 改为 dshBin/profile/patches/dshHome/processCwd/env/initializeTimeoutMs（dsh.ts 探针实测）。
+    // 旧键会被 SDK 静默忽略并回落到 `--profile sdk` —— 引擎"假就绪"而 mirach web 面（3212）永不监听。
     const npmDshBin = process.env.APPDATA
       ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
       : "";
     const hasNpmDsh = npmDshBin && existsSync(npmDshBin);
     const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
     const useNpmDsh = paths.profileMode && hasNpmDsh;
-    const launchCommand = paths.nodeBin;
-    const launchArgs = useNpmDsh
-      ? [npmDshBin, "--profile", profileName]
-      : paths.profileMode
-        ? ["--import", "tsx", paths.entry, "--profile", profileName]
-        : ["--import", "tsx", paths.entry, configPath];
-
-    const harness = new DeepSeekHarness({
-      launch: {
-        command: launchCommand,
-        args: launchArgs,
-        cwd: useNpmDsh ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", profileName) : paths.harnessRoot,
-        env: {
-          ...runtimeEnv(paths, model),
-          // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）
-          ...(ws.cwd ? { DSH_CWD: ws.cwd } : {}),
-          // 老 entry+生成 yml 模式专用；profile 模式忽略（配置在 profile patch）
-          ...(paths.profileMode ? {} : { DSH_CORDIS_CONFIG: configPath }),
-          // profile 模式专用：Harness home 指向 mirach 数据目录（profiles/
-          // sessions/storages 都住这），web 面端口由 profile patch 的
-          // MIRACH_WEB_PORT 表达式读取
-          ...(paths.profileMode
-            ? {
-                DSH_HOME: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
-                MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
-                // 手机接入：web 面监听地址（Rust 侧从配置下发；127.0.0.1 = 仅本机）
-                MIRACH_WEB_HOST: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
-                DSH_EFFORT: effortNow,
-              }
-            : {}),
-        },
+    // 非 profile 模式（老 entry+生成 yml）：SDK 只认 profile 面602 —— 经 --patch 叠加生成配置。
+    // entry+configPath 组合已无 SDK 通道，回退路径用 patches: [configPath]（同为 overlay yml）。
+    const harnessOptions = {
+      // 显式指定全局 npm 安装的引擎入口；未安装时由 SDK 按同版本依赖自解析
+      ...(useNpmDsh ? { dshBin: npmDshBin } : {}),
+      profile: paths.profileMode ? profileName : "mirach",
+      // 老 entry+生成 yml 模式：生成文件就是一份 overlay patch
+      ...(!paths.profileMode ? { patches: [configPath] } : {}),
+      // profile 模式：Harness home 指向 mirach 数据目录（profiles/sessions/storages 都住这）
+      dshHome: paths.profileMode
+        ? (process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"))
+        : undefined,
+      processCwd: useNpmDsh
+        ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", profileName)
+        : paths.harnessRoot,
+      env: {
+        ...runtimeEnv(paths, model),
+        // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）
+        ...(ws.cwd ? { DSH_CWD: ws.cwd } : {}),
+        // profile 模式专用：web 面端口由 profile patch 的 MIRACH_WEB_PORT 表达式读取
+        ...(paths.profileMode
+          ? {
+              DSH_HOME: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
+              MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
+              // 手机接入：web 面监听地址（Rust 侧从配置下发；127.0.0.1 = 仅本机）
+              MIRACH_WEB_HOST: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
+              DSH_EFFORT: effortNow,
+            }
+          : { DSH_CORDIS_CONFIG: configPath }),
       },
+      // 引擎冷启动（首启/升级后首次 boot 引擎图）可达 30s+；默认 10s 握手超时会在
+      // 引擎真正就绪前放弃 initialize。放宽到 120s。
+      initializeTimeoutMs: 120_000,
+      requestTimeoutMs: 120_000,
       cwd: cwdNow,
       // 握手 route：deepseek → deepseek-official（llm-deepseek），其余 → llm-pi-ai 路由
       provider: model.route,
       model: model.id,
-    });
+    };
+    const harness = new DeepSeekHarness(harnessOptions);
 
     const h: DshRuntimeHandle = {
       harness,

@@ -133,9 +133,9 @@ export async function subagentSetEnabled(kind: keyof typeof BACKEND_PKGS, enable
   const pkg = BACKEND_PKGS[kind];
   try {
     if (enable) {
-      lines.push(`dsh plugin add ${pkg}@0.1.2-alpha.4 …`);
+      lines.push(`dsh plugin add ${pkg}@alpha …`);
       try {
-        lines.push(await dshCli(`plugin --profile mirach add ${pkg}@0.1.2-alpha.4`));
+        lines.push(await dshCli(`plugin --profile mirach add ${pkg}@alpha`));
       } catch (err) {
         lines.push("CLI 失败：" + (err instanceof Error ? err.message : String(err)).slice(0, 200));
       }
