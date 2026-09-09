@@ -256,3 +256,11 @@ if (!MOCK && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     }))
     .catch(() => {});
 }
+
+// 自动感知（网关状态点不能是假按钮）：已连接时每 15s 真 RPC 往返探活，
+// 引擎僵死/退出即自动进入退避重连并更新状态点；未连接时由启动门/重连流程驱动。
+if (!MOCK && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+  window.setInterval(() => {
+    if ($gatewayState.get() === "open") void ensureEngineAlive();
+  }, 15_000);
+}

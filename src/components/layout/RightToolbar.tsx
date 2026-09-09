@@ -30,9 +30,11 @@ import { RIGHT_TOOLBAR_WIDTH } from "@/lib/layout";
 import { APP_VERSION } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/useTheme";
+import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
 import { useStore } from "@nanostores/react";
 import { $gatewayState, pingGateway } from "@/store/gateway";
+import { $kernelError, $kernelReady } from "@/store/kernel-ready";
 import { lockApp } from "@/store/password";
 import { getToolMenuActions, type PluginIcon } from "@/plugins/registry";
 import {
@@ -115,34 +117,43 @@ interface RightToolbarProps {
 }
 
 export function RightToolbar({ className, activePanel, onPanelChange }: RightToolbarProps) {
-  // 更新面板状态
+  // 更新面板状态：真实检查（sidecar update.check → npm alpha 通道）
   const [updateOpen, setUpdateOpen] = useState(false);
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "latest">("idle");
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "done" | "error">("idle");
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
   // 主题切换（浅色/深色两态）
   const { resolved, toggle } = useTheme();
   const isDark = resolved === "dark";
   // 网关/引擎状态（共享 store；真实模式启动探测 + 15s 轮询，mock 恒 open）
   const gatewayState = useStore($gatewayState);
+  // 内核（官方客户端栈）就绪：引擎连上 ≠ 对话可用，按钮必须两者都绿才显示已连接
+  const kernelReady = useStore($kernelReady);
+  const kernelError = useStore($kernelError);
+  const connected = gatewayState === "open" && kernelReady;
   // 锁定：调用 lockApp 走启动门（StartupGate → LoginPage；未设密码时登录页自动切「设置密码」模式）
   const lock = () => {
     lockApp();
   };
   const gwColor =
-    gatewayState === "open"
+    connected
       ? "#10B981"
-      : gatewayState === "connecting"
+      : gatewayState === "connecting" || (gatewayState === "open" && !kernelReady)
         ? "#F59E0B"
         : gatewayState === "error"
           ? "#EF4444"
           : "#D1D5DB";
   const gwTitle =
-    gatewayState === "open"
-      ? "引擎已连接（点击重新检测）"
-      : gatewayState === "connecting"
-        ? "正在连接引擎…"
-        : gatewayState === "error"
-          ? "引擎未连接（点击重试）"
-          : "引擎未检测（点击检测）";
+    connected
+      ? "引擎与对话内核已连接（点击重新检测）"
+      : gatewayState === "open" && !kernelReady
+        ? `引擎已连接，对话内核未就绪${kernelError ? `：${kernelError}` : ""}（点击重试）`
+        : gatewayState === "connecting"
+          ? "正在连接引擎…"
+          : gatewayState === "error"
+            ? "引擎未连接（点击重试）"
+            : "引擎未检测（点击检测）";
   const gatewayItem: ToolItem = MOCK
     ? { id: "gateway", icon: Plug, label: "网关状态", color: "#009292", title: "网关：连接正常（mock）" }
     : { id: "gateway", icon: Plug, label: "网关状态", color: gwColor, title: gwTitle };
@@ -291,20 +302,63 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
               <div className="panel-glass menu-anim absolute right-full top-1/2 z-40 mr-2 w-56 -translate-y-1/2 rounded-xl p-3">
                 <p className="text-xs font-medium text-[#303030]">Mirach Harness Ultra</p>
                 <p className="mt-1 text-xs text-muted-foreground">当前版本：v{APP_VERSION}</p>
+                {updateInfo && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    引擎：v{updateInfo.current}
+                    {updateInfo.hasUpdate ? ` → v${updateInfo.latest} 可更新` : "（最新）"}
+                  </p>
+                )}
+                {updateError && <p className="mt-1 text-xs text-[#EF4444]">{updateError}</p>}
                 <button
-                  className="mt-2.5 w-full rounded-md bg-foreground px-3 py-1.5 text-xs text-background transition-colors hover:bg-foreground/90"
+                  className="mt-2.5 w-full rounded-md bg-foreground px-3 py-1.5 text-xs text-background transition-colors hover:bg-foreground/90 disabled:opacity-60"
+                  disabled={updateState === "checking" || updating}
                   onClick={() => {
-                    if (updateState === "idle") {
+                    if (updating) return;
+                    // 真实检查：sidecar update.check（npm alpha 通道）
+                    if (updateState === "idle" || updateState === "error") {
                       setUpdateState("checking");
-                      window.setTimeout(() => setUpdateState("latest"), 1000);
+                      setUpdateError(null);
+                      void getApi()
+                        .checkEngineUpdate()
+                        .then((info) => {
+                          setUpdateInfo(info);
+                          setUpdateState("done");
+                        })
+                        .catch((e) => {
+                          setUpdateError(e instanceof Error ? e.message : String(e));
+                          setUpdateState("error");
+                        });
+                      return;
+                    }
+                    // 已检查且有新版本 → 一键更新引擎
+                    if (updateInfo?.hasUpdate) {
+                      setUpdating(true);
+                      void getApi()
+                        .updateEngine()
+                        .then(() => {
+                          setUpdateError(null);
+                          setUpdating(false);
+                          setUpdateState("idle");
+                          setUpdateInfo(null);
+                        })
+                        .catch((e) => {
+                          setUpdateError(e instanceof Error ? e.message : String(e));
+                          setUpdating(false);
+                        });
                     }
                   }}
                 >
                   {updateState === "checking"
                     ? "检查中…"
-                    : updateState === "latest"
-                      ? "已是最新版本 ✓"
-                      : "检查更新"}
+                    : updating
+                      ? "更新中…"
+                      : updateInfo?.hasUpdate
+                        ? `更新引擎到 v${updateInfo.latest}`
+                        : updateState === "done"
+                          ? "引擎已是最新 ✓（点击重查）"
+                          : updateState === "error"
+                            ? "重试检查更新"
+                            : "检查更新"}
                 </button>
               </div>
             </>

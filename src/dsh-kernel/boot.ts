@@ -19,6 +19,9 @@ import TypertRegistry from "@deepseek-ai/dsh-typert-registry";
 import "@deepseek-ai/dsh-client-connection/client";
 import "@deepseek-ai/dsh-api-gateway/client";
 import "@deepseek-ai/dsh-api-remotes/client";
+// ── 官方附件上传（ctx.fileUpload）：0.1.5 起 api-session-controller 的 inject
+//    含 'fileUpload'——缺它 ctx.sessions 永不注册（内核"未连接"的根因）。──
+import "@deepseek-ai/dsh-client-file-upload/client";
 import "@deepseek-ai/dsh-api-session-controller/client";
 // ── 官方 workspace 服务（ctx.workspaces）：ui-workspace/ui-conversation 的
 //    inject 依赖（uiWorkspace / workspaces）——缺它 ui-conversation 整插件
@@ -101,6 +104,7 @@ import type { ReactNode } from "react";
 import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
+import { setKernelReady } from "@/store/kernel-ready";
 import { bundleRequire } from "./module-loader-shim";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { registerMirachSections } from "./mirach-sections";
@@ -113,6 +117,8 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-connection/client",
   "@deepseek-ai/dsh-api-gateway/client",
   "@deepseek-ai/dsh-api-remotes/client",
+  // 0.1.5：session-controller 注入 fileUpload（附件上传）——必须先于它激活
+  "@deepseek-ai/dsh-client-file-upload/client",
   "@deepseek-ai/dsh-api-session-controller/client",
   "@deepseek-ai/dsh-api-workspace-controller/client",
   // ── 官方 client UI 栈（slots/locale/uiSession/uiConversation/ChatView） ──
@@ -719,6 +725,8 @@ async function bootKernelMirrorOnce(): Promise<void> {
   slotCache = null;
   sectionsCache = null;
   entriesCache = null;
+  // 就绪门信号复位：本轮 boot 完成前内核视为未就绪（启动页/网关状态点消费）
+  setKernelReady(false, null);
   const pluginFails: string[] = [];
   try {
     const ctx = new Context();
@@ -787,18 +795,30 @@ async function bootKernelMirrorOnce(): Promise<void> {
 
     const sessions = (ctx as unknown as { sessions: KernelSessions }).sessions;
     if (!sessions) {
-      console.warn("[dsh-kernel] ctx.sessions missing 鈥?kernel inactive");
+      // 内核未激活：明确标记未就绪 + 原因（启动页会显示；不再静默停在占位）
+      const reason = pluginFails.length > 0
+        ? `ctx.sessions 未注册（插件失败：${pluginFails.slice(0, 2).join("; ")}）`
+        : "ctx.sessions 未注册（内核插件依赖未满足）";
+      console.warn("[dsh-kernel] %s", reason);
+      setKernelReady(false, reason);
       return;
     }
     await sessions.refresh().catch(() => {});
 
-    // 鎵撳紑鍒楄〃閲岀殑绗竴涓細璇濓紙鏃犱細璇濆垯鍐呮牳浠嶄繚鎸佽繛鎺ョ瓑寰?api-session/added锛?
+    // 打开列表里的第一个会话（无会话则内核仍保持连接等 api-session/added）
     const first = firstSessionId(sessions);
     if (first) sessions.open(first);
 
     logInfo("kernel booted: sessions=%d", countSessions(sessions));
+    // 内核就绪：ctx.sessions 可用 + 官方根树可渲染 → 放行主界面（启动门消费）
+    if (nativeRootTree() !== null) {
+      setKernelReady(true, null);
+    } else {
+      setKernelReady(false, "官方根树未渲染（slots.renderSlot('root') 为空）");
+    }
   } catch (err) {
     console.warn("[dsh-kernel] boot failed (sidecar 管道继续兜底):", err);
+    setKernelReady(false, err instanceof Error ? err.message : String(err));
     // 向上抛：kernelSend 的回退路径会把原因写进聊天区（不再静默）
     throw err instanceof Error ? err : new Error(String(err));
   }

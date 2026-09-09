@@ -9,18 +9,38 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { $desktopBoot } from "@/store/boot";
+import { $kernelError, $kernelReady } from "@/store/kernel-ready";
 
 const TARGET = "正在连接引擎…";
 const RANDOM_CHARS = "01ABCDEF#$%&*+=?<>";
 
 export function GatewayConnectingOverlay() {
   const boot = useStore($desktopBoot);
+  const kernelReady = useStore($kernelReady);
+  const kernelError = useStore($kernelError);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     const t = window.setInterval(() => setTick((v) => v + 1), 70);
     return () => window.clearInterval(t);
   }, []);
+
+  // 内核激活失败/未就绪时的自愈：引擎已就绪仍不见内核 → 每 5s 重试一次
+  // bootKernelMirror（boot 内部有单飞去重；成功置 $kernelReady，门自动放行）。
+  useEffect(() => {
+    if (kernelReady) return;
+    let tries = 0;
+    const t = window.setInterval(() => {
+      if (tries++ > 12) {
+        window.clearInterval(t);
+        return;
+      }
+      void import("@/dsh-kernel/boot")
+        .then((m) => m.bootKernelMirror())
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(t);
+  }, [kernelReady]);
 
   // 每 3 tick 解码一个字符：尚未解码的显示随机符号
   const decoded = TARGET.split("")
@@ -47,6 +67,12 @@ export function GatewayConnectingOverlay() {
           />
         </div>
         <p className="text-[11px] tabular-nums text-muted-foreground">{boot.progress}%</p>
+        {/* 内核（官方客户端栈）真实状态：引擎就绪后仍在这里等它 */}
+        {!kernelReady && (
+          <p className="max-w-72 text-center text-[11px] text-[#C7CCE8]/70">
+            {kernelError ?? "正在激活官方对话内核…"}
+          </p>
+        )}
       </div>
     </div>
   );
