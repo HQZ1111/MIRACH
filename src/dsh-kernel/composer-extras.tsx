@@ -20,12 +20,10 @@
  */
 
 import { useEffect, useState } from "react";
-import type { ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { useStore } from "@nanostores/react";
 import { Ear, EarOff, Mic, Square, TerminalSquare, Volume2, VolumeX } from "lucide-react";
 import { $autoSpeak } from "@/store/chat";
-import { StatsLine } from "@/components/chat/StatsLine";
 import { $wakeWord, toggleWakeWord } from "@/plugins/plugin-wake-word";
 import { logInfo, logWarn } from "./kernel-log";
 
@@ -525,27 +523,11 @@ export function MirachAutoGlyph(): null {
 }
 
 /**
- * 会话统计条（官方 composer.dock 槽）：第 N 轮 · 步数、工作/LLM/工具耗时、
- * 首字延迟、tok/s、缓存命中、上下文用量——全部来自 $assemblyProjections
- * 投影（StatsLine 自读），这里只负责定位与限宽（跟随输入框宽度居中）。
- */
-function ComposerStatsDock(): ReactElement | null {
-  return (
-    <div className="pointer-events-none flex justify-center px-5 pt-1">
-      <div className="w-full min-w-0" style={{ maxWidth: "var(--dsh-chat-content-width, 852px)" }}>
-        <StatsLine msgs={[]} />
-      </div>
-    </div>
-  );
-}
-
-/**
  * 注册 mirach 附加控件进官方输入条子槽（boot 后调用一次；幂等——
  * 重复注册被官方 register 拒绝并告警）。
  * left: 终端（权限预设右边，order 100 排官方后）
  * right: 听写/朗读/唤醒（模型右边、用量左边，负 order 排官方模型前；
  *        用量环再经 mirach CSS order 前移到模型左边——官方 DOM 固定模型→用量）
- * dock: 会话统计条（输入框下方）
  *
  * 幂等保护：boot 失败重试会再次进入本函数，具名监听器 + 模块级标志保证
  * voice-request 只挂一次（重复挂载 = toggleDictation 双触发 = 开即关）。
@@ -573,15 +555,10 @@ export function registerComposerExtras(ctx: Context): void {
         RightExtras as never,
       );
     });
-    // 会话统计条（第 N 轮 · 步数 / token 速度 / 缓存命中）：挂官方输入框下方
-    // 的 composer.dock 槽——切官方树前由 MainPanel 绝对定位渲染，切树时丢失，
-    // 现在回到官方槽位（数据全部来自装配层投影 $assemblyProjections）。
-    slots.inject("conversation.composer.dock", () => {
-      ctx.slots.register(
-        { name: "conversation.composer.dock", id: "mirach-stats", order: 10 },
-        ComposerStatsDock as never,
-      );
-    });
+    // 会话统计条不再由 mirach 注册：官方 ui-chat 的 StatsPills（同一
+    // composer.dock 槽）现已生效——此前它缺席是因为 ui-chat 整插件 pending
+    // （缺 sidebarRight），mirach 的 StatsLine 只是临时替代，两个一起出现会
+    // 重复。统计口径以官方投影（sessionStats/tokenUsage）为准。
     // 空输入点击发送 = 语音（官方 InputBar 空态时覆盖层派发该事件；具名监听只挂一次）
     if (voiceRequestHandler === null) {
       voiceRequestHandler = () => { toggleDictation(); };
