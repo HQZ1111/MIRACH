@@ -10,6 +10,7 @@ import * as CORDIS from "@deepseek-ai/cordis";
 import * as CLIENT_STORE from "@deepseek-ai/dsh-client-store";
 import * as UI_SLOTS from "@deepseek-ai/dsh-client-ui-slots";
 import * as UI_PRIMITIVES from "@deepseek-ai/dsh-client-ui-primitives";
+import * as UI_DOCKKIT from "@deepseek-ai/dsh-client-ui-dockkit";
 import * as REACT from "react";
 import * as REACT_JSX from "react/jsx-runtime";
 import * as REACT_DOM from "react-dom";
@@ -27,6 +28,8 @@ const PLATFORM: Record<string, unknown> = {
   // 官方 bundle 内部组件的平台外部依赖（缺一个内核 boot 即挂）
   "@deepseek-ai/dsh-client-ui-slots": UI_SLOTS,
   "@deepseek-ai/dsh-client-ui-primitives": UI_PRIMITIVES,
+  // 官方右侧栏（ui-sidebar-right）的停靠套件依赖（纯库，非 bundle）
+  "@deepseek-ai/dsh-client-ui-dockkit": UI_DOCKKIT,
   clsx: CLSX,
   react: REACT,
   "react/jsx-runtime": REACT_JSX,

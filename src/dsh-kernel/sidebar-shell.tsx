@@ -271,9 +271,11 @@ function initSidebarActions(ctx: Context): SidebarActions {
     ?? (typeof ctxAny.get === "function" ? (ctxAny.get("uiWorkspace") as SolidUiWorkspace | undefined) : undefined);
   const workspaces = ctxAny.workspaces
     ?? (typeof ctxAny.get === "function" ? (ctxAny.get("workspaces") as SolidWorkspaces | undefined) : undefined);
-  // 工作区快照读取器：官方 workspace-controller 的 list 快照（WorkspaceView[]）
-  const wsList = (workspaces as unknown as { list?: { (): WorkspaceSnapshotLike } } | undefined)?.list;
-  workspaceSnapshotGetter = wsList ? () => wsList.call(workspaces) : null;
+  // 工作区快照读取器：官方 workspace-controller 的 list 是快照源对象
+  // （WorkspaceSource：getSnapshot()/subscribe()，不是方法）
+  const wsSource = (workspaces as unknown as { list?: { getSnapshot?: () => WorkspaceSnapshotLike } } | undefined)?.list;
+  workspaceSnapshotGetter =
+    typeof wsSource?.getSnapshot === "function" ? () => wsSource.getSnapshot!() ?? null : null;
   return {
     open: (id) => { sessions?.open?.(id); },
     rename: async (id, title) => {

@@ -137,10 +137,13 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
   // ── 官方右侧栏栈（0.1.5）：多标签/分栏/全屏的官方实现 ──
-  "@deepseek-ai/dsh-client-resources/client",
-  "@deepseek-ai/dsh-client-ui-sidebar-right/client",
-  "@deepseek-ai/dsh-client-ui-sidebar-files/client",
-  "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client",
+  // 暂缓激活：官方右侧栏需要把 mirach 面板注册进 ctx.sidebarRightTabs 并接入
+  // 官方帧的右列（否则其注入面未满足，内核根树不构建 → 对话区停在占位）。
+  // 依赖与 bundle 已就位（package.json + 上方 import），面板迁移完成后在此启用。
+  // "@deepseek-ai/dsh-client-resources/client",
+  // "@deepseek-ai/dsh-client-ui-sidebar-right/client",
+  // "@deepseek-ai/dsh-client-ui-sidebar-files/client",
+  // "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client",
   // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
   "@deepseek-ai/dsh-client-ui-input-trigger/client",
   "@deepseek-ai/dsh-client-ui-commands/client",
