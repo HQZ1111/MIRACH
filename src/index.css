@@ -1,6 +1,4 @@
 @import "tailwindcss";
-/* zosma 简约对话档专用样式（对话风格 = 简约；令牌/组件 CSS 全套移植） */
-@import "./components/zosma/minimal.css";
 
 /* ===== Design Tokens ===== */
 

@@ -317,14 +317,12 @@ interface ComposerProps {
   onSend?: (text: string) => void;
   /** 本地独立模式：发送只走 onSend，不写主对话 store、不流式提交（辅助对话等临时会话用） */
   standalone?: boolean;
-  /** 简约档：输入外壳套用 zosma 玻璃样式（composer-glass），图标与逻辑不变，只换 ui */
-  glass?: boolean;
   /** 官方模型/模式接线的目标会话（成员会话 member-<id> 等；缺省 = 活跃会话） */
   sessionScope?: string;
 }
 
 // memo：props 不变时跳过重渲染（列拖拽等父级宽度变化不应重渲染这个很重的组件）
-export const Composer = memo(function Composer({ terminalOpen = false, onToggleTerminal, onSend, standalone = false, glass = false, sessionScope }: ComposerProps) {
+export const Composer = memo(function Composer({ terminalOpen = false, onToggleTerminal, onSend, standalone = false, sessionScope }: ComposerProps) {
   const { trigger } = useHaptics();
   // 流式回复消费（真实模式经 Tauri Channel；事件 → 聊天区增量写入）
   const streamReply = useStreamingReply();
@@ -1050,12 +1048,9 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
           ))}
         </div>
       )}
-      {/* 输入外壳：默认档白底描边；简约档（glass）套用 zosma composer-glass 玻璃样式，
-          图标与逻辑完全不变，只换 ui（聚焦高亮由 composer-glass:focus-within 提供） */}
+      {/* 输入外壳：白底描边 + 聚焦高亮 */}
       <div
-        className={glass
-          ? "composer-glass relative rounded-2xl px-3 pt-2 pb-1.5"
-          : "relative rounded-xl border border-border bg-white px-3 pt-2 pb-1.5 transition-colors focus-within:border-[#303030]/30 focus-within:ring-2 focus-within:ring-[#303030]/10"}
+        className="relative rounded-xl border border-border bg-white px-3 pt-2 pb-1.5 transition-colors focus-within:border-[#303030]/30 focus-within:ring-2 focus-within:ring-[#303030]/10"
         onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
         onDragLeave={() => setDragActive(false)}
         onDrop={handleDrop}
