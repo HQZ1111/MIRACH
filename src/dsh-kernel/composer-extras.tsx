@@ -20,10 +20,12 @@
  */
 
 import { useEffect, useState } from "react";
+import type { ReactElement } from "react";
 import type { Context } from "@deepseek-ai/cordis";
 import { useStore } from "@nanostores/react";
 import { Ear, EarOff, Mic, Square, TerminalSquare, Volume2, VolumeX } from "lucide-react";
 import { $autoSpeak } from "@/store/chat";
+import { StatsLine } from "@/components/chat/StatsLine";
 import { $wakeWord, toggleWakeWord } from "@/plugins/plugin-wake-word";
 import { logInfo, logWarn } from "./kernel-log";
 
@@ -388,9 +390,6 @@ export function ComposerRowAdaptive(): null {
     let downStreak = 0;
     let observedRow: Element | null = null;
 
-    const ellipsized = (el: Element | null): boolean =>
-      el !== null && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1;
-
     const tick = (): void => {
       raf = 0;
       const card = area.querySelector("[data-composer-card]") as HTMLElement | null;
@@ -402,57 +401,42 @@ export function ComposerRowAdaptive(): null {
         ro.observe(row);
       }
       const trailing = row.querySelector("[class*='_trailing']");
-      const modelBtn = trailing?.querySelector("button[class*='_trigger'][aria-haspopup='menu']") ?? null;
-      const modelLabel = modelBtn?.querySelector("[class*='_triggerLabel']") ?? null;
-      const modelEffort = modelBtn?.querySelector("[class*='_triggerEffort']") ?? null;
       const modes = row.querySelector("[class*='_modes']");
       const accessLabel = modes?.querySelector("button[class*='_trigger'] [class*='_triggerLabel']") ?? null;
-      if (trailing === null || modelBtn === null || modes === null || accessLabel === null) return;
+      if (trailing === null || modes === null || accessLabel === null) return;
 
-      // 行内剩余空间（padding+gap 用 16px 估算，迟滞 margin 主导精度）
-      const free =
+      // 单级折叠：官方模型钮自带容器查询图标态（_triggerIcon，容器 ≤360px 时
+      // 自动只显示图标并隐藏文字）——mirach 不再自造模型图标（会与官方图标
+      // 重复成"两个图标"）。这里只处理自定义权限预设 "Mirach Auto" 没有官方
+      // 字形的情况：空间不足时把模式文字收成图标（CSS 按 aria-label 补闪电）。
+      //
+      // 稳定余量：把当前折叠隐藏掉的文字宽度加回 trailing 实测宽，得到"若展开"
+      // 的占用——折叠/展开本身不改变 free，消除来回抖动。
+      const hiddenAccess = stage >= 1 ? accessLabel.scrollWidth : 0;
+      const freeExpanded =
         row.clientWidth -
         (tools as HTMLElement).offsetWidth -
-        (trailing as HTMLElement).offsetWidth -
+        ((trailing as HTMLElement).offsetWidth + hiddenAccess) -
         16;
 
-      // 升/回退都要求连续两帧成立：菜单弹出等瞬时重排只产生一次 tick，
-      // 不会误折叠；拖拽是连续事件，实际折叠仍即时
+      const HYST = 12;
       let next = stage;
       if (stage === 0) {
-        const hot = ellipsized(modelLabel) || ellipsized(modelEffort);
-        if (hot) {
+        if (freeExpanded < 0) {
           upStreak += 1;
           if (upStreak >= 2) { next = 1; upStreak = 0; }
         } else upStreak = 0;
-      } else if (stage === 1) {
-        // stage 2 条件改为"行内剩余空间不足"（原先依赖 accessLabel 被 ellipsis，
-        // 但 flex 收缩下它可能永远不触发 → 文字被挤出输入框）。图标态保留约 20px。
-        const accessCost = Math.max(0, (accessLabel?.scrollWidth ?? 0) - 20);
-        if (free < accessCost + 4) {
-          upStreak += 1;
-          if (upStreak >= 2) { next = 2; upStreak = 0; }
-        } else {
-          upStreak = 0;
-          // 回退 0：恢复模型文字的代价 = 文字自然宽 - 图标态多占的宽（icon14+gap5+pad5≈24）
-          const cost = (modelLabel?.scrollWidth ?? 0) + (modelEffort?.scrollWidth ?? 0) - 24;
-          if (free - cost > 8) {
-            downStreak += 1;
-            if (downStreak >= 2) { next = 0; downStreak = 0; }
-          } else downStreak = 0;
-        }
       } else {
-        // 回退 1：恢复模式文字的代价 = 其自然宽
-        if (free - accessLabel.scrollWidth > 8) {
+        if (freeExpanded > accessLabel.scrollWidth + HYST) {
           downStreak += 1;
-          if (downStreak >= 2) { next = 1; downStreak = 0; }
+          if (downStreak >= 2) { next = 0; downStreak = 0; }
         } else downStreak = 0;
       }
 
       if (next !== stage) {
         stage = next;
         if (stage === 0) delete card.dataset.mirachCollapse;
-        else card.dataset.mirachCollapse = stage === 1 ? "model" : "model mode";
+        else card.dataset.mirachCollapse = "mode";
       }
     };
 
@@ -541,11 +525,27 @@ export function MirachAutoGlyph(): null {
 }
 
 /**
+ * 会话统计条（官方 composer.dock 槽）：第 N 轮 · 步数、工作/LLM/工具耗时、
+ * 首字延迟、tok/s、缓存命中、上下文用量——全部来自 $assemblyProjections
+ * 投影（StatsLine 自读），这里只负责定位与限宽（跟随输入框宽度居中）。
+ */
+function ComposerStatsDock(): ReactElement | null {
+  return (
+    <div className="pointer-events-none flex justify-center px-5 pt-1">
+      <div className="w-full min-w-0" style={{ maxWidth: "var(--dsh-chat-content-width, 852px)" }}>
+        <StatsLine msgs={[]} />
+      </div>
+    </div>
+  );
+}
+
+/**
  * 注册 mirach 附加控件进官方输入条子槽（boot 后调用一次；幂等——
  * 重复注册被官方 register 拒绝并告警）。
  * left: 终端（权限预设右边，order 100 排官方后）
  * right: 听写/朗读/唤醒（模型右边、用量左边，负 order 排官方模型前；
  *        用量环再经 mirach CSS order 前移到模型左边——官方 DOM 固定模型→用量）
+ * dock: 会话统计条（输入框下方）
  *
  * 幂等保护：boot 失败重试会再次进入本函数，具名监听器 + 模块级标志保证
  * voice-request 只挂一次（重复挂载 = toggleDictation 双触发 = 开即关）。
@@ -571,6 +571,15 @@ export function registerComposerExtras(ctx: Context): void {
       ctx.slots.register(
         { name: "conversation.input.right", id: "mirach-voice-extras", order: -50 },
         RightExtras as never,
+      );
+    });
+    // 会话统计条（第 N 轮 · 步数 / token 速度 / 缓存命中）：挂官方输入框下方
+    // 的 composer.dock 槽——切官方树前由 MainPanel 绝对定位渲染，切树时丢失，
+    // 现在回到官方槽位（数据全部来自装配层投影 $assemblyProjections）。
+    slots.inject("conversation.composer.dock", () => {
+      ctx.slots.register(
+        { name: "conversation.composer.dock", id: "mirach-stats", order: 10 },
+        ComposerStatsDock as never,
       );
     });
     // 空输入点击发送 = 语音（官方 InputBar 空态时覆盖层派发该事件；具名监听只挂一次）

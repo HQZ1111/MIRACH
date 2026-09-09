@@ -27,6 +27,7 @@ import { playSpeechText } from "@/lib/voice-playback";
 import { dispatchNativeNotification } from "@/store/native-notifications";
 import { $activeSessionId } from "@/store/session";
 import { pushConsole } from "@/store/console";
+import { pushToast } from "@/store/toast";
 import type { MirachEvent } from "@/lib/api/types";
 
 /** 引擎工具名 → ToolCall.category（未知归 other） */
@@ -118,7 +119,9 @@ export function handleMirachEvent(
       appendSystemMessage(`⚠️ ${e.message}`);
       setLastFailedPrompt(opts.sendText);
       setAgentBusy(false, opts.requestSession);
-      // 原生 OS 通知（后台错误；hermes turnError 语义）
+      // 主对话区现在是官方树（不渲染 mirach 转录），错误必须另给出路：
+      // 应用内 toast（显著、可复制）+ 原生 OS 通知（hermes turnError 语义）。
+      pushToast(`⚠️ ${e.message}`, "error", 12_000);
       dispatchNativeNotification({
         kind: "turnError",
         title: "任务失败",

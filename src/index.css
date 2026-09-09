@@ -768,32 +768,7 @@ html.dark .chat-backdrop-on {
    一步：模型 → 模式 → 省略兜底，断点随内容（模型名长短）自动变化。
    折叠态 label 用 max-width:0 而非 display:none——元素留场可测自然宽
    （scrollWidth），观察器据此逐级回退。 */
-[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] {
-  padding-left: 10px;
-  gap: 5px;
-}
-[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] [class*="_root"]:has(button[aria-haspopup="menu"]) {
-  min-width: 52px;
-}
-[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] [class*="_triggerLabel"],
-[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"] [class*="_triggerEffort"] {
-  max-width: 0;
-  overflow: hidden;
-}
-[data-composer-card][data-mirach-collapse~="model"] [class*="_trailing"] button[class*="_trigger"][aria-haspopup="menu"]::before {
-  content: "";
-  width: 14px;
-  height: 14px;
-  flex: none;
-  background: currentColor;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='16' height='16' rx='2'/%3E%3Crect x='9' y='9' width='6' height='6'/%3E%3Cpath d='M15 2v2'/%3E%3Cpath d='M15 20v2'/%3E%3Cpath d='M9 2v2'/%3E%3Cpath d='M9 20v2'/%3E%3Cpath d='M2 9h2'/%3E%3Cpath d='M2 15h2'/%3E%3Cpath d='M20 9h2'/%3E%3Cpath d='M20 15h2'/%3E%3C/svg%3E") center / contain no-repeat;
-}
 /* stage "model" 起模式 chip 才允许收缩（可测省略）→ 观察器据此升 "mode" */
-[data-composer-card][data-mirach-collapse~="model"] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 [data-composer-card][data-mirach-collapse~="mode"] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
   max-width: 0;
   overflow: hidden;
@@ -1450,9 +1425,7 @@ html.dark .dsh-native-area {
 .dsh-native-area [data-composer-card] [class*="_modes"] > * {
   min-width: 0 !important;
 }
-.dsh-native-area [data-composer-card] [class*="_trailing"] {
-  overflow: hidden;
-}
+/* trailing 不裁剪：overflow:hidden 会截断发送按钮的视觉（用户报"按钮被截断"） */
 .dsh-native-area [data-composer-card] [class*="_trailing"] button[class*="_trigger"] [class*="_triggerLabel"],
 .dsh-native-area [data-composer-card] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
   overflow: hidden;
