@@ -83,9 +83,10 @@ import "@deepseek-ai/dsh-client-ui-attachment/client";
 import "@deepseek-ai/dsh-client-ui-reference/client";
 // ── 官方品牌标（sidebar.brand.mark / conversation.hero.brand.mark 的注册者） ──
 import "@deepseek-ai/dsh-client-ui-brand-official/client";
-// 官方工作区目录选择器（设置/工作区浏览的弹层本体；native 变体的
-// directoryFlow 槽与 workspace 根注册冲突，web 面只装 browse 变体）
-import "@deepseek-ai/dsh-client-ui-directory-picker-browse/client";
+// 官方工作区目录选择器：native 变体（系统原生目录选择框——官方 desktop 同款；
+// browse 变体是应用内自绘浏览器）。引擎侧配套钉 dsh-host-directory-picker-native
+// （~/.mirach/profiles/mirach/cordis.patch.yml）。
+import "@deepseek-ai/dsh-client-ui-directory-picker-native/client";
 // ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行）──
 // 之前因"设置页冻结"回退——根因实为 uSES 快照不稳定 + 内核未激活，与包无关
 import "@deepseek-ai/dsh-client-ui-skill/client";
@@ -167,7 +168,7 @@ const KERNEL_PLUGINS = [
   "@deepseek-ai/dsh-client-ui-attachment/client",
   "@deepseek-ai/dsh-client-ui-reference/client",
   "@deepseek-ai/dsh-client-ui-brand-official/client",
-  "@deepseek-ai/dsh-client-ui-directory-picker-browse/client",
+  "@deepseek-ai/dsh-client-ui-directory-picker-native/client",
   // ── 能力包官方栈（skills/subagents/审批/用户提问/产物/工作流运行） ──
   "@deepseek-ai/dsh-client-ui-skill/client",
   "@deepseek-ai/dsh-client-ui-subagent/client",
