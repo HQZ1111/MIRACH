@@ -1,0 +1,231 @@
+/**
+ * kernel-bridge — 官方客户端内核（__DSH_TRANSPORT__）的宿主传输桥
+ *
+ * 打包态（tauri build）前端源是 http://tauri.localhost，官方内核的
+ *   - unary RPC：POST {location.origin}/api/<endpoint>
+ *   - 事件流：WS {location.origin}/api/remote.mux
+ * 都落在 Tauri 资源协议上（/api/* 返回 index.html，WS 直接连接被拒）。
+ * 引擎的浏览器信任栅栏（packages/client/connection/src/api-request-trust.ts）
+ * 又要求 Host 为 loopback/trusted 且 Origin === Host、sec-fetch-site ≠ cross-site
+ * —— 浏览器跨源请求无法满足，官方桌面壳的做法是把请求交给宿主进程（Electron
+ * main）代发。mirach 的宿主是 sidecar：本模块在 Node 侧以 loopback + 官方
+ * browser-session cookie 访问引擎（与 rpc-http.ts 同一鉴权路径），
+ * 帧经 stdout JSONL 交 Rust 转 tauri::ipc::Channel 回前端（dsh_relay）。
+ *
+ * 协议（stdin → stdout）：
+ *   in : {"type":"http_proxy","id","path","method","headers":[[k,v]],"bodyBase64"?}
+ *   out: {"type":"result","id","data":{status,headers,bodyBase64}} | error 信封
+ *   in : {"type":"mux_open","id","endpoint","payload"}
+ *   out: {"type":"result","id"}（WS 已打开且 open 帧已发）
+ *        {"type":"mux","id","frame":<RemoteStreamServerMessage>}
+ *        {"type":"mux_close","id","reason"}
+ *   in : {"type":"mux_close","id"}（前端取消/载体回收）
+ */
+
+import * as dshAuth from "../../shared/dsh-auth.mjs";
+import { coreBase } from "./rpc-http.js";
+import { log, logWarn, send } from "./protocol.js";
+
+/** 逻辑流 id → 物理 WS（一次 openStream = 一条 WS；mux 协议只有 open/cancel）。 */
+const sockets = new Map<string, WebSocket>();
+/** 当前页面世代：页面重载后新世代的首个 mux_open 回收上一代遗留的 WS。 */
+let currentPageId = "";
+
+function authHeaders(): { cookie: string; origin: string } | null {
+  const secret = dshAuth.readSessionSecret();
+  if (secret === undefined) return null;
+  const base = coreBase();
+  return { cookie: dshAuth.mintCookie(new URL(base).host, secret), origin: base };
+}
+
+interface ProxyRequest {
+  id: string;
+  path?: string;
+  method?: string;
+  headers?: [string, string][];
+  bodyBase64?: string | null;
+}
+
+/** 一次 unary RPC 代发：结果信封带 status/headers/bodyBase64（前端合成 Response）。 */
+export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
+  const id = cmd.id;
+  const path = typeof cmd.path === "string" ? cmd.path : "";
+  // 只代发引擎面（内核只会打 /api/*；/dsh-pocket 是社区插件的同源 RPC）
+  if (!path.startsWith("/api/") && !path.startsWith("/dsh-pocket/")) {
+    send({ type: "error", id, message: `kernel bridge: refusing non-engine path ${path.slice(0, 80)}` });
+    return;
+  }
+  const auth = authHeaders();
+  if (auth === null) {
+    send({ type: "error", id, message: "kernel bridge: browser-session secret 未配置（引擎未初始化）" });
+    return;
+  }
+  const base = coreBase();
+  const headers = new Headers();
+  for (const [name, value] of cmd.headers ?? []) {
+    // 宿主代发：逐跳头与浏览器伪造头一律丢弃，Host/Cookie/Origin 由本层重建
+    const lower = name.toLowerCase();
+    if (lower === "host" || lower === "cookie" || lower === "origin" || lower === "referer") continue;
+    try {
+      headers.append(name, value);
+    } catch {
+      /* 非法头名丢弃（Headers 会抛） */
+    }
+  }
+  headers.set("cookie", auth.cookie);
+  headers.set("origin", auth.origin);
+  const body = cmd.bodyBase64 ? Buffer.from(cmd.bodyBase64, "base64") : undefined;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const response = await fetch(`${base}${path}`, {
+      method: cmd.method ?? "GET",
+      headers,
+      ...(body === undefined ? {} : { body }),
+      signal: controller.signal,
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    send({
+      type: "result",
+      id,
+      data: {
+        status: response.status,
+        headers: [...response.headers.entries()],
+        bodyBase64: bytes.toString("base64"),
+      },
+    });
+  } catch (err) {
+    logWarn("kernel bridge: http proxy %s failed: %s", path, err instanceof Error ? err.message : String(err));
+    send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+interface MuxOpenRequest {
+  id: string;
+  endpoint?: string;
+  payload?: unknown;
+  /** 前端页面世代 id：换代（重载）时回收上一代全部 WS。 */
+  pageId?: string;
+}
+
+/** 关闭一条逻辑流：通知前端 + 关闭物理 WS（幂等；事件回调按存在性去重）。 */
+function closeSocket(id: string, reason: string): void {
+  const ws = sockets.get(id);
+  if (ws === undefined) return;
+  sockets.delete(id);
+  try {
+    ws.close(1000, reason.slice(0, 100));
+  } catch {
+    /* 已关闭 */
+  }
+  send({ type: "mux_close", id, reason });
+}
+
+/** 打开一条逻辑流：物理 WS 连引擎 mux，open 帧随即发出，随后帧走 stdout。 */
+export function handleMuxOpen(cmd: MuxOpenRequest): void {
+  const id = cmd.id;
+  const endpoint = typeof cmd.endpoint === "string" ? cmd.endpoint : "";
+  if (!endpoint) {
+    send({ type: "error", id, message: "kernel bridge: mux_open requires endpoint" });
+    return;
+  }
+  // 页面重载：旧页面的生成器已被销毁，不会再来 mux_close——新世代首开时回收
+  if (typeof cmd.pageId === "string" && cmd.pageId !== currentPageId) {
+    if (currentPageId !== "" && sockets.size > 0) {
+      log("kernel bridge: page generation changed — closing %d stale mux sockets", sockets.size);
+      for (const stale of [...sockets.keys()]) closeSocket(stale, "page reloaded");
+    }
+    currentPageId = cmd.pageId;
+  }
+  const auth = authHeaders();
+  if (auth === null) {
+    send({ type: "error", id, message: "kernel bridge: browser-session secret 未配置（引擎未初始化）" });
+    return;
+  }
+  const base = coreBase();
+  const url = `${base.replace(/^http/, "ws")}/api/remote.mux`;
+  let ws: WebSocket;
+  try {
+    // Node 全局 WebSocket（undici）扩展 headers 选项：loopback + cookie 过栅栏。
+    // 官方 TS 类型只声明 (url, protocols?)，运行时形态经实测（见 probe-ws.mjs）。
+    const WsWithHeaders = WebSocket as unknown as new (
+      target: string,
+      options: { headers: Record<string, string> },
+    ) => WebSocket;
+    ws = new WsWithHeaders(url, { headers: { cookie: auth.cookie } });
+  } catch (err) {
+    send({ type: "error", id, message: `kernel bridge: mux connect failed: ${err instanceof Error ? err.message : String(err)}` });
+    return;
+  }
+  let opened = false;
+  // 与模块级 closeSocket 共用存在性判定：先移除者负责通知，事件回调不重复发
+  const finish = (reason: string): void => { closeSocket(id, reason); };
+  ws.addEventListener("open", () => {
+    opened = true;
+    try {
+      ws.send(JSON.stringify({ type: "open", streamId: id, endpoint, payload: cmd.payload ?? { args: {} } }));
+    } catch (err) {
+      finish(`send failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    send({ type: "result", id, data: { opened: true } });
+  });
+  ws.addEventListener("message", (event) => {
+    if (sockets.get(id) !== ws) return; // 已被回收（页面换代/前端取消）
+    const raw = typeof event.data === "string" ? event.data : String(event.data);
+    let frame: unknown;
+    try {
+      frame = JSON.parse(raw);
+    } catch {
+      finish("mux carrier received a non-JSON frame");
+      return;
+    }
+    send({ type: "mux", id, frame });
+  });
+  ws.addEventListener("error", () => {
+    if (!opened) {
+      sockets.delete(id);
+      send({ type: "error", id, message: "kernel bridge: mux WebSocket failed to open" });
+      return;
+    }
+    finish("mux WebSocket error");
+  });
+  ws.addEventListener("close", (event) => {
+    if (!opened) {
+      sockets.delete(id);
+      send({ type: "error", id, message: `kernel bridge: mux WebSocket closed before opening (${event.code})` });
+      return;
+    }
+    finish(`mux WebSocket closed (${event.code})`);
+  });
+  sockets.set(id, ws);
+}
+
+/** 关闭一条逻辑流（前端取消/生成器收尾）。 */
+export function handleMuxClose(cmd: { id: string }): void {
+  const ws = sockets.get(cmd.id);
+  if (ws === undefined) return;
+  sockets.delete(cmd.id);
+  try {
+    ws.close(1000, "client closed");
+  } catch {
+    /* 已关闭 */
+  }
+  log("kernel bridge: mux closed %s", cmd.id);
+}
+
+/** 进程退出前收干净 WS（undici 在关闭中直接 exit 会触发 uv 断言）。 */
+export async function shutdownKernelBridge(): Promise<void> {
+  const all = [...sockets.values()];
+  sockets.clear();
+  for (const ws of all) {
+    try {
+      ws.close(1000, "sidecar shutdown");
+    } catch {
+      /* 已关闭 */
+    }
+  }
+  if (all.length > 0) await new Promise((r) => setTimeout(r, 80));
+}

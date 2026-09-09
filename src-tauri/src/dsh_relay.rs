@@ -46,6 +46,9 @@ pub struct DshAppState {
     pub sidecar: DshRelayState,
     pub pending_prompts: Arc<Mutex<HashMap<String, PendingPrompt>>>,
     pub pending_requests: Arc<Mutex<HashMap<String, PendingRequest>>>,
+    /// 内核 Remote 逻辑流 id → IPC Channel（sidecar 的 mux 帧经此回流前端；
+    /// 官方 __DSH_TRANSPORT__.openStream 的宿主侧接收端）
+    pub mux_channels: Arc<Mutex<HashMap<String, tauri::ipc::Channel<Value>>>>,
 }
 
 /// 便携运行时根目录：约定为 exe 同级的 runtime/（分享包结构见 scripts/build_portable.ps1）。
@@ -167,6 +170,7 @@ pub fn read_stdout(
     out: ChildStdout,
     pp: Arc<Mutex<HashMap<String, PendingPrompt>>>,
     pr: Arc<Mutex<HashMap<String, PendingRequest>>>,
+    mc: Arc<Mutex<HashMap<String, tauri::ipc::Channel<Value>>>>,
     rd: Arc<AtomicBool>,
     lr: Arc<AtomicU64>,
     app: tauri::AppHandle,
@@ -242,6 +246,27 @@ pub fn read_stdout(
                     } else if let Some(p) = pp.lock().unwrap().remove(id) {
                         // remove：错误信封后该 prompt 已终结，从表移除（防泄漏）
                         let _ = p.channel.send(serde_json::json!({"type":"error","message":t}));
+                    }
+                }
+                "mux" => {
+                    // 内核 Remote 流帧：按逻辑流 id 定向投递到前端 Channel。
+                    // 页面重载后旧 Channel 已失效（send 报错）→ 顺手回收表项。
+                    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let frame = m.get("frame").cloned().unwrap_or(Value::Null);
+                    let chan = mc.lock().unwrap().get(id).cloned();
+                    if let Some(c) = chan {
+                        if c.send(frame).is_err() {
+                            mc.lock().unwrap().remove(id);
+                        }
+                    }
+                }
+                "mux_close" => {
+                    // 载体断开：投递哨兵帧并回收 Channel（前端转 carrier 失败）
+                    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let reason = m.get("reason").and_then(|v| v.as_str()).unwrap_or("mux closed");
+                    let chan = mc.lock().unwrap().remove(id);
+                    if let Some(c) = chan {
+                        let _ = c.send(serde_json::json!({"type": "__mirach_close", "reason": reason}));
                     }
                 }
                 _ => {}
@@ -466,6 +491,79 @@ pub async fn dsh_rpc(method: String, params: Option<Value>, s: State<'_, DshAppS
     .await
 }
 
+/// 内核（官方客户端栈）unary RPC 代发：前端给相对路径/方法/头/体，sidecar
+/// 在 Node 侧带 browser-session cookie 打引擎 /api（跨源栅栏对浏览器无解，
+/// 官方桌面壳同样由宿主进程代发）。返回 {status, headers, bodyBase64}。
+#[tauri::command]
+pub async fn dsh_http_proxy(
+    path: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body_base64: Option<String>,
+    s: State<'_, DshAppState>,
+) -> Result<Value, String> {
+    if !s.sidecar.ready.load(Ordering::Acquire) {
+        return Err("not ready".into());
+    }
+    scmd_r(
+        &s,
+        &serde_json::json!({
+            "type": "http_proxy",
+            "id": format!("hp-{}", uuid_v4()),
+            "path": path,
+            "method": method,
+            "headers": headers,
+            "bodyBase64": body_base64,
+        }),
+        std::time::Duration::from_secs(130),
+    )
+    .await
+}
+
+/// 打开一条官方 Remote 逻辑流：sidecar 侧 WS 连引擎 /api/remote.mux，
+/// 帧经 mux_channels[id] 的 Channel 回流前端（__DSH_TRANSPORT__.openStream）。
+#[tauri::command]
+pub async fn dsh_mux_open(
+    id: String,
+    endpoint: String,
+    payload: Value,
+    page_id: Option<String>,
+    ch: tauri::ipc::Channel<Value>,
+    s: State<'_, DshAppState>,
+) -> Result<Value, String> {
+    if !s.sidecar.ready.load(Ordering::Acquire) {
+        return Err("not ready".into());
+    }
+    // 先登记 Channel 再下发命令：open 回包前的 ready 帧不能丢
+    s.mux_channels.lock().unwrap().insert(id.clone(), ch);
+    let result = scmd_r(
+        &s,
+        &serde_json::json!({"type":"mux_open","id":id,"endpoint":endpoint,"payload":payload,"pageId":page_id}),
+        std::time::Duration::from_secs(20),
+    )
+    .await;
+    if result.is_err() {
+        s.mux_channels.lock().unwrap().remove(&id);
+    }
+    result
+}
+
+/// 关闭一条 Remote 逻辑流（前端取消/生成器收尾；幂等）。
+#[tauri::command]
+pub async fn dsh_mux_close(id: String, s: State<'_, DshAppState>) -> Result<Value, String> {
+    s.mux_channels.lock().unwrap().remove(&id);
+    if !s.sidecar.ready.load(Ordering::Acquire) {
+        return Ok(serde_json::json!({"closed": false}));
+    }
+    let _ = scmd_r(
+        &s,
+        &serde_json::json!({"type":"mux_close","id":id}),
+        std::time::Duration::from_secs(5),
+    )
+    .await;
+    Ok(serde_json::json!({"closed": true}))
+}
+
 /// 列出 dsh 持久化会话（sidecar 扫 DSH_SESSION_ROOT）。
 #[tauri::command]
 pub async fn dsh_list_sessions(s: State<'_, DshAppState>) -> Result<Value, String> {
@@ -545,6 +643,7 @@ async fn prewarm_inner(h: &tauri::AppHandle) {
 pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
     let pp = st.pending_prompts.clone();
     let pr = st.pending_requests.clone();
+    let mc = st.mux_channels.clone();
     let rd = st.sidecar.ready.clone();
     let lr = st.sidecar.last_ready_epoch.clone();
     app.manage(st);
@@ -576,7 +675,7 @@ pub fn setup_sidecar(app: &tauri::AppHandle, st: DshAppState) {
                     *s.sidecar.pid.lock().unwrap() = Some(c.id());
                     rd.store(false, Ordering::Release); // 等 ready 信封再置位
                     let pid = c.id();
-                    read_stdout(o, pp.clone(), pr.clone(), rd.clone(), lr.clone(), h.clone());
+                    read_stdout(o, pp.clone(), pr.clone(), mc.clone(), rd.clone(), lr.clone(), h.clone());
                     // 自主预热引擎（hermes startHermes() 同款时序，且每轮 respawn
                     // 都重新预热——startHermes 可重入语义）：等本轮 ready 信封
                     // （sidecar node 冷起，最多 60s）→ prewarm 拉起引擎 runtime。
@@ -689,6 +788,12 @@ fn fail_pending_sidecar(s: &DshAppState, msg: &str) {
     let mut pp = s.pending_prompts.lock().unwrap();
     for (_, p) in pp.drain() {
         let _ = p.channel.send(serde_json::json!({"type":"error","message":msg}));
+    }
+    drop(pp);
+    // 内核 Remote 流：载体随 sidecar 消失，投递关闭哨兵让前端走重连而不是挂起
+    let mut mc = s.mux_channels.lock().unwrap();
+    for (_, c) in mc.drain() {
+        let _ = c.send(serde_json::json!({"type":"__mirach_close","reason":msg}));
     }
 }
 

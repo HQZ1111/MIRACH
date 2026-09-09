@@ -34,6 +34,7 @@ import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
 import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
+import { handleHttpProxy, handleMuxClose, handleMuxOpen, shutdownKernelBridge } from "./kernel-bridge.js";
 import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine } from "./plugins.js";
 import { subagentBackendsStatus, subagentSetEnabled } from "./subagent-backends.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
@@ -341,6 +342,16 @@ interface InboundCommand {
   cwd?: string;
   /** set_env：主聊天 persona（agent-spine 的 system prompt） */
   systemPrompt?: string;
+  /** http_proxy：内核 unary RPC 代发（path 以 /api 或 /dsh-pocket 开头） */
+  path?: string;
+  method?: string;
+  headers?: [string, string][];
+  bodyBase64?: string | null;
+  /** mux_open：Remote 逻辑流的 endpoint 与 payload */
+  endpoint?: string;
+  payload?: unknown;
+  /** mux_open：前端页面世代 id（重载回收旧 WS） */
+  pageId?: string;
 }
 
 async function handleCommand(cmd: InboundCommand): Promise<void> {
@@ -826,6 +837,21 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       }
       return;
     }
+    case "http_proxy": {
+      // 内核（官方客户端栈）unary RPC 代发：Node 侧带 cookie 访问引擎 /api。
+      // 不 await——readline 命令循环不能被单次 HTTP 往返卡住（其余命令照常排队）。
+      void handleHttpProxy({ id, path: cmd.path, method: cmd.method, headers: cmd.headers, bodyBase64: cmd.bodyBase64 });
+      return;
+    }
+    case "mux_open": {
+      // 内核 Remote 逻辑流：物理 WS 连引擎 /api/remote.mux，帧经 stdout 回 Rust
+      handleMuxOpen({ id, endpoint: cmd.endpoint, payload: cmd.payload, pageId: cmd.pageId });
+      return;
+    }
+    case "mux_close": {
+      handleMuxClose({ id });
+      return;
+    }
     default:
       send({ type: "error", id, message: `Unknown command: ${cmd.type}` });
   }
@@ -946,6 +972,7 @@ async function main(): Promise<void> {
   }
 
   log("Sidecar shutting down (stdin closed)");
+  await shutdownKernelBridge();
   await shutdownRuntime();
   process.exit(0);
 }

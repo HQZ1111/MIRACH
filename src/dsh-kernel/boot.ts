@@ -57,11 +57,15 @@ import "@deepseek-ai/dsh-client-ui-conversation/client";
 import "@deepseek-ai/dsh-client-ui-chat/client";
 // ── 官方右侧栏栈（0.1.5 新增）：ctx.sidebarRight 导航控制器 +
 //    ctx.sidebarRightTabs 标签类型注册表（多标签/分栏/全屏的官方实现）；
-//    resources 是其声明的前置注入面 ──
+//    resources 是其声明的前置注入面。必须激活：0.1.5 起 ui-chat 的 inject
+//    含 'sidebarRight'（文件从对话侧栏打开），缺它 ui-chat 整插件 pending
+//    → conversation.view 无 'chat' 条目 → 对话区 viewArea 恒空（消息不渲染）。 ──
 import "@deepseek-ai/dsh-client-resources/client";
 import "@deepseek-ai/dsh-client-ui-sidebar-right/client";
 import "@deepseek-ai/dsh-client-ui-sidebar-files/client";
 import "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client";
+// 工作区文件资源提供者（dsh-resource://file/... 地址解析；官方 web-app 同款）
+import "@deepseek-ai/dsh-api-workspace-files/client";
 // ── 输入框 composer seat 官方栈（模型选型/斜杠命令/计划模式/权限预设） ──
 // ui-commands 依赖 inputTriggers（ui-input-trigger 提供）；
 // ui-model-selection 注册 'model' 词典 + ModelSelect seat 组件；
@@ -107,6 +111,7 @@ import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
 import { setKernelReady } from "@/store/kernel-ready";
 import { bundleRequire } from "./module-loader-shim";
+import { installKernelTransport } from "./transport";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { registerMirachSections } from "./mirach-sections";
 import { registerComposerExtras } from "./composer-extras";
@@ -143,14 +148,13 @@ const KERNEL_PLUGINS = [
   // 声明自动注册 — 每个子槽只允许一次声明，官方包保留会与 mirach 冲突。
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
-  // ── 官方右侧栏栈（0.1.5）：多标签/分栏/全屏的官方实现 ──
-  // 暂缓激活：官方右侧栏需要把 mirach 面板注册进 ctx.sidebarRightTabs 并接入
-  // 官方帧的右列（否则其注入面未满足，内核根树不构建 → 对话区停在占位）。
-  // 依赖与 bundle 已就位（package.json + 上方 import），面板迁移完成后在此启用。
-  // "@deepseek-ai/dsh-client-resources/client",
-  // "@deepseek-ai/dsh-client-ui-sidebar-right/client",
-  // "@deepseek-ai/dsh-client-ui-sidebar-files/client",
-  // "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client",
+  // ── 官方右侧栏栈（0.1.5）：多标签/分栏/全屏的官方实现；ui-chat 的
+  //    'sidebarRight' 注入依赖它（缺则 ChatView 不注册、对话区恒空）──
+  "@deepseek-ai/dsh-client-resources/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-right/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-files/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client",
+  "@deepseek-ai/dsh-api-workspace-files/client",
   // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
   "@deepseek-ai/dsh-client-ui-input-trigger/client",
   "@deepseek-ai/dsh-client-ui-commands/client",
@@ -713,6 +717,25 @@ export function bootKernelMirror(): Promise<void> {
   return bootPromise;
 }
 
+/** 引擎宿主就绪等待（官方桌面壳同序：宿主先就绪，再引导客户端内核）。
+ *  冷启动期内核先行会把 session 控制流打成终态失败——官方流只对"载体故障"
+ *  退避重试，宿主缺失属于启动顺序问题，不该让用户等一次终态失败再重试。 */
+async function waitForEngineHost(timeoutMs: number): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if (await invoke<boolean>("dsh_engine_ready")) return;
+    } catch {
+      /* 命令尚未注册（Rust 启动中）→ 继续等 */
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("引擎未就绪（等待超时）——内核不在宿主离线状态下引导");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 async function bootKernelMirrorOnce(): Promise<void> {
   // 重跑前释放上一轮骨架注册与槽位缓存（失败重试路径上 slots 可能已在旧 ctx 里）
   for (const d of slotDisposers) {
@@ -728,8 +751,13 @@ async function bootKernelMirrorOnce(): Promise<void> {
   entriesCache = null;
   // 就绪门信号复位：本轮 boot 完成前内核视为未就绪（启动页/网关状态点消费）
   setKernelReady(false, null);
+  // 宿主传输桥必须先于任何官方插件 apply：connection/file-upload 在 apply
+  // 时读页面全局（__DSH_TRANSPORT__ / __DSH_FILE_UPLOAD__）
+  installKernelTransport();
   const pluginFails: string[] = [];
   try {
+    // 宿主就绪门：引擎（sidecar + dsh runtime）在线才引导官方客户端栈
+    await waitForEngineHost(150_000);
     const ctx = new Context();
     // typert 反射根必须先于插件循环：session-controller 的 inject 依赖
     // ['connection','typert','remote',...]，cordis 只在依赖就绪时才 apply
@@ -749,6 +777,21 @@ async function bootKernelMirrorOnce(): Promise<void> {
     }
     // 诊断信号：失败插件清单（日志/仪表盘用）
     lastPluginFails = pluginFails;
+    // 诊断信号：inject 未满足 → cordis 让整插件 pending（不报错、静默缺失）。
+    // 这类"静默 pending"此前造成对话区恒空（0.1.5 ui-chat 需要 sidebarRight）。
+    const pendingInjects: string[] = [];
+    for (const id of KERNEL_PLUGINS) {
+      try {
+        const mod = bundleRequire(id) as { inject?: string[] };
+        const missing = (mod.inject ?? []).filter((key) => (ctx as unknown as { get?: (k: string) => unknown }).get?.(key) === undefined);
+        if (missing.length > 0) pendingInjects.push(`${id} ⇐ ${missing.join(",")}`);
+      } catch {
+        /* 诊断失败不影响启动 */
+      }
+    }
+    if (pendingInjects.length > 0) {
+      logWarn("kernel plugins pending (inject unsatisfied): %s", pendingInjects.join(" | "));
+    }
     kernelCtx = ctx;
     // dev 探针：自动化验证/诊断用（scripts/cdp-*.mjs），生产构建无副作用
     if (import.meta.env.DEV) {
