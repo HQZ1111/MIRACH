@@ -35,6 +35,7 @@ import { MOCK } from "@/lib/mock";
 import { useStore } from "@nanostores/react";
 import { $gatewayState, pingGateway } from "@/store/gateway";
 import { $kernelError, $kernelReady } from "@/store/kernel-ready";
+import { $kernelConnection } from "@/store/kernel-connection";
 import { lockApp } from "@/store/password";
 import { getToolMenuActions, type PluginIcon } from "@/plugins/registry";
 import {
@@ -134,10 +135,13 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   const isDark = resolved === "dark";
   // 网关/引擎状态（共享 store；真实模式启动探测 + 15s 轮询，mock 恒 open）
   const gatewayState = useStore($gatewayState);
-  // 内核（官方客户端栈）就绪：引擎连上 ≠ 对话可用，按钮必须两者都绿才显示已连接
+  // 内核（官方客户端栈）就绪 + **真实连接状态**（ctx.connection.state）：
+  // 引擎进程握手成功 ≠ 引擎可用——冷启动期 webserver 未监听时 gatewayState
+  // 会提前 open，按钮必须认内核连接的真结论，否则全程显示"已连接"。
   const kernelReady = useStore($kernelReady);
   const kernelError = useStore($kernelError);
-  const connected = gatewayState === "open" && kernelReady;
+  const kernelConnection = useStore($kernelConnection);
+  const connected = gatewayState === "open" && kernelReady && kernelConnection === "open";
   // 锁定：调用 lockApp 走启动门（StartupGate → LoginPage；未设密码时登录页自动切「设置密码」模式）
   const lock = () => {
     lockApp();
@@ -145,21 +149,29 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   const gwColor =
     connected
       ? "#10B981"
-      : gatewayState === "connecting" || (gatewayState === "open" && !kernelReady)
+      : gatewayState === "connecting" || kernelConnection === "connecting"
         ? "#F59E0B"
-        : gatewayState === "error"
+        : gatewayState === "error" || kernelConnection === "closed"
           ? "#EF4444"
-          : "#D1D5DB";
+          : gatewayState === "open" || kernelReady
+            ? "#F59E0B"
+            : "#D1D5DB";
   const gwTitle =
     connected
       ? "引擎与对话内核已连接（点击重新检测）"
-      : gatewayState === "open" && !kernelReady
-        ? `引擎已连接，对话内核未就绪${kernelError ? `：${kernelError}` : ""}（点击重试）`
-        : gatewayState === "connecting"
+      : gatewayState !== "open"
+        ? gatewayState === "connecting"
           ? "正在连接引擎…"
           : gatewayState === "error"
             ? "引擎未连接（点击重试）"
-            : "引擎未检测（点击检测）";
+            : "引擎未检测（点击检测）"
+        : !kernelReady
+          ? `引擎已连接，对话内核未就绪${kernelError ? `：${kernelError}` : ""}（点击重试）`
+          : kernelConnection === "open"
+            ? "引擎与对话内核已连接（点击重新检测）"
+            : kernelConnection === "connecting"
+              ? "对话内核正在连接引擎…"
+              : "对话内核未连接（点击重试）";
   const gatewayItem: ToolItem = MOCK
     ? { id: "gateway", icon: Plug, label: "网关状态", color: "#009292", title: "网关：连接正常（mock）" }
     : { id: "gateway", icon: Plug, label: "网关状态", color: gwColor, title: gwTitle };

@@ -1207,8 +1207,8 @@ export function AppLayout() {
           <SessionDialogOverlay sessionId={sessionDialogId} onClose={closeSessionDialog} />
         )}
 
-        {/* ---- 引擎网关：连接中解码动画 / 启动失败（安装层已移除，直接用默认引擎地址） ---- */}
-        {startupPhase === "ready" && gatewayState === "connecting" && <GatewayConnectingOverlay />}
+        {/* ---- 引擎网关：启动失败提示（连接中的全屏遮罩由 StartupGate 独占——
+              放行后断联只走对话区顶部横幅，绝不把用户盖回启动页） ---- */}
         {startupPhase === "ready" && gatewayState === "error" && !bootDismissed && (
           <BootFailureOverlay
             onRetry={() => {

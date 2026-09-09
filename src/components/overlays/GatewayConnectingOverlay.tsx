@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "@nanostores/react";
 import { $desktopBoot } from "@/store/boot";
 import { $kernelError, $kernelReady } from "@/store/kernel-ready";
+import { $kernelConnection } from "@/store/kernel-connection";
 
 const TARGET = "正在连接引擎…";
 const RANDOM_CHARS = "01ABCDEF#$%&*+=?<>";
@@ -18,6 +19,7 @@ export function GatewayConnectingOverlay() {
   const boot = useStore($desktopBoot);
   const kernelReady = useStore($kernelReady);
   const kernelError = useStore($kernelError);
+  const kernelConnection = useStore($kernelConnection);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -71,6 +73,14 @@ export function GatewayConnectingOverlay() {
         {!kernelReady && (
           <p className="max-w-72 text-center text-[11px] text-[#C7CCE8]/70">
             {kernelError ?? "正在激活官方对话内核…"}
+          </p>
+        )}
+        {/* 内核已就绪但 RPC 载体未连通（引擎 web 面未监听/掉线）：显示真结论 */}
+        {kernelReady && kernelConnection !== "open" && (
+          <p className="max-w-72 text-center text-[11px] text-[#C7CCE8]/70">
+            {kernelConnection === "closed"
+              ? "对话内核连接已断开，正在自动重连…"
+              : "对话内核正在连接引擎…"}
           </p>
         )}
         {/* 启动失败：给出重试与退出（不能把用户困在启动页） */}

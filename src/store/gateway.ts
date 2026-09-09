@@ -33,8 +33,8 @@ let probing = false;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 引擎冷启动预算（Rust setup 自主预热启动于进程创建时；这里留足宽限）。 */
-const ENGINE_BOOT_WAIT_MS = 105_000;
+/** 引擎冷启动预算（Rust setup 自主预热启动于进程创建时；实测可达数分钟，留足宽限）。 */
+const ENGINE_BOOT_WAIT_MS = 300_000;
 /** 重连重试上限（对齐 hermes BOOT_RETRY_MAX_ATTEMPTS）。 */
 const BOOT_RETRY_MAX_ATTEMPTS = 5;
 

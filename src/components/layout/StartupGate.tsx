@@ -16,6 +16,8 @@ import {
 } from "@/store/password";
 import { $gatewayState } from "@/store/gateway";
 import { $kernelReady } from "@/store/kernel-ready";
+import { $kernelConnection } from "@/store/kernel-connection";
+import { MOCK } from "@/lib/mock";
 import { GatewayConnectingOverlay } from "@/components/overlays/GatewayConnectingOverlay";
 import { LoginPage } from "@/components/layout/LoginPage";
 
@@ -39,17 +41,18 @@ export function StartupGate() {
   const phase = useStore($startupPhase);
   const gatewayState = useStore($gatewayState);
   const kernelReady = useStore($kernelReady);
+  const kernelConnection = useStore($kernelConnection);
 
-  // 首次满足放行条件即记录；此后本组件永久返回 null（引擎断联不再全屏拦截）
-  if (!gatePassed && phase !== "locked" && gatewayState === "open" && kernelReady) {
+  // 首次满足放行条件即记录；此后本组件永久返回 null（引擎断联不再全屏拦截）。
+  // kernelConnection 是官方 RPC 载体的真结论——只看 gatewayState 会在引擎
+  // 冷启动期（进程已起、webserver 未监听）假放行。
+  const linkOpen = MOCK || (gatewayState === "open" && kernelReady && kernelConnection === "open");
+  if (!gatePassed && phase !== "locked" && linkOpen) {
     gatePassed = true;
   }
   if (gatePassed) return null;
 
-  // 放行点 = 解锁/配置完成 + 引擎就绪 + 内核就绪（三者齐备才进主界面）。
+  // 未放行：密码页优先；其余一律启动页（等引擎 + 内核 + 真实连接三者齐备）
   if (phase === "locked") return <LoginPage />;
-  if (phase === "splash" || gatewayState !== "open" || !kernelReady) {
-    return <GatewayConnectingOverlay />;
-  }
-  return null;
+  return <GatewayConnectingOverlay />;
 }

@@ -110,6 +110,7 @@ import { pushRawEvents, pushRawEvent } from "@/store/session-events";
 import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
 import { setKernelReady } from "@/store/kernel-ready";
+import { setKernelConnection, $kernelConnection } from "@/store/kernel-connection";
 import { bundleRequire } from "./module-loader-shim";
 import { installKernelTransport } from "./transport";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
@@ -472,15 +473,35 @@ export function nativeRenderReady(): boolean {
   }
 }
 
+/** 最近一次请求打开的会话（引擎未连时会话列表为空，open 会失败）——
+ *  连接 open 后据此补一次对齐（nativeOpenSession 的延迟重试）。 */
+let pendingOpenSessionId: string | null = null;
+
 /**
  * 同步官方 current 会话到目标 dsh 会话：refresh 引擎列表后 open 目标。
- * 官方 ConversationRoot 按 current 会话渲染；打开即成为官方渲染对象。
+ * 官方 ConversationRoot 按 current 渲染；打开即成为官方渲染对象。
+ * 引擎未连（列表未到）时 open 会抛 unknown session——记下目标，连接
+ * 就绪后由 watchConnectionState 补一次，避免对话区停在空占位。
  */
 export async function nativeOpenSession(dshId: string): Promise<void> {
   const sessions = nativeSessions();
   if (sessions === null || !dshId) return;
+  pendingOpenSessionId = dshId;
   await sessions.refresh().catch(() => {});
-  sessions.open(dshId);
+  try {
+    sessions.open(dshId);
+    pendingOpenSessionId = null;
+  } catch (err) {
+    logWarn("nativeOpenSession deferred (engine not ready): %s", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** 连接就绪后补开上次请求的会话（列表已到，open 不会再 unknown session）。 */
+function retryPendingOpenSession(): void {
+  const dshId = pendingOpenSessionId;
+  if (dshId === null) return;
+  pendingOpenSessionId = null;
+  void nativeOpenSession(dshId).catch(() => {});
 }
 
 /**
@@ -736,6 +757,59 @@ async function waitForEngineHost(timeoutMs: number): Promise<void> {
   }
 }
 
+/** 连接状态订阅世代：boot 重试会新建 ctx，旧 ctx 的状态变化不得覆盖新值。 */
+let connectionEpoch = 0;
+
+/**
+ * 订阅官方 ctx.connection.state → $kernelConnection（真实连接状态）。
+ * 官方取值：connected / connecting / disconnected；undefined = 尚无结论。
+ * 映射：connected→open；connecting/undefined→connecting；disconnected→closed。
+ */
+function watchConnectionState(ctx: Context): void {
+  const epoch = ++connectionEpoch;
+  const ctxAny = ctx as unknown as {
+    connection?: ConnectionStateCarrier;
+    get?: (key: string) => unknown;
+  };
+  // reflect.provide 的服务属性访问不保证暴露（见 nativeLocaleTranslate）→ ctx.get 兜底
+  const connection = (ctxAny.connection
+    ?? (typeof ctxAny.get === "function" ? (ctxAny.get("connection") as ConnectionStateCarrier | undefined) : undefined)) as
+    | ConnectionStateCarrier
+    | undefined;
+  const stateSource = connection?.state;
+  if (stateSource === undefined || typeof stateSource.subscribe !== "function") {
+    setKernelConnection("connecting");
+    return;
+  }
+  const apply = (): void => {
+    if (epoch !== connectionEpoch) return;
+    const state = stateSource.getSnapshot();
+    const next = state === "connected"
+      ? "open"
+      : state === "disconnected"
+        ? "closed"
+        : "connecting";
+    const wasOpen = $kernelConnection.get() === "open";
+    setKernelConnection(next);
+    // 首次连上：补开 boot 期因列表未到而失败的 current 会话
+    if (next === "open" && !wasOpen) retryPendingOpenSession();
+  };
+  apply();
+  try {
+    stateSource.subscribe(apply);
+  } catch (err) {
+    logWarn("kernel connection state subscribe failed: %s", err instanceof Error ? err.message : String(err));
+    setKernelConnection("connecting");
+  }
+}
+
+interface ConnectionStateCarrier {
+  state?: {
+    getSnapshot: () => "connected" | "connecting" | "disconnected" | undefined;
+    subscribe: (fn: () => void) => () => void;
+  };
+}
+
 async function bootKernelMirrorOnce(): Promise<void> {
   // 重跑前释放上一轮骨架注册与槽位缓存（失败重试路径上 slots 可能已在旧 ctx 里）
   for (const d of slotDisposers) {
@@ -751,13 +825,15 @@ async function bootKernelMirrorOnce(): Promise<void> {
   entriesCache = null;
   // 就绪门信号复位：本轮 boot 完成前内核视为未就绪（启动页/网关状态点消费）
   setKernelReady(false, null);
+  setKernelConnection("idle");
   // 宿主传输桥必须先于任何官方插件 apply：connection/file-upload 在 apply
   // 时读页面全局（__DSH_TRANSPORT__ / __DSH_FILE_UPLOAD__）
   installKernelTransport();
   const pluginFails: string[] = [];
   try {
-    // 宿主就绪门：引擎（sidecar + dsh runtime）在线才引导官方客户端栈
-    await waitForEngineHost(150_000);
+    // 宿主就绪门：引擎（sidecar + dsh runtime）在线才引导官方客户端栈。
+    // 冷启动实测可达数分钟（会话日志多/机器忙），给足 5 分钟。
+    await waitForEngineHost(300_000);
     const ctx = new Context();
     // typert 反射根必须先于插件循环：session-controller 的 inject 依赖
     // ['connection','typert','remote',...]，cordis 只在依赖就绪时才 apply
@@ -793,6 +869,10 @@ async function bootKernelMirrorOnce(): Promise<void> {
       logWarn("kernel plugins pending (inject unsatisfied): %s", pendingInjects.join(" | "));
     }
     kernelCtx = ctx;
+    // 官方连接状态 → $kernelConnection：ctx.connection.state 是 RPC 载体的
+    // 真结论（$events 流 ready 帧后才 connected）。工具栏按钮/启动门/断联
+    // 横幅只认它——sidecar 的 ready 标志在引擎冷启动期会假阳性。
+    watchConnectionState(ctx);
     // dev 探针：自动化验证/诊断用（scripts/cdp-*.mjs），生产构建无副作用
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__mirachCtx = ctx;
@@ -845,6 +925,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
         : "ctx.sessions 未注册（内核插件依赖未满足）";
       console.warn("[dsh-kernel] %s", reason);
       setKernelReady(false, reason);
+      setKernelConnection("closed");
       return;
     }
     await sessions.refresh().catch(() => {});
@@ -863,6 +944,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
   } catch (err) {
     console.warn("[dsh-kernel] boot failed (sidecar 管道继续兜底):", err);
     setKernelReady(false, err instanceof Error ? err.message : String(err));
+    setKernelConnection("closed");
     // 向上抛：kernelSend 的回退路径会把原因写进聊天区（不再静默）
     throw err instanceof Error ? err : new Error(String(err));
   }

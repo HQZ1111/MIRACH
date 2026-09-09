@@ -47,7 +47,7 @@ import { NativeChatArea } from "@/components/chat/NativeChatArea";
 import { ChatToolButton } from "@/components/chat/ChatToolButton";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $engineEnv, $mainPersona } from "@/store/engine-session";
-import { currentWorkspaceSnapshot } from "@/dsh-kernel/sidebar-shell";
+import { useOfficialHeader } from "@/dsh-kernel/official-header";
 import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
@@ -161,28 +161,10 @@ function HeaderSection({
 }) {
   // 标题块固定上限（CSS max-w-[320px]）：项目名与会话名都在其内截断，
   // 插件图标条位置稳定不受会话名长短影响
-  // 标题 = 工作区名（真实：官方 useWorkspaces 快照中活跃会话所属工作区的
-  // title；匹配不到回落本地项目名/默认值）；介绍 = 当前会话名
-  const activeId = useStore($activeSessionId);
-  const sessions = useStore($sessions);
-  const projects = useStore($projects);
-  const [, wsTick] = useState(0);
-  const activeSession = sessions.find((s) => s.id === activeId) ?? sessions[0];
-  const sessionTitle = activeSession?.title ?? "新会话";
-  // 工作区快照（sidecar workspaces.list）：活跃会话 id 命中的工作区 title
-  // 快照非响应式（Solid store），低频轮询跟随（数据变化频率极低）
-  useEffect(() => {
-    const t = window.setInterval(() => wsTick((v) => v + 1), 5000);
-    return () => window.clearInterval(t);
-  }, []);
-  const snapshot = currentWorkspaceSnapshot();
-  const wsTitle = activeId !== undefined
-    ? snapshot?.items.find((w) => w.sessionIds.includes(activeId))?.title
-    : undefined;
-  const localName =
-    projects.find((p) => p.sessions.some((s) => s.title === sessionTitle))?.name ??
-    projects[0]?.name;
-  const projectName = wsTitle ?? localName ?? "Mirach";
+  // 标题 = 工作区名（官方 workspaces.list 里当前引擎会话所属工作区），
+  // 随官方 current 会话实时更新（点侧栏切换会话时同步）；内核未就绪回落 Mirach
+  const officialHeader = useOfficialHeader();
+  const projectName = officialHeader.workspaceTitle ?? "Mirach";
   // 插件图标条 = 真实引擎插件（config.pluginEntries 装配镜像；官方 UI 插件清单）
   const ENGINE_PLUGINS = useEnginePlugins();
   const pluginCap = Math.max(1, Math.floor((width * 0.25) / PLUGIN_SLOT));
@@ -467,8 +449,11 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
   // 主栏实际宽度（容器宽度走 CSS 变量；mainWidth 仅用于 HeaderSection 等内部布局）
   const mainW = mainWidth ?? 380;
   const activeId = useStore($activeSessionId);
-  // 顶栏第二行的会话名（"对话/轨迹"标签页左侧同行显示）
-  const topSessionTitle = useStore($sessions).find((s) => s.id === activeId)?.title ?? "新会话";
+  // 顶栏第二行的会话名（"对话/轨迹"标签页左侧同行显示）：官方 displayTitle
+  // 优先（随官方 current 会话变化——点侧栏切换会话即更新），回落 mirach 会话名
+  const officialHeader = useOfficialHeader();
+  const mirachSessionTitle = useStore($sessions).find((s) => s.id === activeId)?.title ?? "新会话";
+  const topSessionTitle = officialHeader.sessionTitle ?? mirachSessionTitle;
   // 官方 centerCol 元素：顶栏覆盖层经 portal 挂入其中（与内容同帧绘制，
   // 拖动左栏手柄时顶栏不再因跨层变量同步产生位移/帧差）
   const [centerColEl, setCenterColEl] = useState<HTMLElement | null>(null);

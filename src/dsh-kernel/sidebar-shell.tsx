@@ -251,11 +251,22 @@ let sideActions: SidebarActions | null = null;
 interface WorkspaceSnapshotLike {
   items: readonly { workspaceId: string; title: string; sessionIds: readonly string[] }[];
 }
+/** 官方 workspaces.list 快照源（getSnapshot/subscribe）；订阅供顶栏响应式读取。 */
+interface WorkspaceSourceLike {
+  getSnapshot: () => WorkspaceSnapshotLike | null;
+  subscribe: (fn: () => void) => () => void;
+}
 let workspaceSnapshotGetter: (() => WorkspaceSnapshotLike | null) | null = null;
+let workspaceSourceRef: WorkspaceSourceLike | null = null;
 
 /** 取当前工作区快照（items；内核未就绪返回 null）。顶栏项目名真实化消费。 */
 export function currentWorkspaceSnapshot(): WorkspaceSnapshotLike | null {
   return workspaceSnapshotGetter?.() ?? null;
+}
+
+/** 官方工作区快照源（可订阅）：顶栏工作区名随切换会话/工作区实时更新。 */
+export function currentWorkspaceSource(): WorkspaceSourceLike | null {
+  return workspaceSourceRef;
 }
 
 function initSidebarActions(ctx: Context): SidebarActions {
@@ -273,9 +284,13 @@ function initSidebarActions(ctx: Context): SidebarActions {
     ?? (typeof ctxAny.get === "function" ? (ctxAny.get("workspaces") as SolidWorkspaces | undefined) : undefined);
   // 工作区快照读取器：官方 workspace-controller 的 list 是快照源对象
   // （WorkspaceSource：getSnapshot()/subscribe()，不是方法）
-  const wsSource = (workspaces as unknown as { list?: { getSnapshot?: () => WorkspaceSnapshotLike } } | undefined)?.list;
+  const wsSource = (workspaces as unknown as { list?: { getSnapshot?: () => WorkspaceSnapshotLike; subscribe?: (fn: () => void) => () => void } } | undefined)?.list;
   workspaceSnapshotGetter =
     typeof wsSource?.getSnapshot === "function" ? () => wsSource.getSnapshot!() ?? null : null;
+  workspaceSourceRef =
+    typeof wsSource?.getSnapshot === "function" && typeof wsSource?.subscribe === "function"
+      ? { getSnapshot: () => wsSource.getSnapshot!() ?? null, subscribe: (fn) => wsSource.subscribe!(fn) }
+      : null;
   return {
     open: (id) => { sessions?.open?.(id); },
     rename: async (id, title) => {

@@ -16,7 +16,9 @@
  */
 
 import { Component, useEffect, useState, type ReactNode } from "react";
+import { useStore } from "@nanostores/react";
 import { deliverSlotDeclarations, kernelContext, nativeRenderReady, nativeRootTree } from "@/dsh-kernel/boot";
+import { $kernelReady } from "@/store/kernel-ready";
 import { DSW_ALIAS_VARS } from "@/lib/dsw-tokens";
 
 const RETRY_MS = 1500;
@@ -39,6 +41,9 @@ class KernelBoundary extends Component<{ children: ReactNode }, { failed: boolea
 
 export function KernelMirrorHost() {
   const [node, setNode] = useState<ReactNode | null>(null);
+  // 内核就绪翻转时重跑：内核 boot 先等引擎冷启动（可达数分钟），固定
+  // 30s 重试预算会先耗尽——否则隐藏树/声明骨架永远不挂载
+  const kernelReady = useStore($kernelReady);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +67,7 @@ export function KernelMirrorHost() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [kernelReady]);
 
   if (node === null) return null;
   return (

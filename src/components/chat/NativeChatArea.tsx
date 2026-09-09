@@ -17,6 +17,8 @@ import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
 import { bindEngineSession, $mainPersona } from "@/store/engine-session";
 import { $gatewayState } from "@/store/gateway";
+import { $kernelConnection } from "@/store/kernel-connection";
+import { $kernelReady } from "@/store/kernel-ready";
 import {
   nativeCollapsePanels,
   nativeOpenSession,
@@ -63,6 +65,13 @@ export function NativeChatArea({
   const [tree, setTree] = useState<ReactNode | null>(null);
 
   const gatewayState = useStore($gatewayState);
+  const kernelConnection = useStore($kernelConnection);
+  // 内核就绪信号进依赖：内核 boot 现在会先等引擎冷启动（可达数分钟），
+  // 固定 30s 重试预算会先耗尽并放弃挂载官方树——就绪翻转时重跑一次。
+  // （连接 open 后对齐 current 会话由 boot.nativeOpenSession 自己补，见该函数）
+  const kernelReady = useStore($kernelReady);
+  // 链路可用 = 引擎就绪 + 内核就绪 + 内核真实连接 open（三者齐备才无横幅）
+  const linkDown = !MOCK && (gatewayState !== "open" || kernelConnection !== "open");
   useEffect(() => {
     let cancelled = false;
     setTree(null);
@@ -119,7 +128,7 @@ export function NativeChatArea({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, kernelReady]);
 
   // 官方根树是唯一对话区：内核/映射未就绪时给轻量加载占位（不做自建对话区回退）
   if (tree === null) {
@@ -137,12 +146,14 @@ export function NativeChatArea({
   }
   return (
     <div className="dsh-native-area relative min-h-0 flex-1 overflow-hidden" style={DSW_ALIAS_VARS}>
-      {/* 引擎断联横幅：官方树照常可交互，只在顶部提示连接状态（不遮挡不拦截） */}
-      {gatewayState !== "open" && (
+      {/* 引擎/内核断联横幅：官方树照常可交互，只在顶部提示连接状态
+          （不遮挡不拦截）。判定用内核真实连接（ctx.connection.state），
+          不看 sidecar 就绪标志——冷启动期后者会假阳性。 */}
+      {linkDown && (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center pt-2">
           <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-[#F59E0B]/40 bg-[#FEF3C7]/95 px-3 py-1 text-[12px] text-[#92400E] shadow-sm">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#F59E0B]" />
-            {gatewayState === "connecting" ? "引擎连接中…" : "引擎未连接 — 界面可继续浏览，正在自动重连"}
+            {kernelConnection === "connecting" ? "引擎连接中…" : "引擎未连接 — 界面可继续浏览，正在自动重连"}
           </div>
         </div>
       )}
