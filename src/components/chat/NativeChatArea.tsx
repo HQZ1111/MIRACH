@@ -12,9 +12,11 @@
  */
 
 import { Component, useEffect, useState, type ReactNode } from "react";
+import { useStore } from "@nanostores/react";
 import { getApi } from "@/lib/api";
 import { MOCK } from "@/lib/mock";
 import { bindEngineSession, $mainPersona } from "@/store/engine-session";
+import { $gatewayState } from "@/store/gateway";
 import {
   nativeCollapsePanels,
   nativeOpenSession,
@@ -60,6 +62,7 @@ export function NativeChatArea({
 }) {
   const [tree, setTree] = useState<ReactNode | null>(null);
 
+  const gatewayState = useStore($gatewayState);
   useEffect(() => {
     let cancelled = false;
     setTree(null);
@@ -134,6 +137,15 @@ export function NativeChatArea({
   }
   return (
     <div className="dsh-native-area relative min-h-0 flex-1 overflow-hidden" style={DSW_ALIAS_VARS}>
+      {/* 引擎断联横幅：官方树照常可交互，只在顶部提示连接状态（不遮挡不拦截） */}
+      {gatewayState !== "open" && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center pt-2">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-[#F59E0B]/40 bg-[#FEF3C7]/95 px-3 py-1 text-[12px] text-[#92400E] shadow-sm">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[#F59E0B]" />
+            {gatewayState === "connecting" ? "引擎连接中…" : "引擎未连接 — 界面可继续浏览，正在自动重连"}
+          </div>
+        </div>
+      )}
       <TreeBoundary>
         {tree}
         {/* 空输入点击发送=语音（覆盖层；官方源码零改动，见 composer-extras） */}

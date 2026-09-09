@@ -31,10 +31,20 @@ function lockAppOnce(): void {
 // 注意：必须放在 lockDecided 声明之后（模块顶层调用踩 TDZ 会整页白屏）。
 lockAppOnce();
 
+/** 启动门是否已放行过（进入主界面后永不复活全屏遮罩——hermes 同语义：
+ *  引擎掉线只更新状态点/提示，绝不把用户盖回启动页）。 */
+let gatePassed = false;
+
 export function StartupGate() {
   const phase = useStore($startupPhase);
   const gatewayState = useStore($gatewayState);
   const kernelReady = useStore($kernelReady);
+
+  // 首次满足放行条件即记录；此后本组件永久返回 null（引擎断联不再全屏拦截）
+  if (!gatePassed && phase !== "locked" && gatewayState === "open" && kernelReady) {
+    gatePassed = true;
+  }
+  if (gatePassed) return null;
 
   // 放行点 = 解锁/配置完成 + 引擎就绪 + 内核就绪（三者齐备才进主界面）。
   if (phase === "locked") return <LoginPage />;
