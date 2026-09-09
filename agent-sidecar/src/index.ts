@@ -594,6 +594,64 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         send({ type: "error", id, message: "Missing 'method' field" });
         return;
       }
+      // 官方 schedule 投影的只读目录（对齐 ui-schedule ScheduleCatalogAction
+      // 消费的 useProjection('schedule')——投影 = 会话日志里 schedule/change
+      // 事件的 fold；会话级语义 = 活跃提醒随会话存活）。
+      // method=schedule.list → 扫当前环境所有会话日志，fold 出 active 集合：
+      //   create(+id) 入集、delete/dispatch(id) 出集；按会话分组返回。
+      if (method === "schedule.list") {
+        const sessionRoot = resolveRuntimePaths().sessionRoot;
+        const bySession: Record<string, unknown[]> = {};
+        const scan = (dir: string, depth: number): void => {
+          if (depth > 2) return;
+          try {
+            for (const name of readdirSync(dir, { withFileTypes: true })) {
+              if (!name.isDirectory()) continue;
+              const sub = join(dir, name.name);
+              const hasLog = existsSync(join(sub, "session.jsonl.zstd")) || existsSync(join(sub, "session.jsonl"));
+              if (hasLog) {
+                const active = new Map<string, { id: string; kind: string; prompt: string; scheduledAt?: string; everySeconds?: number; frontendId?: string }>();
+                try {
+                  for (const ev of readSessionRawEvents(sessionRoot, name.name)) {
+                    const data = (ev as { data?: Record<string, unknown> }).data;
+                    if (!data || data.version !== 1) continue;
+                    if (data.operation === "create" && typeof data.id === "string") {
+                      const s = (data.schedule ?? {}) as Record<string, unknown>;
+                      active.set(data.id, {
+                        id: data.id,
+                        kind: typeof s.kind === "string" ? s.kind : "at",
+                        prompt: typeof s.prompt === "string" ? s.prompt : "",
+                        ...(typeof s.scheduledAt === "string" ? { scheduledAt: s.scheduledAt } : {}),
+                        ...(typeof s.everySeconds === "number" ? { everySeconds: s.everySeconds } : {}),
+                      });
+                    } else if ((data.operation === "delete" || data.operation === "dispatch") && typeof data.id === "string") {
+                      active.delete(data.id);
+                    }
+                  }
+                } catch {
+                  /* 单会话解析失败不影响其余 */
+                }
+                if (active.size > 0) {
+                  const hit = [...sessionMap.entries()].find(([, dsh]) => dsh === name.name);
+                  const list = [...active.values()].map((r) => ({
+                    ...r,
+                    sessionId: name.name,
+                    ...(hit ? { frontendId: hit[0].split("::")[1] ?? hit[0] } : {}),
+                  }));
+                  bySession[name.name] = list;
+                }
+              } else {
+                scan(sub, depth + 1);
+              }
+            }
+          } catch {
+            /* 忽略 */
+          }
+        };
+        if (existsSync(sessionRoot)) scan(sessionRoot, 0);
+        send({ type: "result", id, data: { bySession, total: Object.values(bySession).flat().length } });
+        return;
+      }
       // 本地方法：session/fork（真分叉）——映射源前端会话 → dsh 源会话，
       // 社区插件一键管理（plugins.list / plugins.install / plugins.uninstall）：
       // 自动化官方 `dsh plugin add` 的手工等价三步（npm 装 dsh-plugins → junction

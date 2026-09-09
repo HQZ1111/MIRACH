@@ -37,6 +37,7 @@ import { pushRawEvents, resetRawEvents } from "@/store/session-events";
 import { $projects, $selectedProjectId } from "@/store/projects";
 import { loadLiveHistory } from "@/store/chat";
 import { MOCK } from "@/lib/mock";
+import { getApi } from "@/lib/api";
 import { invoke } from "@tauri-apps/api/core";
 import { $providerConfig } from "@/store/providerConfig";
 import { envById, envIdForView, $envVersion, $environments } from "@/store/environments";
@@ -46,23 +47,23 @@ import { NativeChatArea } from "@/components/chat/NativeChatArea";
 import { ChatToolButton } from "@/components/chat/ChatToolButton";
 import { useQueueAutoDrain } from "@/hooks/useQueueAutoDrain";
 import { $engineEnv, $mainPersona } from "@/store/engine-session";
+import { currentWorkspaceSnapshot } from "@/dsh-kernel/sidebar-shell";
 import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import {
   Boxes,
   Code,
-  Container,
+  Cpu,
   Database,
   Ellipsis,
-  FileCode,
-  GitBranch,
-  Globe,
-  MessagesSquare,
+  Mic,
   PanelLeft,
   PanelLeftOpen,
-  PenTool,
-  SquareTerminal,
+  Puzzle,
+  Table2,
+  Terminal,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { CommandPalette, type CommandPaletteAction } from "@/components/command-palette/CommandPalette";
@@ -78,38 +79,49 @@ import { nativeToggleSidebar } from "@/dsh-kernel/boot";
 // 工具调用改用 ToolEntry 组件 + $toolCalls store
 
 // ================================================================
-// 已安装插件（图标显示在标题右侧；超出宽度时收进省略号弹窗）
-// 数据源：plugins store（插件管理器可启停/安装/卸载），仅显示已启用
+// 顶栏插件图标条（真实数据源 = 引擎装配清单 config.pluginEntries）
+// 旧版读 plugins store 的本地 mock 目录（git/docker/k8s 等假插件）已移除。
 // ================================================================
 
-import { $plugins } from "@/store/plugins";
-
-interface PluginItem {
-  id: string;
-  label: string;
-  icon: LucideIcon;
+/** 真实引擎插件目录（sidecar config.pluginEntries 装配镜像；官方 UI 插件清单）。
+ *  顶栏图标条真实化：旧版读本地 mock 目录（git/docker/k8s 等假插件）。 */
+function useEnginePlugins(): { id: string; name: string }[] {
+  const [list, setList] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void getApi()
+        .listEnginePlugins()
+        .then((items) => {
+          if (!cancelled) setList(items);
+        })
+        .catch(() => {});
+    };
+    load();
+    // 引擎装配随插件安装/卸载/重启变化：低频轮询即可（30s）
+    const t = window.setInterval(load, 30_000);
+    const onReload = () => load();
+    window.addEventListener("hermes-config-reload", onReload);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+      window.removeEventListener("hermes-config-reload", onReload);
+    };
+  }, []);
+  return list;
 }
 
-// 插件 id → 图标映射（store 只存元数据，图标在前端映射）
-const PLUGIN_ICONS: Record<string, LucideIcon> = {
-  git: GitBranch,
-  docker: Container,
-  k8s: Boxes,
-  database: Database,
-  browser: Globe,
-  ssh: SquareTerminal,
-  python: FileCode,
-  vscode: Code,
-  slack: MessagesSquare,
-  figma: PenTool,
+/** 引擎插件 id → 图标（无匹配的插件用 Puzzle 兜底图标） */
+const ENGINE_PLUGIN_ICON: Record<string, LucideIcon> = {
+  "dsh-tavern": Boxes,
+  "dsh-pocket": Database,
+  "dsh-workgroup": Users,
+  "dsh-realtime-voice": Mic,
+  "dsh-muv-engine": Cpu,
+  "dsh-muv-table": Table2,
+  "dsh-subagent-codex": Code,
+  "dsh-subagent-claude-code": Terminal,
 };
-
-function useInstalledPlugins(): PluginItem[] {
-  const plugins = useStore($plugins);
-  return plugins
-    .filter((p) => p.enabled && PLUGIN_ICONS[p.id])
-    .map((p) => ({ id: p.id, label: p.label, icon: PLUGIN_ICONS[p.id] }));
-}
 
 // 单个插件按钮占宽（24 图标 + 4 gap）
 const PLUGIN_SLOT = 28;
@@ -137,31 +149,46 @@ function HeaderSection({
   showLeft,
   onExpandLeft,
   palette,
+  onOpenPlugins,
 }: {
   width: number;
   showLeft: boolean;
   onExpandLeft: () => void;
   /** 顶部命令搜索控制器（搜索框输入 + 结果下拉） */
   palette?: PaletteController;
+  /** 插件图标点击（打开真实插件面板） */
+  onOpenPlugins?: () => void;
 }) {
   // 标题块固定上限（CSS max-w-[320px]）：项目名与会话名都在其内截断，
   // 插件图标条位置稳定不受会话名长短影响
-  // 标题 = 项目名（当前激活会话所属项目，匹配不到用第一个）；介绍 = 当前会话名
+  // 标题 = 工作区名（真实：官方 useWorkspaces 快照中活跃会话所属工作区的
+  // title；匹配不到回落本地项目名/默认值）；介绍 = 当前会话名
   const activeId = useStore($activeSessionId);
   const sessions = useStore($sessions);
   const projects = useStore($projects);
+  const [, wsTick] = useState(0);
   const activeSession = sessions.find((s) => s.id === activeId) ?? sessions[0];
   const sessionTitle = activeSession?.title ?? "新会话";
-  const projectName =
+  // 工作区快照（sidecar workspaces.list）：活跃会话 id 命中的工作区 title
+  // 快照非响应式（Solid store），低频轮询跟随（数据变化频率极低）
+  useEffect(() => {
+    const t = window.setInterval(() => wsTick((v) => v + 1), 5000);
+    return () => window.clearInterval(t);
+  }, []);
+  const snapshot = currentWorkspaceSnapshot();
+  const wsTitle = activeId !== undefined
+    ? snapshot?.items.find((w) => w.sessionIds.includes(activeId))?.title
+    : undefined;
+  const localName =
     projects.find((p) => p.sessions.some((s) => s.title === sessionTitle))?.name ??
-    projects[0]?.name ??
-    "Mirach Harness Project";
-  // 插件区总宽不超过容器总宽度的 1/4；个数按空间比例计算（1/4 宽度可放几个就显示几个）
-  const PLUGINS = useInstalledPlugins();
+    projects[0]?.name;
+  const projectName = wsTitle ?? localName ?? "Mirach";
+  // 插件图标条 = 真实引擎插件（config.pluginEntries 装配镜像；官方 UI 插件清单）
+  const ENGINE_PLUGINS = useEnginePlugins();
   const pluginCap = Math.max(1, Math.floor((width * 0.25) / PLUGIN_SLOT));
-  const visibleCount = Math.min(pluginCap, PLUGINS.length);
-  const visiblePlugins = PLUGINS.slice(0, visibleCount);
-  const pluginOverflow = PLUGINS.length > visibleCount;
+  const visibleCount = Math.min(pluginCap, ENGINE_PLUGINS.length);
+  const visiblePlugins = ENGINE_PLUGINS.slice(0, visibleCount);
+  const pluginOverflow = ENGINE_PLUGINS.length > visibleCount;
   const [pluginsOpen, setPluginsOpen] = useState(false);
 
   // 插件区右侧的空白宽度（命令输入框是否显示的唯一依据）
@@ -204,40 +231,47 @@ function HeaderSection({
       className="relative flex items-center px-5 shrink-0 flex-1"
       style={{ height: 53, paddingTop: 14 }}
     >
-      {/* 左侧栏收起时显示展开按钮（z-20 高于 TopBar 的 z-10，避免被透明顶栏拦截点击） */}
+      {/* 左侧栏收起时显示展开按钮：位置在主对话区顶栏行（与侧栏标题同行高）、
+          高度与侧栏内收起按钮一致（h-7 w-7，非放大版）；项目名左对齐，
+          不被此图标挤动（图标占位在标题块之前，标题块保持左锚） */}
       {!showLeft && (
         <button
           onClick={onExpandLeft}
-          className="relative z-20 mr-3 flex h-8 w-8 items-center justify-center rounded-md text-[#464646] hover:bg-muted transition-colors shrink-0"
+          title="展开侧边栏"
+          className="relative z-20 mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#464646] hover:bg-muted transition-colors"
         >
           <PanelLeft className="h-6 w-6" strokeWidth={2} />
         </button>
       )}
-      {/* ---- 标题：第一行 = 项目名 + 插件图标条（图标严格跟随项目名）；
-           第二行 = 会话名（独立一行完整显示，不被图标截断） ---- */}
+      {/* ---- 标题：第一行 = 工作区名 + 插件图标条（真实引擎插件）；
+           第二行 = 会话名（独立一行完整显示，不被图标截断）。
+           项目名/会话名整体左对齐：标题块左锚 + flex-1 填充右侧 ---- */}
       <div className="flex min-w-0 flex-col gap-1 max-w-[520px]">
         <div className="flex min-w-0 items-center gap-3">
           <h2 title={projectName} className="truncate text-heading font-bold text-[#303030] leading-[1.4]">
             {projectName}
           </h2>
-          {/* ---- 已安装插件区（随项目名排布；超出收省略号） ---- */}
+          {/* ---- 真实引擎插件区（config.pluginEntries；点击打开插件面板） ---- */}
           <div ref={pluginsRef} className="flex shrink-0 items-center">
             <div className="flex items-center gap-0.5 overflow-hidden">
-              {visiblePlugins.map((p) => (
-                <button
-                  key={p.id}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
-                  title={p.label}
-                  onClick={() => setPluginsOpen(false)}
-                >
-                  <p.icon className="h-4 w-4" strokeWidth={2} />
-                </button>
-              ))}
+              {visiblePlugins.map((p) => {
+                const Icon = ENGINE_PLUGIN_ICON[p.id] ?? Puzzle;
+                return (
+                  <button
+                    key={p.id}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
+                    title={p.name}
+                    onClick={() => onOpenPlugins?.()}
+                  >
+                    <Icon className="h-4 w-4" strokeWidth={2} />
+                  </button>
+                );
+              })}
               {pluginOverflow && (
                 <button
                   className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
                   title="更多插件"
-                  onClick={() => setPluginsOpen((v) => !v)}
+                  onClick={() => onOpenPlugins?.()}
                 >
                   <Ellipsis className="h-4 w-4" strokeWidth={2} />
                 </button>
@@ -247,22 +281,28 @@ function HeaderSection({
         </div>
       </div>
 
-      {/* ---- 插件弹窗（省略号点击；锚定在标题区下方） ---- */}
+      {/* ---- 插件弹窗（省略号点击；锚定在标题区下方；点击项打开真实插件面板） ---- */}
       {pluginsOpen && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setPluginsOpen(false)} />
           <div className="panel-glass menu-anim absolute left-5 top-full z-40 mt-1 w-48 rounded-xl py-1">
-            <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">已安装插件</p>
-            {PLUGINS.map((p) => (
-              <button
-                key={p.id}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-body-sm text-[#303030] transition-colors hover:bg-muted"
-                onClick={() => setPluginsOpen(false)}
-              >
-                <p.icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
-                <span className="flex-1">{p.label}</span>
-              </button>
-            ))}
+            <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">引擎插件（官方装配清单）</p>
+            {ENGINE_PLUGINS.map((p) => {
+              const Icon = ENGINE_PLUGIN_ICON[p.id] ?? Puzzle;
+              return (
+                <button
+                  key={p.id}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-body-sm text-[#303030] transition-colors hover:bg-muted"
+                  onClick={() => {
+                    setPluginsOpen(false);
+                    onOpenPlugins?.();
+                  }}
+                >
+                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
+                  <span className="flex-1">{p.name}</span>
+                </button>
+              );
+            })}
           </div>
         </>
       )}
@@ -376,6 +416,8 @@ interface MainPanelProps {
   activeView?: string;
   /** 主栏宽度数值（用于 HeaderSection 等内部布局；容器宽度走 CSS 变量） */
   mainWidth?: number;
+  /** 打开插件面板（顶栏插件图标/更多点击） */
+  onOpenPlugins?: () => void;
 }
 
 // ---- 各组件共享的单例 ref：历史重放请求序号（见切环境流水线的 dsh_get_history）----
@@ -387,7 +429,7 @@ const MIN_TERMINAL = 150;
 // 终端最大高度 = 总高 - 顶85 - 底20 - 手柄6 - 对话区最小150 - 输入框最小106
 const MAX_TERMINAL = 900 - 85 - 20 - 6 - MIN_CHAT - 106;
 
-export function MainPanel({ className, style, showLeft = true, onExpandLeft, palette, activeView = "chat", mainWidth }: MainPanelProps) {
+export function MainPanel({ className, style, showLeft = true, onExpandLeft, palette, activeView = "chat", mainWidth, onOpenPlugins }: MainPanelProps) {
   // 官方侧栏折叠态（layout-mirror）：折叠时顶栏左侧显示"展开/新建/搜索"图标组
   const sidebarCollapsedState = useStore(sidebarCollapsed);
   // ---- 终端页展开/收起（默认收起） ----
@@ -698,7 +740,7 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
                       <PanelLeftOpen className="h-6 w-6" strokeWidth={2} />
                     </button>
                   )}
-                  <HeaderSection width={mainW} showLeft={showLeft} onExpandLeft={onExpandLeft ?? (() => {})} palette={palette} />
+                  <HeaderSection width={mainW} showLeft={showLeft} onExpandLeft={onExpandLeft ?? (() => {})} palette={palette} onOpenPlugins={onOpenPlugins} />
                 </div>
                 {/* 第二行：会话名（官方"对话/轨迹"标签页的左侧同行；
                     官方 tabs 经 index.css padding-left 右移让位）。

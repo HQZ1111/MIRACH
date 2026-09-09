@@ -91,32 +91,13 @@ export function LoginPage({ preview = false }: LoginPageProps) {
 
   /** 淡出后进入主界面（preview 下不真正进入）；进入即标记首次配置完成 */
   const enter = () => {
-    if (preview) {
-      setOpacity(0);
-      window.setTimeout(() => {
-        completeFirstRun();
-        unlockApp();
-      }, 380);
-      return;
-    }
-    // 引擎就绪才放行（对齐 hermes boot gate：splash/composer 消费 $gatewayState）。
-    // 未就绪时启动预热并留在当前页（按钮转 busy），就绪后自动进入——
-    // 修复"直接进入"在引擎冷启动窗口内点击无反应的假死。
-    setBusy(true);
-    void (async () => {
-      try {
-        const { ensureGatewayReady } = await import("@/store/gateway");
-        await ensureGatewayReady();
-      } catch {
-        /* 失败也放行：BootFailureOverlay 在主界面承接 */
-      }
-      setBusy(false);
-      setOpacity(0);
-      window.setTimeout(() => {
-        completeFirstRun();
-        unlockApp();
-      }, 380);
-    })();
+    setOpacity(0);
+    window.setTimeout(() => {
+      if (!preview) completeFirstRun();
+      // 解锁 = 离开密码页；引擎就绪等待由启动页承接（StartupGate 在
+      // phase 离开 locked 后显示 GatewayConnectingOverlay 直到 gateway open）
+      unlockApp();
+    }, 380);
   };
 
   /** 首次进入：设置密码 */

@@ -1089,6 +1089,7 @@ export function AppLayout() {
           mainWidth={mainWidth}
           showLeft
           activeView={activeView}
+          onOpenPlugins={() => setOverlayView("plugins")}
           palette={{
             open: paletteOpen,
             query: paletteQuery,

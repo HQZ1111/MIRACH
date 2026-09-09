@@ -106,10 +106,11 @@ export function LeftToolbar({
         <button
           onClick={() => onViewChange("mirach")}
           title="Mirach 主环境"
-          // 选中态（主环境激活）：放大 1.2 倍，与环境图标选中态一致（保持黑色底）
+          // 选中态（主环境激活）：点击交互反馈 = 轻微按压背景加深 + 高亮环，
+          // 尺寸不变（logo 不是图标，不参与环境图标 1.2 倍放大体系）
           className={cn(
-            "flex h-10 w-10 cursor-pointer items-center justify-center rounded-full bg-[#303030] font-bold text-lg text-white transition-transform hover:scale-105",
-            activeView === "mirach" && "scale-[1.2]",
+            "flex h-10 w-10 cursor-pointer items-center justify-center rounded-full bg-[#303030] font-bold text-lg text-white transition-colors hover:bg-[#1a1a1a] active:scale-95",
+            activeView === "mirach" && "ring-2 ring-[#026CFE]/60",
           )}
         >
           H

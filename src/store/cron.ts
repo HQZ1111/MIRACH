@@ -181,8 +181,10 @@ export async function removeCronJob(id: string): Promise<void> {
 }
 
 /**
- * 列表拉取：真实模式读本地登记（不降级假数据）。engineOk 语义改为
- * "sidecar 就绪"——探测不再打旧 api_server。
+ * 列表拉取：真实模式 = 本地登记 ∪ 引擎投影（schedule.list RPC，对齐官方
+ * ui-schedule 消费的 useProjection('schedule')——dsh 侧活跃提醒的权威来源；
+ * 引擎侧条目带 dshSessionId，本地登记条目没有，两者按 id 去重合并）。
+ * engineOk 语义 = "sidecar 就绪"。
  */
 export async function loadCronJobs(): Promise<boolean> {
   if (MOCK) {
@@ -192,7 +194,39 @@ export async function loadCronJobs(): Promise<boolean> {
   }
   $cronLoading.set(true);
   try {
-    $cronJobs.set(load());
+    const local = load();
+    let engineJobs: EngineCronJob[] = [];
+    try {
+      const res = await invoke<unknown>("dsh_rpc", { method: "schedule.list", params: null });
+      const bySession = (res as { bySession?: Record<string, Record<string, unknown>[]> } | null)?.bySession ?? {};
+      engineJobs = Object.values(bySession)
+        .flat()
+        .map((r) => {
+          const kind = String(r.kind ?? "at");
+          const scheduledAt = typeof r.scheduledAt === "string" ? r.scheduledAt : "";
+          const every = typeof r.everySeconds === "number" ? r.everySeconds : 0;
+          const schedule = kind === "every" && every > 0
+            ? `每 ${Math.round(every / 60)} 分钟`
+            : scheduledAt
+              ? new Date(scheduledAt).toLocaleString()
+              : kind;
+          return {
+            id: String(r.id ?? ""),
+            name: (String(r.prompt ?? "").slice(0, 30)) || "定时提醒",
+            prompt: String(r.prompt ?? ""),
+            schedule,
+            instruction: "",
+            deliver: "会话",
+            enabled: true,
+            status: "scheduled" as const,
+            createdAt: scheduledAt ? Date.parse(scheduledAt) || 0 : 0,
+          };
+        });
+    } catch {
+      /* schedule.list 不可达（引擎未起）→ 只显本地登记 */
+    }
+    const seen = new Set(engineJobs.map((x) => x.id));
+    $cronJobs.set([...engineJobs, ...local.filter((x) => !seen.has(x.id))]);
     $cronEngineOk.set(true);
     return true;
   } finally {

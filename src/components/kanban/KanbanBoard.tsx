@@ -232,7 +232,9 @@ export function KanbanBoard() {
   const [sprint, setSprint] = useState("003");
   const [drag, setDrag] = useState<DragState | null>(null);
   // 真实数据接入：dsh todo 工具的任务实时映射到看板列
-  // （pending→待办 / in_progress→进行中 / completed→已完成），覆盖演示数据
+  // （pending→待办 / in_progress→进行中 / completed→已完成），覆盖演示数据。
+  // 「审查中」列暂无引擎侧数据源（dsh todo 无 review 状态）——保持空列，
+  // 已知限制见 HANDOVER 待做。
   const todosState = useStore($todosState);
   useEffect(() => {
     if (MOCK) return;

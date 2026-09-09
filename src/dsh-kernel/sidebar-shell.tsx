@@ -245,6 +245,19 @@ interface SidebarActions {
 
 let sideActions: SidebarActions | null = null;
 
+/** 工作区快照通道（顶栏项目名真实化用）：registerSidebarShell 时缓存
+ *  workspaces.list 快照订阅器；MainPanel 轮询/事件时取当前 items。
+ *  数据源与官方 WorkspaceBrowser 同一 store（useWorkspaces 的底层）。 */
+interface WorkspaceSnapshotLike {
+  items: readonly { workspaceId: string; title: string; sessionIds: readonly string[] }[];
+}
+let workspaceSnapshotGetter: (() => WorkspaceSnapshotLike | null) | null = null;
+
+/** 取当前工作区快照（items；内核未就绪返回 null）。顶栏项目名真实化消费。 */
+export function currentWorkspaceSnapshot(): WorkspaceSnapshotLike | null {
+  return workspaceSnapshotGetter?.() ?? null;
+}
+
 function initSidebarActions(ctx: Context): SidebarActions {
   const ctxAny = ctx as unknown as {
     sessions?: SolidSessions;
@@ -258,6 +271,9 @@ function initSidebarActions(ctx: Context): SidebarActions {
     ?? (typeof ctxAny.get === "function" ? (ctxAny.get("uiWorkspace") as SolidUiWorkspace | undefined) : undefined);
   const workspaces = ctxAny.workspaces
     ?? (typeof ctxAny.get === "function" ? (ctxAny.get("workspaces") as SolidWorkspaces | undefined) : undefined);
+  // 工作区快照读取器：官方 workspace-controller 的 list 快照（WorkspaceView[]）
+  const wsList = (workspaces as unknown as { list?: { (): WorkspaceSnapshotLike } } | undefined)?.list;
+  workspaceSnapshotGetter = wsList ? () => wsList.call(workspaces) : null;
   return {
     open: (id) => { sessions?.open?.(id); },
     rename: async (id, title) => {
@@ -996,19 +1012,18 @@ function MirachSidebar(props: SidebarRootComponentProps) {
             </div>
           </div>
 
-          {/* 已置顶会话（mirach 自有） */}
-          <div className="dropdown-card mb-2 shrink-0">
+          {/* 已置顶会话（mirach 自有；圆角与搜索框一致 rounded-lg，不用胶囊型） */}
+          <div className="mb-2 shrink-0 rounded-lg border border-border bg-muted/30">
             <Collapsible defaultOpen>
-              <CollapsibleTrigger className="dropdown-card-trigger py-1.5 group/pinned">
-                <Pin className="dropdown-card-icon" strokeWidth={2} />
-                <span className="flex-1 text-left text-member">已置顶会话</span>
-                <ChevronDown className="dropdown-card-chevron group-data-[state=open]/pinned:rotate-180" />
+              <CollapsibleTrigger className="w-full py-1.5 pl-2 pr-1.5 group/pinned">
+                <span className="flex w-full items-center gap-2">
+                  <Pin className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2} />
+                  <span className="flex-1 text-left text-member">已置顶会话</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=open]/pinned:rotate-180" />
+                </span>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <div className="dropdown-card-body px-2 pb-1.5">
-                  <p className="mt-1 mb-1 px-2 text-[11px] text-muted-foreground/60">
-                    Shift+单击对话以置顶 · 拖动以重新排序
-                  </p>
+                <div className="px-2 pb-1.5">
                   {pinnedSessions.length === 0 ? (
                     <p className="px-2 py-1 text-body-sm text-muted-foreground/60">暂无置顶会话</p>
                   ) : (
@@ -1036,8 +1051,9 @@ function MirachSidebar(props: SidebarRootComponentProps) {
           {/* 官方工作区切换器（dsh ui-workspace 的 WorkspaceBrowser 整块：
               工作区列表/新增/重命名/删除/排序 + 视图选项，全部官方交互。
               sidebar.workspaces 槽由 ui-workspace 的 apply 注册占据，
-              renderSlot 出口即官方整块；owner 面与官方 SidebarRoot 同款） */}
-          <div className="mb-2 shrink-0 rounded-lg border border-border" data-mirach-official-browser>
+              renderSlot 出口即官方整块；不加边框——官方组件自带分区样式，
+              与侧栏背景融为一体（对齐官方 SidebarRoot 渲染形态）） */}
+          <div className="min-h-0 flex-1" data-mirach-official-browser>
             {renderSlot("sidebar.workspaces", { wide: true, expandSidebar: () => {} })}
           </div>
 

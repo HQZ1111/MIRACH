@@ -152,6 +152,25 @@ export function handleMirachEvent(
       if (e.tool.result !== undefined) {
         updateToolCall(e.tool.id, { result: e.tool.result });
       }
+      // 产物真实化（官方 ui-deliverables turn-deliverables 语义）：成功的
+      // write/edit/str_replace_editor 调用 = 产出文件。从完成事件的工具
+      // args 提取 file_path 登记为文件产物（最近一次 tool.start 的参数在
+      // $toolCalls 条目上；这里从 store 取回）
+      if (e.tool.status !== "error") {
+        const done = $toolCalls.get().find((c) => c.id === e.tool.id);
+        const mutArgs = (done?.args ?? {}) as Record<string, unknown>;
+        const mutPath = typeof mutArgs.file_path === "string" ? mutArgs.file_path : undefined;
+        if (mutPath && ["write", "edit", "str_replace_editor"].includes(done?.name ?? "")) {
+          addArtifacts([{
+            id: `file-${e.tool.id}`,
+            kind: "code",
+            title: mutPath.split(/[\\/]/).pop() ?? mutPath,
+            content: mutPath,
+            sessionId: opts.requestSession ?? $activeSessionId.get(),
+            createdAt: Date.now(),
+          }]);
+        }
+      }
       break;
     }
     case "tool.update": {
