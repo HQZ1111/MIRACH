@@ -1,14 +1,16 @@
 /**
  * Hermes agent-sidecar — 消息队列管理（steer / follow-up）
  *
- * dsh 运行时没有原生 steer/follow-up 命令（协议只有 initialize /
- * session/prompt / shutdown），队列由 sidecar 自管理：
- *  - `send_prompt` / steer / follow-up 都进同一个 FIFO 队列（prompt 是
- *    用户发的新消息，steer/follow-up 是插入消息）；
- *  - 队列有内容时 worker 逐一 `session.run()`（dsh 的 inbox 天然按序处理，
- *    每次 run 都会跑到 agent idle 才 resolve）；
- *  - 每次入队/出队都向 Tauri 后端发 `queue_update`（前端 QUEUE_UPDATE /
- *    QUEUE_OPTIMISTIC 用它管理排队指示）。
+ * 官方队列语义在引擎侧：stdio SDK 的 `prompt()` 即"入引擎 durable inbox"
+ * （官方注释：Queue one prompt and return its durable inbox identity），
+ * web 面另有 `session/prompt` 的 delivery mode（steer/queue）与
+ * `session/updateQueue`（改排队项）——mirach 内核（官方 client 栈）直连
+ * 该面，是官方路径。
+ *
+ * 本类只服务 Tauri/pi 侧车通道的传输语义：把进同一 FIFO 的消息逐条交给
+ * `session.run()`（run 本身 = 官方"入队 + 观察到 idle"），并向 Tauri 后端
+ * 发 `queue_update`（前端 QUEUE_UPDATE / QUEUE_OPTIMISTIC 用它管理排队指示）。
+ * 真正的排队/去重/持久化在引擎 inbox，这里不重复实现。
  */
 
 import { logDebug } from "./protocol.js";
