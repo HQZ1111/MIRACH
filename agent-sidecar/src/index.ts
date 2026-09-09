@@ -27,9 +27,9 @@ import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
 
 import { createDshAdapter } from "./adapter.js";
 import { ensureRuntime, shutdownRuntime, sessionFor, catalog, findModel, routeFor, syncProviderConfig, setEffort, setWorkspace, setSystemPrompt, workspace, DEFAULT_MODEL, PROVIDER_ROUTE, type ActiveModel, type DshRuntimeHandle } from "./dsh.js";
-import { readSessionHistory, readSessionRawEvents } from "./history.js";
+import { readSessionHistory, readSessionRawEvents, listAllSessions } from "./history.js";
 import { log, logDebug, logError, logWarn, send } from "./protocol.js";
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
@@ -507,44 +507,32 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       return;
     }
     case "list_sessions": {
-      // 扫描 DSH_SESSION_ROOT 下的持久化会话（目录里含 session.jsonl*）。
-      // 标题 = 日志首条 user 消息前 60 字（dsh 无独立元数据文件，标题是
-      // session/title 投影，我们轻量近似）；大文件（>1.5MB）跳过解析防阻塞。
+      // 官方持久化库 list()（跨项目目录、旧命名兼容）→ 标题取首条 user 消息前 60 字
+      // （官方 title 投影的轻量近似）；大文件（>1.5MB）跳过解析防阻塞。
       const sessionRoot = resolveRuntimePaths().sessionRoot;
       const sessions: { id: string; createdAt: number; title?: string }[] = [];
-      const walk = (dir: string, depth: number): void => {
-        if (depth > 2) return;
-        try {
-          for (const name of readdirSync(dir, { withFileTypes: true })) {
-            if (!name.isDirectory()) continue;
-            const sub = join(dir, name.name);
-            const zstdPath = join(sub, "session.jsonl.zstd");
-            const plainPath = join(sub, "session.jsonl");
-            const logPath = existsSync(zstdPath) ? zstdPath : existsSync(plainPath) ? plainPath : null;
-            if (logPath) {
-              let createdAt = 0;
-              let title = "";
-              try {
-                createdAt = statSync(logPath).mtimeMs;
-                if (statSync(logPath).size <= 1_500_000) {
-                  const msgs = readSessionHistory(sessionRoot, name.name);
-                  title = (msgs.find((m) => m.role === "user")?.text ?? "").slice(0, 60);
-                }
-              } catch {
-                /* 单个会话解析失败不影响列表 */
-              }
-              sessions.push({ id: name.name, createdAt, ...(title ? { title } : {}) });
-            } else {
-              walk(sub, depth + 1);
+      const artifacts = await listAllSessions();
+      if (artifacts) {
+        for (const a of artifacts) {
+          let createdAt = 0;
+          let title = "";
+          try {
+            createdAt = a.createdAt ?? 0;
+            if ((a.sizeBytes ?? 0) <= 1_500_000) {
+              const msgs = await readSessionHistory(sessionRoot, a.id);
+              title = (msgs.find((m) => m.role === "user")?.text ?? "").slice(0, 60);
             }
+          } catch {
+            /* 单个会话解析失败不影响列表 */
           }
-        } catch {
-          /* 忽略 */
+          sessions.push({ id: a.id, createdAt, ...(title ? { title } : {}) });
         }
-      };
-      loadSessionMap();
-      if (existsSync(sessionRoot)) walk(sessionRoot, 0);
+      } else {
+        // 官方承载失败（无 root 等）：回退为空列表，报错日志已在 session-store 打过
+        logWarn("list_sessions: official persistence unavailable");
+      }
       // 映射了前端会话的条目附带 frontendId + 当前环境（前端可点开续聊）
+      loadSessionMap();
       const enriched = sessions.map((s) => {
         const hit = [...sessionMap.entries()].find(([, dsh]) => dsh === s.id);
         return { ...s, ...(hit ? { frontendId: hit[0].split("::")[1] ?? hit[0], envId: hit[0].split("::")[0] } : {}) };
@@ -578,10 +566,10 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
         return;
       }
       const sessionRoot = resolveRuntimePaths().sessionRoot;
-      const messages = readSessionHistory(sessionRoot, dshId);
-      // 原始事件序列（含打包 chunk 行解包）：前端官方装配层/投影的历史底座，
+      const messages = await readSessionHistory(sessionRoot, dshId);
+      // 原始事件序列（官方 restore 管道，chunk 已展开）：前端官方装配层/投影的历史底座，
       // 与实时 raw_session_event 同形同 seq 空间，前端按 seq 去重合并
-      const events = readSessionRawEvents(sessionRoot, dshId);
+      const events = await readSessionRawEvents(sessionRoot, dshId);
       send({ type: "result", id, data: { messages, events } });
       return;
     }
@@ -602,53 +590,40 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       if (method === "schedule.list") {
         const sessionRoot = resolveRuntimePaths().sessionRoot;
         const bySession: Record<string, unknown[]> = {};
-        const scan = (dir: string, depth: number): void => {
-          if (depth > 2) return;
+        // 官方 list() 列举全部会话，逐会话取原始事件 fold schedule/change
+        const artifacts = await listAllSessions();
+        for (const a of artifacts ?? []) {
+          const active = new Map<string, { id: string; kind: string; prompt: string; scheduledAt?: string; everySeconds?: number; frontendId?: string }>();
           try {
-            for (const name of readdirSync(dir, { withFileTypes: true })) {
-              if (!name.isDirectory()) continue;
-              const sub = join(dir, name.name);
-              const hasLog = existsSync(join(sub, "session.jsonl.zstd")) || existsSync(join(sub, "session.jsonl"));
-              if (hasLog) {
-                const active = new Map<string, { id: string; kind: string; prompt: string; scheduledAt?: string; everySeconds?: number; frontendId?: string }>();
-                try {
-                  for (const ev of readSessionRawEvents(sessionRoot, name.name)) {
-                    const data = (ev as { data?: Record<string, unknown> }).data;
-                    if (!data || data.version !== 1) continue;
-                    if (data.operation === "create" && typeof data.id === "string") {
-                      const s = (data.schedule ?? {}) as Record<string, unknown>;
-                      active.set(data.id, {
-                        id: data.id,
-                        kind: typeof s.kind === "string" ? s.kind : "at",
-                        prompt: typeof s.prompt === "string" ? s.prompt : "",
-                        ...(typeof s.scheduledAt === "string" ? { scheduledAt: s.scheduledAt } : {}),
-                        ...(typeof s.everySeconds === "number" ? { everySeconds: s.everySeconds } : {}),
-                      });
-                    } else if ((data.operation === "delete" || data.operation === "dispatch") && typeof data.id === "string") {
-                      active.delete(data.id);
-                    }
-                  }
-                } catch {
-                  /* 单会话解析失败不影响其余 */
-                }
-                if (active.size > 0) {
-                  const hit = [...sessionMap.entries()].find(([, dsh]) => dsh === name.name);
-                  const list = [...active.values()].map((r) => ({
-                    ...r,
-                    sessionId: name.name,
-                    ...(hit ? { frontendId: hit[0].split("::")[1] ?? hit[0] } : {}),
-                  }));
-                  bySession[name.name] = list;
-                }
-              } else {
-                scan(sub, depth + 1);
+            for (const ev of await readSessionRawEvents(sessionRoot, a.id)) {
+              const data = (ev as { data?: Record<string, unknown> }).data;
+              if (!data || data.version !== 1) continue;
+              if (data.operation === "create" && typeof data.id === "string") {
+                const s = (data.schedule ?? {}) as Record<string, unknown>;
+                active.set(data.id, {
+                  id: data.id,
+                  kind: typeof s.kind === "string" ? s.kind : "at",
+                  prompt: typeof s.prompt === "string" ? s.prompt : "",
+                  ...(typeof s.scheduledAt === "string" ? { scheduledAt: s.scheduledAt } : {}),
+                  ...(typeof s.everySeconds === "number" ? { everySeconds: s.everySeconds } : {}),
+                });
+              } else if ((data.operation === "delete" || data.operation === "dispatch") && typeof data.id === "string") {
+                active.delete(data.id);
               }
             }
           } catch {
-            /* 忽略 */
+            /* 单会话解析失败不影响其余 */
           }
-        };
-        if (existsSync(sessionRoot)) scan(sessionRoot, 0);
+          if (active.size > 0) {
+            const hit = [...sessionMap.entries()].find(([, dsh]) => dsh === a.id);
+            const list = [...active.values()].map((r) => ({
+              ...r,
+              sessionId: a.id,
+              ...(hit ? { frontendId: hit[0].split("::")[1] ?? hit[0] } : {}),
+            }));
+            bySession[a.id] = list;
+          }
+        }
         send({ type: "result", id, data: { bySession, total: Object.values(bySession).flat().length } });
         return;
       }

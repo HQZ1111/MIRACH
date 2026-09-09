@@ -1,10 +1,13 @@
 /**
- * plugins — 社区插件一键管理（mirach 自有安装器）
+ * plugins — 社区插件一键管理（官方机制直通）
  *
- * 机制 = 官方 `dsh plugin add` 的手工等价自动化（三步）：
- *   ① npm install <pkg> 装进 ~/.mirach/dsh-plugins/node_modules（引擎 NODE_PATH 覆盖）；
- *   ② junction 到 profile node_modules（cordis 模块解析可达）；
- *   ③ profile cordis.patch.yml 追加插件行（幂等）。
+ * 安装/卸载直接调用官方 `dsh plugin --profile <name> add|remove <pkg>` CLI
+ * （官方语义：转发 pnpm 维护 profile dependencies + lockfile；插件包自带
+ * cordis.patch.yml 由 dsh.bundle.patch 机制接管，无需手改 patch 文件）。
+ * bundles 清单由调用方维护（官方 apps/desktop project-manager 同款语义：
+ * 重装已有插件 + 重写 dsh.profile.bundles）。
+ *
+ * list 为展示层：扫 profile node_modules 里带 dsh 字段的包（官方无 list 命令）。
  * 装载发生在 runtime 启动 —— 安装/卸载后需重启应用生效。
  *
  * 内置三件（workgroup/realtime-voice/tavern）在 UI 层禁用卸载；本模块仍允许
@@ -12,7 +15,7 @@
  */
 
 import { exec } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, lstatSync, symlinkSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -21,12 +24,15 @@ import { log, logWarn } from "./protocol.js";
 const execP = promisify(exec);
 
 const DSH_HOME = (): string => process.env.DSH_HOME ?? join(homedir(), ".mirach");
-const PLUGINS_NM = (): string => join(DSH_HOME(), "dsh-plugins", "node_modules");
 const PROFILE_DIR = (): string => join(DSH_HOME(), "profiles", process.env.MIRACH_PROFILE_NAME ?? "mirach");
 const PROFILE_NM = (): string => join(PROFILE_DIR(), "node_modules");
-const PROFILE_PATCH = (): string => join(PROFILE_DIR(), "cordis.patch.yml");
+const PROFILE_PKG = (): string => join(PROFILE_DIR(), "package.json");
+/** 官方引擎入口（与 dsh.ts 同一解析：node 直接执行全局包 bin.js） */
+const NPM_DSH_BIN = (): string =>
+  process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js") : "";
+const NODE_BIN = (): string => process.env.DSH_NODE_BIN ?? "node";
 
-/** 内置三件（UI 禁用卸载；junction + patch 行随 mirach 发布维护） */
+/** 内置三件（UI 禁用卸载；bundle 声明随 mirach profile 发布维护） */
 export const BUILTIN_PLUGINS = new Set(["dsh-workgroup", "dsh-realtime-voice", "dsh-tavern"]);
 
 export interface InstalledPlugin {
@@ -36,9 +42,9 @@ export interface InstalledPlugin {
   description: string;
   /** 是否为插件包（package.json 声明 dsh 字段） */
   isPlugin: boolean;
-  /** profile cordis.patch.yml 已激活 */
+  /** profile dependencies 已声明（官方 plugin 面的"已安装"） */
   active: boolean;
-  /** junction 已建 */
+  /** profile node_modules 已落盘 */
   linked: boolean;
   builtin: boolean;
 }
@@ -59,187 +65,116 @@ function readPkg(dir: string): { name?: string; version?: string; description?: 
   }
 }
 
-function activeInPatch(patchText: string, pkgName: string): boolean {
-  return patchText.includes(`name: '${pkgName}'`);
+function profileDependencies(): Record<string, string> {
+  try {
+    return (JSON.parse(safeRead(PROFILE_PKG())).dependencies ?? {}) as Record<string, string>;
+  } catch {
+    return {};
+  }
 }
 
-/** 列出 dsh-plugins 里已安装的包（顶层 + scope 一级） */
+function profileBundles(): string[] {
+  try {
+    return ((JSON.parse(safeRead(PROFILE_PKG())).dsh as { profile?: { bundles?: string[] } })?.profile?.bundles ?? []) as string[];
+  } catch {
+    return [];
+  }
+}
+
+function writeProfileBundles(bundles: string[]): void {
+  try {
+    const j = JSON.parse(safeRead(PROFILE_PKG()));
+    j.dsh = j.dsh ?? {};
+    j.dsh.profile = j.dsh.profile ?? {};
+    j.dsh.profile.bundles = bundles;
+    writeFileSync(PROFILE_PKG(), JSON.stringify(j, null, 2) + "\n", "utf8");
+  } catch (e) {
+    logWarn("profile bundles rewrite failed: %s", e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** 官方 CLI：dsh plugin --profile <name> <args...>（node 直执行全局 bin.js） */
+async function dshPluginCli(args: string[]): Promise<string> {
+  const bin = NPM_DSH_BIN();
+  if (!bin || !existsSync(bin)) throw new Error("官方 dsh CLI 不存在（npm i -g @deepseek-ai/dsh@alpha）");
+  const { stdout, stderr } = await execP(
+    `"${NODE_BIN()}" "${bin}" plugin --profile ${process.env.MIRACH_PROFILE_NAME ?? "mirach"} ${args.join(" ")}`,
+    { cwd: PROFILE_DIR(), windowsHide: true, timeout: 600_000, maxBuffer: 8 * 1024 * 1024 },
+  );
+  return [stdout, stderr].filter((s) => s && s.trim()).join("\n").trim();
+}
+
+/** 列出 profile dependencies 里已装的插件包（官方安装面） */
 export async function listPlugins(): Promise<InstalledPlugin[]> {
-  const nm = PLUGINS_NM();
-  if (!existsSync(nm)) return [];
-  const patch = safeRead(PROFILE_PATCH());
-  const profileNm = PROFILE_NM();
+  const nm = PROFILE_NM();
+  const deps = profileDependencies();
+  const bundles = profileBundles();
   const out: InstalledPlugin[] = [];
-  const push = (fullName: string, dir: string): void => {
-    if (fullName.startsWith(".") || fullName === ".package-lock.json") return;
-    try {
-      if (!lstatSync(dir).isDirectory()) return;
-    } catch {
-      return;
-    }
+  for (const [name] of Object.entries(deps)) {
+    const dir = join(nm, name);
     const pkg = readPkg(dir);
-    const realName = pkg.name ?? fullName;
     out.push({
-      name: realName,
-      version: pkg.version ?? "",
+      name: pkg.name ?? name,
+      version: pkg.version ?? deps[name] ?? "",
       description: pkg.description ?? "",
       isPlugin: pkg.dsh !== undefined,
-      active: activeInPatch(patch, realName),
-      linked: existsSync(join(profileNm, fullName)),
-      builtin: BUILTIN_PLUGINS.has(realName),
+      active: bundles.includes(name),
+      linked: existsSync(dir),
+      builtin: BUILTIN_PLUGINS.has(name),
     });
-  };
-  for (const name of readdirSync(nm)) {
-    if (name.startsWith(".")) continue;
-    const dir = join(nm, name);
-    try {
-      if (!lstatSync(dir).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (name.startsWith("@")) {
-      for (const sub of readdirSync(dir)) {
-        push(`${name}/${sub}`, join(dir, sub));
-      }
-    } else {
-      push(name, dir);
-    }
   }
-  out.sort((a, b) => Number(b.isPlugin) - Number(a.isPlugin) || a.name.localeCompare(b.name));
+  out.sort((a, b) => Number(b.isPlugin) - Number(b.builtin) - (Number(a.isPlugin) - Number(a.builtin)) || a.name.localeCompare(b.name));
   return out;
 }
 
-/** 从安装规格解析真实包名（x@1.2 → x；@a/b@1.2 → @a/b） */
+/** 安装：官方 CLI add → bundles 追加（幂等）。返回步骤日志。 */
+export async function installPlugin(spec: string): Promise<string[]> {
+  const pkg = spec.trim();
+  if (!/^[@a-z0-9][\w@./-]*$/i.test(pkg)) throw new Error("包名不合法（npm 包名或 name@version）");
+  const lines: string[] = [];
+  lines.push(`dsh plugin add ${pkg} …`);
+  lines.push(await dshPluginCli(["add", pkg]));
+  // 官方 CLI 只维护 dependencies；bundles 清单由调用方维护（官方 project-manager 同款）
+  const realName = resolveRealName(pkg);
+  const bundles = profileBundles();
+  if (!bundles.includes(realName)) {
+    writeProfileBundles([...bundles, realName]);
+    lines.push(`dsh.profile.bundles + ${realName}`);
+  } else {
+    lines.push("bundles 已含该插件，跳过");
+  }
+  lines.push("完成 —— 重启应用后生效");
+  log("plugins.install %s OK", realName);
+  return lines;
+}
+
+/** 卸载：bundles 移除 → 官方 CLI remove。返回步骤日志。 */
+export async function uninstallPlugin(pkgName: string): Promise<string[]> {
+  const lines: string[] = [];
+  const bundles = profileBundles();
+  if (bundles.includes(pkgName)) {
+    writeProfileBundles(bundles.filter((b) => b !== pkgName));
+    lines.push(`dsh.profile.bundles - ${pkgName}`);
+  }
+  lines.push(`dsh plugin remove ${pkgName} …`);
+  lines.push(await dshPluginCli(["remove", pkgName]));
+  lines.push("完成 —— 重启应用后生效");
+  log("plugins.uninstall %s OK", pkgName);
+  return lines;
+}
+
+/** 从安装规格解析真实包名（x@1.2 → x；@a/b@1.2 → @a/b；装完后以 package.json 为准） */
 function resolveRealName(spec: string): string {
   const noVersion = spec.split("@").length > 2 && spec.startsWith("@")
     ? "@" + spec.slice(1).split("@")[0]
     : spec.startsWith("@")
       ? spec
       : spec.split("@")[0];
-  const pkg = readPkg(join(PLUGINS_NM(), noVersion));
+  const pkg = readPkg(join(PROFILE_NM(), noVersion));
   return pkg.name ?? noVersion;
 }
 
-/** 追加插件行到 profile cordis.patch.yml（幂等：按 name 判重） */
-function appendPatch(pkgName: string, lines: string[]): void {
-  const patchPath = PROFILE_PATCH();
-  let text = safeRead(patchPath);
-  if (!text) {
-    text = "- insert:\n";
-    logWarn("profile cordis.patch.yml 缺失，已创建：%s", patchPath);
-  }
-  if (text.includes(`name: '${pkgName}'`)) {
-    lines.push("patch 已含该插件，跳过");
-    return;
-  }
-  const entry = `    - id: ${pkgName.split("/").pop()}\n      name: '${pkgName}'`;
-  const arr = text.split(/\r?\n/);
-  let lastEntryIdx = -1;
-  arr.forEach((l, i) => {
-    if (/^    - id:/.test(l)) lastEntryIdx = i;
-  });
-  if (lastEntryIdx >= 0) {
-    let at = lastEntryIdx + 1;
-    while (at < arr.length && arr[at]!.trim() !== "" && !/^    - id:/.test(arr[at]!)) at++;
-    arr.splice(at, 0, entry);
-    writeFileSync(patchPath, arr.join("\n"), "utf8");
-  } else {
-    writeFileSync(patchPath, text.replace(/\s*$/, "\n") + "- insert:\n" + entry.split("\n").map((l) => "  " + l).join("\n") + "\n", "utf8");
-  }
-  lines.push("cordis.patch.yml 已更新");
-}
-
-/** 移除插件行（连同其 - id: 行） */
-function removePatch(pkgName: string, lines: string[]): void {
-  const patchPath = PROFILE_PATCH();
-  const text = safeRead(patchPath);
-  if (!text || !text.includes(`name: '${pkgName}'`)) return;
-  const arr = text.split(/\r?\n/);
-  const out: string[] = [];
-  for (let i = 0; i < arr.length; i++) {
-    if (/^    - id:/.test(arr[i]!) && i + 1 < arr.length && arr[i + 1]!.includes(`name: '${pkgName}'`)) {
-      i++; // 连同 name 行一起跳过
-      continue;
-    }
-    if (arr[i]!.includes(`name: '${pkgName}'`)) continue;
-    out.push(arr[i]!);
-  }
-  writeFileSync(patchPath, out.join("\n"), "utf8");
-  lines.push("cordis.patch.yml 已移除该插件");
-}
-
-/** 安装：npm install → junction → patch 追加。返回步骤日志。 */
-export async function installPlugin(spec: string): Promise<string[]> {
-  const pkg = spec.trim();
-  if (!/^[@a-z0-9][\w@./-]*$/i.test(pkg)) throw new Error("包名不合法（npm 包名或 name@version）");
-  const lines: string[] = [];
-  const nm = PLUGINS_NM();
-  mkdirSync(nm, { recursive: true });
-  lines.push(`npm install ${pkg} …`);
-  const { stderr } = await execP(`npm install ${pkg} --no-audit --no-fund --legacy-peer-deps`, {
-    cwd: join(nm, ".."),
-    windowsHide: true,
-    timeout: 300_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  if (stderr && stderr.trim()) lines.push("npm: " + stderr.trim().split(/\r?\n/).slice(-2).join(" / "));
-  lines.push("npm 安装完成");
-  const realName = resolveRealName(pkg);
-  lines.push("包名：" + realName);
-  // junction 到 profile node_modules
-  const link = join(PROFILE_NM(), realName);
-  const target = join(nm, realName);
-  if (!existsSync(target)) throw new Error("安装后未找到包目录：" + target);
-  mkdirSync(PROFILE_NM(), { recursive: true });
-  let linked = false;
-  try {
-    linked = existsSync(link);
-  } catch {
-    linked = false;
-  }
-  if (!linked) {
-    symlinkSync(target, link, "junction");
-    lines.push("junction 已创建");
-  } else {
-    lines.push("junction 已存在，跳过");
-  }
-  appendPatch(realName, lines);
-  lines.push("完成 —— 重启应用后生效");
-  log("plugins.install %s OK", realName);
-  return lines;
-}
-
-/** 卸载：patch 移除 → junction 删除 → npm uninstall。返回步骤日志。 */
-export async function uninstallPlugin(pkgName: string): Promise<string[]> {
-  const lines: string[] = [];
-  removePatch(pkgName, lines);
-  const link = join(PROFILE_NM(), pkgName);
-  try {
-    if (existsSync(link)) {
-      rmSync(link, { force: true, recursive: true });
-      lines.push("junction 已删除");
-    }
-  } catch (e) {
-    logWarn("junction remove failed: %s", e instanceof Error ? e.message : String(e));
-  }
-  const nm = PLUGINS_NM();
-  if (existsSync(join(nm, pkgName))) {
-    await execP(`npm uninstall ${pkgName} --no-audit --no-fund --legacy-peer-deps`, {
-      cwd: join(nm, ".."),
-      windowsHide: true,
-      timeout: 180_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    lines.push("npm 卸载完成");
-  }
-  lines.push("完成 —— 重启应用后生效");
-  log("plugins.uninstall %s OK", pkgName);
-  return lines;
-}
-
-// ── 手机接入（net.access）：局域网/虚拟网 IP + 连通性探测 ──
-
-// ── 手机接入（net.access）：局域网/虚拟网 IP + 连通性探测 + 引擎版本检查/更新 ──
+// ── 引擎更新（npm alpha 通道）──
 
 export interface EngineUpdateInfo {
   current: string;
@@ -292,4 +227,3 @@ export async function updateEngine(): Promise<string[]> {
   lines.push("引擎更新完成 —— 重启应用生效");
   return lines;
 }
-

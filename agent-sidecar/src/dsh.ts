@@ -26,7 +26,7 @@ import { DeepSeekHarness, type HarnessSession } from "@deepseek-ai/dsh-sdk-clien
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { log, logDebug, logError, logWarn } from "./protocol.js";
-import { resolveRuntimePaths, writeRuntimeConfig, type RuntimePaths } from "./runtime.js";
+import { resolveRuntimePaths, type RuntimePaths } from "./runtime.js";
 import { subagentEnvForEngine } from "./subagent-backends.js";
 
 /** 设置页同步进来的完整 provider 配置（保留协议/端点/密钥/模型目录）。 */
@@ -325,52 +325,37 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
       await runtime.dispose().catch(() => {});
       runtime = null;
     }
-    // 动态 cordis.yml：模板 + llm-pi-ai 条目 + 推理强度；运行时经 DSH_CORDIS_CONFIG 指向生成文件。
-    // profile 模式（MIRACH_PROFILE=1）跳过生成：配置由 profile cordis.patch.yml 提供（env 驱动）。
-    const configPath = writeRuntimeConfig(paths, effortNow);
+    // 官方 profile 机制（唯一装配路径）：dsh --profile <name>，配置全在
+    // profile cordis.patch.yml（env 驱动：llm-pi-ai providers / effort / 端口）。
     log("launching dsh runtime: node=%s env=%s cwd=%s profile=%s", paths.nodeBin, ws.envId, cwdNow, paths.profileMode);
-    logDebug("entry=%s config=%s sessionRoot=%s", paths.entry, configPath, paths.sessionRoot);
+    logDebug("entry=%s sessionRoot=%s", paths.entry, paths.sessionRoot);
 
-    // profile 模式启动：优先用全局 npm 安装的 dsh CLI（更新 = npm i -g @deepseek-ai/dsh@alpha
-    // 一条命令），无全局安装时回退 workspace 源码（tsx bin.ts）。
-    // 注意：SDK 0.1.5 重写了启动 API —— DeepSeekHarnessOptions 不再有 launch{command,args}，
-    // 改为 dshBin/profile/patches/dshHome/processCwd/env/initializeTimeoutMs（dsh.ts 探针实测）。
-    // 旧键会被 SDK 静默忽略并回落到 `--profile sdk` —— 引擎"假就绪"而 mirach web 面（3212）永不监听。
+    // SDK 0.1.5 启动 API：dshBin/profile/patches/dshHome/processCwd/env/initializeTimeoutMs。
+    // 注意：旧 launch{command,args} 键会被 SDK 静默忽略并回落到 `--profile sdk` ——
+    // 引擎"假就绪"而 mirach web 面（3212）永不监听。
     const npmDshBin = process.env.APPDATA
       ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
       : "";
     const hasNpmDsh = npmDshBin && existsSync(npmDshBin);
     const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
-    const useNpmDsh = paths.profileMode && hasNpmDsh;
-    // 非 profile 模式（老 entry+生成 yml）：SDK 只认 profile 面602 —— 经 --patch 叠加生成配置。
-    // entry+configPath 组合已无 SDK 通道，回退路径用 patches: [configPath]（同为 overlay yml）。
+    const dshHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach");
     const harnessOptions = {
       // 显式指定全局 npm 安装的引擎入口；未安装时由 SDK 按同版本依赖自解析
-      ...(useNpmDsh ? { dshBin: npmDshBin } : {}),
-      profile: paths.profileMode ? profileName : "mirach",
-      // 老 entry+生成 yml 模式：生成文件就是一份 overlay patch
-      ...(!paths.profileMode ? { patches: [configPath] } : {}),
-      // profile 模式：Harness home 指向 mirach 数据目录（profiles/sessions/storages 都住这）
-      dshHome: paths.profileMode
-        ? (process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"))
-        : undefined,
-      processCwd: useNpmDsh
-        ? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "profiles", profileName)
-        : paths.harnessRoot,
+      ...(hasNpmDsh ? { dshBin: npmDshBin } : {}),
+      profile: profileName,
+      // Harness home 指向 mirach 数据目录（profiles/sessions/storages 都住这）
+      dshHome,
+      processCwd: join(dshHome, "profiles", profileName),
       env: {
         ...runtimeEnv(paths, model),
         // 工作环境覆盖：cwd 决定引擎工具目录与会话持久化分组（<root>/<cwd编码>/）
         ...(ws.cwd ? { DSH_CWD: ws.cwd } : {}),
-        // profile 模式专用：web 面端口由 profile patch 的 MIRACH_WEB_PORT 表达式读取
-        ...(paths.profileMode
-          ? {
-              DSH_HOME: process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"),
-              MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
-              // 手机接入：web 面监听地址（Rust 侧从配置下发；127.0.0.1 = 仅本机）
-              MIRACH_WEB_HOST: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
-              DSH_EFFORT: effortNow,
-            }
-          : { DSH_CORDIS_CONFIG: configPath }),
+        // web 面端口由 profile patch 的 MIRACH_WEB_PORT 表达式读取
+        DSH_HOME: dshHome,
+        MIRACH_WEB_PORT: process.env.MIRACH_WEB_PORT ?? "3212",
+        // 手机接入：web 面监听地址（Rust 侧从配置下发；127.0.0.1 = 仅本机）
+        MIRACH_WEB_HOST: process.env.MIRACH_WEB_HOST ?? "127.0.0.1",
+        DSH_EFFORT: effortNow,
       },
       // 引擎冷启动（首启/升级后首次 boot 引擎图）可达 30s+；默认 10s 握手超时会在
       // 引擎真正就绪前放弃 initialize。放宽到 120s。
