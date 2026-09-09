@@ -426,7 +426,10 @@ export function ComposerRowAdaptive(): null {
           if (upStreak >= 2) { next = 1; upStreak = 0; }
         } else upStreak = 0;
       } else if (stage === 1) {
-        if (ellipsized(accessLabel)) {
+        // stage 2 条件改为"行内剩余空间不足"（原先依赖 accessLabel 被 ellipsis，
+        // 但 flex 收缩下它可能永远不触发 → 文字被挤出输入框）。图标态保留约 20px。
+        const accessCost = Math.max(0, (accessLabel?.scrollWidth ?? 0) - 20);
+        if (free < accessCost + 4) {
           upStreak += 1;
           if (upStreak >= 2) { next = 2; upStreak = 0; }
         } else {

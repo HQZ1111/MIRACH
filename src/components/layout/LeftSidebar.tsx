@@ -310,8 +310,8 @@ export function LeftSidebar({
   const ensureMenuSession = (): SessionItem | null => {
     if (menuSession && menuSession.id) return menuSession;
     if (!menuTitle) return null;
-    const found = $sessions.get().find((s) => s.title === menuTitle);
-    return found ?? createSession(menuTitle);
+    // 同上：工作区/项目菜单动作需要会话时新建标准会话，不用工作区名当标题
+    return createSession("新会话");
   };
   const archivedSessions = sessions.filter((s) => s.archived);
   const pinnedSessions = sessions.filter((s) => s.pinned && !s.archived);

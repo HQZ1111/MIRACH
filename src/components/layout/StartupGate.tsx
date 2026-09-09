@@ -19,14 +19,14 @@ import { $kernelReady } from "@/store/kernel-ready";
 import { GatewayConnectingOverlay } from "@/components/overlays/GatewayConnectingOverlay";
 import { LoginPage } from "@/components/layout/LoginPage";
 
+// 首帧即锁定（模块加载时判定，早于 React 首渲染）：否则第一帧 phase 仍是
+// "unlocked" 且引擎/内核已就绪，会闪一下主页面再被启动页盖住。
+lockAppOnce();
+
 export function StartupGate() {
   const phase = useStore($startupPhase);
   const gatewayState = useStore($gatewayState);
   const kernelReady = useStore($kernelReady);
-
-  // 启动决策：启动即显示登录页（未设密码 → 设置密码模式；已设 → 解锁模式）。
-  // 仅挂载时判定一次：运行时开启密码（设置页）不触发锁屏，避免设置完立刻被锁。
-  lockAppOnce();
 
   // 放行点 = 解锁/配置完成 + 引擎就绪 + 内核就绪（三者齐备才进主界面）。
   if (phase === "locked") return <LoginPage />;

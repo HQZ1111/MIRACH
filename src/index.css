@@ -1438,3 +1438,24 @@ html.dark .dsh-native-area {
   border-radius: 3px;
   background: var(--dsw-alias-border-l2);
 }
+
+
+/* 输入框工具行防溢出（窄对话区）：flex 子项默认 min-width:auto 会拒绝收缩，
+   把右侧模型/模式/发送按钮挤出输入卡片。全部放开收缩 + 行内裁剪；
+   文字超长走 ellipsis，折叠到图标态的规则见上方 data-mirach-collapse。 */
+.dsh-native-area [data-composer-card] [class*="_tools"],
+.dsh-native-area [data-composer-card] [class*="_trailing"],
+.dsh-native-area [data-composer-card] [class*="_modes"],
+.dsh-native-area [data-composer-card] [class*="_trailing"] > *,
+.dsh-native-area [data-composer-card] [class*="_modes"] > * {
+  min-width: 0 !important;
+}
+.dsh-native-area [data-composer-card] [class*="_trailing"] {
+  overflow: hidden;
+}
+.dsh-native-area [data-composer-card] [class*="_trailing"] button[class*="_trigger"] [class*="_triggerLabel"],
+.dsh-native-area [data-composer-card] [class*="_modes"] button[class*="_trigger"] [class*="_triggerLabel"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

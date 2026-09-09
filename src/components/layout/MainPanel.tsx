@@ -747,8 +747,13 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
                     描边线 = 本行底部左右各留 15px 的内缩细线
                     （与左侧栏 HeaderRule 的 inset-x-[15px] 一致）。 */}
                 <div
-                  className="relative flex items-center pl-5"
-                  style={{ height: 32 }}
+                  className="relative flex items-center"
+                  // 会话名与项目名左对齐：跟随第一行的左侧占用（外层展开按钮 52px
+                  // + 标题块左内边距 20px；侧栏展开按钮存在时再多让 40px）。
+                  style={{
+                    height: 32,
+                    paddingLeft: (sidebarCollapsedState ? 52 : 0) + (showLeft ? 20 : 60),
+                  }}
                 >
                   <div className="pointer-events-none absolute inset-x-[15px] bottom-0 h-px bg-[#D1D5DB] dark:bg-[#3a3a3a]" />
                   {/* 与会话名同排的官方 tabs 行：文字与左侧栏"团队列表"同规格

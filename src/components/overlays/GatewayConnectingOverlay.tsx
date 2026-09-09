@@ -73,6 +73,30 @@ export function GatewayConnectingOverlay() {
             {kernelError ?? "正在激活官方对话内核…"}
           </p>
         )}
+        {/* 启动失败：给出重试与退出（不能把用户困在启动页） */}
+        {(boot.error || kernelError) && (
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() => {
+                void import("@/store/gateway").then((m) => m.pingGateway());
+                void import("@/dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch(() => {});
+              }}
+              className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-[#C7CCE8] transition-colors hover:bg-white/10"
+            >
+              重试
+            </button>
+            <button
+              onClick={() => {
+                void import("@tauri-apps/api/window")
+                  .then((m) => m.getCurrentWindow().close())
+                  .catch(() => {});
+              }}
+              className="rounded-md bg-white/10 px-3 py-1.5 text-xs text-[#C7CCE8] transition-colors hover:bg-white/20"
+            >
+              退出应用
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

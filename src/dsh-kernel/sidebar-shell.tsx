@@ -777,8 +777,10 @@ function MirachSidebar(props: SidebarRootComponentProps) {
   const ensureMenuSession = (): SessionItem | null => {
     if (menuSession && menuSession.id) return menuSession;
     if (!sxi.menuTitle) return null;
-    const found = $sessions.get().find((s) => s.title === sxi.menuTitle);
-    return found ?? createSession(sxi.menuTitle);
+    // 工作区右键菜单动作需要"一个会话"时，新建标准会话（标题"新会话"，
+    // 引擎按首条消息自动命名）——不要用工作区名当会话标题（会被误认成
+    // 工作区条目出现在会话列表里）。
+    return createSession("新会话");
   };
 
   // 折叠态写全局 store 的同步在上面；展开态渲染入口动作
