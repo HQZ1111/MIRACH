@@ -52,6 +52,13 @@ import "@deepseek-ai/dsh-client-ui-layout/client";
 import "@deepseek-ai/dsh-client-ui-sidebar/client";
 import "@deepseek-ai/dsh-client-ui-conversation/client";
 import "@deepseek-ai/dsh-client-ui-chat/client";
+// ── 官方右侧栏栈（0.1.5 新增）：ctx.sidebarRight 导航控制器 +
+//    ctx.sidebarRightTabs 标签类型注册表（多标签/分栏/全屏的官方实现）；
+//    resources 是其声明的前置注入面 ──
+import "@deepseek-ai/dsh-client-resources/client";
+import "@deepseek-ai/dsh-client-ui-sidebar-right/client";
+import "@deepseek-ai/dsh-client-ui-sidebar-files/client";
+import "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client";
 // ── 输入框 composer seat 官方栈（模型选型/斜杠命令/计划模式/权限预设） ──
 // ui-commands 依赖 inputTriggers（ui-input-trigger 提供）；
 // ui-model-selection 注册 'model' 词典 + ModelSelect seat 组件；
@@ -129,6 +136,11 @@ const KERNEL_PLUGINS = [
   // 声明自动注册 — 每个子槽只允许一次声明，官方包保留会与 mirach 冲突。
   "@deepseek-ai/dsh-client-ui-conversation/client",
   "@deepseek-ai/dsh-client-ui-chat/client",
+  // ── 官方右侧栏栈（0.1.5）：多标签/分栏/全屏的官方实现 ──
+  "@deepseek-ai/dsh-client-resources/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-right/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-files/client",
+  "@deepseek-ai/dsh-client-ui-sidebar-textpreview/client",
   // ── composer seat 官方栈（顺序：input-trigger → commands → 其余三个） ──
   "@deepseek-ai/dsh-client-ui-input-trigger/client",
   "@deepseek-ai/dsh-client-ui-commands/client",

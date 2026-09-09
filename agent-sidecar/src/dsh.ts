@@ -256,15 +256,10 @@ export function runtimeEnv(paths: RuntimePaths, model: ActiveModel): Record<stri
     DSH_CWD: paths.cwd,
     DSH_SESSION_ROOT: paths.sessionRoot,
     DSH_SYSTEM_PROMPT: systemPrompt() ?? paths.systemPrompt,
-    // 运行时插件从 harness checkout 的 node_modules 解析（pnpm workspace）；
-    // 社区插件目录（%USERPROFILE%\.mirach\dsh-plugins\node_modules）追加在
-    // NODE_PATH 尾部——cordis loader 可加载 dsh-workgroup / dsh-realtime-voice 等
-    NODE_PATH: [
-      join(paths.harnessRoot, "node_modules"),
-      process.env.DSH_PLUGIN_NODE_PATH ?? join(paths.sessionRoot, "..", "dsh-plugins", "node_modules"),
-    ]
-      .filter((p) => existsSync(p))
-      .join(";"),
+    // 注意：不再设 NODE_PATH 指向 harness checkout —— 官方 profile 机制下插件
+    // 从 profile 的 node_modules 解析（dsh plugin add 维护）；旧的 NODE_PATH
+    // 会遮蔽引擎自带的 @deepseek-ai/* 依赖（workspace 副本）导致引擎启动失败
+    // （cordis "cannot create effect on inactive context"）。
     // cordis.yml 的 llm-pi-ai 条目经 !!js 读这个 env
     DSH_LLM_PROVIDERS: providersJson,
     ...providerKeyEnvs(),
