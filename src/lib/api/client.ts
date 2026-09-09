@@ -51,8 +51,14 @@ export interface MirachClient {
   installCommunityPlugin(name: string): Promise<string[]>;
   /** 卸载社区插件（返回步骤日志，重启应用后生效） */
   uninstallCommunityPlugin(name: string): Promise<string[]>;
-  /** 引擎更新检查（npm alpha 通道 vs 当前全局安装版本） */
-  checkEngineUpdate(): Promise<{ current: string; latest: string; hasUpdate: boolean }>;
+  /** 引擎更新检查（npm alpha 通道 vs 当前全局安装版本；含发布时间/描述） */
+  checkEngineUpdate(): Promise<{
+    current: string;
+    latest: string;
+    hasUpdate: boolean;
+    publishedAt?: string | null;
+    notes?: string | null;
+  }>;
   /** 一键更新引擎（npm i -g @deepseek-ai/dsh@alpha；返回步骤日志） */
   updateEngine(): Promise<string[]>;
   /** 绑定酒馆预设到空白会话（agentPresets.select：世界书/记忆/关系网/剧情选项随挂载激活）。
@@ -713,8 +719,20 @@ class RealClient implements MirachClient {
     }
   }
 
-  async checkEngineUpdate(): Promise<{ current: string; latest: string; hasUpdate: boolean }> {
-    const raw = await invoke<{ current: string; latest: string; hasUpdate: boolean }>("dsh_rpc", { method: "update.check", params: null });
+  async checkEngineUpdate(): Promise<{
+    current: string;
+    latest: string;
+    hasUpdate: boolean;
+    publishedAt?: string | null;
+    notes?: string | null;
+  }> {
+    const raw = await invoke<{
+      current: string;
+      latest: string;
+      hasUpdate: boolean;
+      publishedAt?: string | null;
+      notes?: string | null;
+    }>("dsh_rpc", { method: "update.check", params: null });
     return raw ?? { current: "", latest: "", hasUpdate: false };
   }
 

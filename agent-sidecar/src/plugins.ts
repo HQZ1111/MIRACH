@@ -180,6 +180,10 @@ export interface EngineUpdateInfo {
   current: string;
   latest: string;
   hasUpdate: boolean;
+  /** 最新版本发布时间（ISO，registry time 字段；缺省 null）。 */
+  publishedAt: string | null;
+  /** 最新版本包描述（作为"更新内容"摘要；缺省 null）。 */
+  notes: string | null;
 }
 
 function npmView(pkg: string, field: string): Promise<string> {
@@ -190,27 +194,57 @@ function npmView(pkg: string, field: string): Promise<string> {
   });
 }
 
-/** 检查引擎更新：npm alpha 通道最新版 vs 当前全局安装版本 */
+/** 版本号规范化（去空白/引号；registry 值与本地 package.json 对齐比较）。 */
+function normVer(v: string | undefined | null): string {
+  return String(v ?? "").trim().replace(/^["'\s]+|["'\s]+$/g, "");
+}
+
+/** 检查引擎更新：npm alpha 通道最新版 vs 当前全局安装版本。
+ *  hasUpdate 只在两边都是有效版本且不相等时为真（同版本不得可更新）；
+ *  同时带出最新版本的发布时间与描述作为"更新内容"。 */
 export async function checkEngineUpdate(): Promise<EngineUpdateInfo> {
-  const latest = await npmView("@deepseek-ai/dsh", "dist-tags.alpha");
+  const latest = normVer(await npmView("@deepseek-ai/dsh", "dist-tags.alpha").catch(() => ""));
   // 当前版本：全局 npm 包的 package.json
   const npmRoot = process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh") : "";
   let current = "";
   try {
-    current = JSON.parse(readFileSync(join(npmRoot, "package.json"), "utf8")).version ?? "";
+    current = normVer(JSON.parse(readFileSync(join(npmRoot, "package.json"), "utf8")).version);
   } catch {
     // 回退：dsh --version
     try {
       const { stdout } = await execP("dsh --version", { windowsHide: true, timeout: 15_000 });
-      current = stdout.trim();
+      current = normVer(stdout);
     } catch {
       current = "";
     }
   }
+  // 更新内容：registry 的发布时间 + 描述（一次 npm view 拿全）
+  let publishedAt: string | null = null;
+  let notes: string | null = null;
+  if (latest) {
+    try {
+      const raw = await execP(`npm view @deepseek-ai/dsh@${latest} time description --json`, {
+        windowsHide: true,
+        timeout: 30_000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+      const parsed = JSON.parse(String(raw.stdout)) as
+        | { time?: Record<string, string>; description?: string }
+        | Array<{ time?: Record<string, string>; description?: string }>;
+      const obj = Array.isArray(parsed) ? parsed[0] : parsed;
+      publishedAt = obj?.time?.[latest] ?? null;
+      notes = obj?.description ?? null;
+    } catch {
+      /* 更新内容拿不到不影响版本判定 */
+    }
+  }
+  const valid = /^\d+\.\d+\.\d+/.test(latest) && /^\d+\.\d+\.\d+/.test(current);
   return {
     current: current || "未知",
     latest: latest || "未知",
-    hasUpdate: current !== latest && latest !== "未知",
+    hasUpdate: valid && current !== latest,
+    publishedAt,
+    notes,
   };
 }
 

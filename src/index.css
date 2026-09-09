@@ -831,9 +831,15 @@ html.dark .chat-backdrop-on {
    官方 css-modules 类名为 <hash>_header / <hash>_titleRow（前缀随构建变，
    后缀 = local 名），且可见树/镜像树容器类不同（不能只限定 .dsh-native-area）。 */
 [class*="_header"] {
-  /* 53：官方"对话/轨迹"tabs 与 mirach 顶栏第二行（会话名）同区
+  /* 53：官方 对话/轨迹"tabs 与 mirach 顶栏第二行（会话名）同区
      （53~85，在线之上）；tabs 下方不再有官方边线 */
   padding-top: 53px !important;
+}
+/* 上述 53px 是给对话区 header 的，但该选择器是全局的——官方工作区浏览器
+   （ui-workspace）的 header 也命中，被顶下 53px 后其动作按钮（添加工作区/
+   视图选项/搜索）被挤出可视区。用容器作用域还原。 */
+[data-mirach-official-browser] [class*="_header"] {
+  padding-top: 0 !important;
 }
 [class*="_titleRow"] {
   display: none !important;
@@ -993,12 +999,12 @@ body.guest-pointer-lock iframe {
 .dsh-native-area [class*="_headline"] {
   display: block !important;
 }
-.dsh-native-area [class*="_headlineText"] {
+.dsh-native-area [class*="_titleGroup"] {
   display: block;
   font-size: 0 !important;
   color: transparent !important;
 }
-.dsh-native-area [class*="_headlineText"]::before {
+.dsh-native-area [class*="_titleGroup"]::before {
   /* 用 background-image + aspect-ratio 而非 content:url：后者对无固定比例的
      svg 的替换尺寸算法在 Chromium 下高度失控（661 宽时框高 100px 而非 62px，
      svg 内容在框内垂直居中 → 字标错位、介绍行视觉偏远）。background contain
@@ -1011,7 +1017,7 @@ body.guest-pointer-lock iframe {
   margin: 0 auto !important;
   background: center / contain no-repeat url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 8 900 84'><text x='450' y='86' text-anchor='middle' font-family='Segoe UI, Arial, sans-serif' font-weight='800' font-size='104' fill='%23026CFE' textLength='880' lengthAdjust='spacingAndGlyphs'>MIRACH HARNESS</text></svg>");
 }
-.dsh-native-area [class*="_headlineText"]::after {
+.dsh-native-area [class*="_titleGroup"]::after {
   content: "用自己的话描述任务即可。我会挑选合适的工具、说明计划，并在执行有风险的步骤前先与你确认。";
   display: block;
   margin: 2px auto 0;

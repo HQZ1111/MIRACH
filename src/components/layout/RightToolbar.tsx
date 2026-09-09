@@ -120,7 +120,13 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   // 更新面板状态：真实检查（sidecar update.check → npm alpha 通道）
   const [updateOpen, setUpdateOpen] = useState(false);
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "done" | "error">("idle");
-  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{
+    current: string;
+    latest: string;
+    hasUpdate: boolean;
+    publishedAt?: string | null;
+    notes?: string | null;
+  } | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
   // 主题切换（浅色/深色两态）
@@ -303,15 +309,27 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
                 <p className="text-xs font-medium text-[#303030]">Mirach Harness Ultra</p>
                 <p className="mt-1 text-xs text-muted-foreground">当前版本：v{APP_VERSION}</p>
                 {updateInfo && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    引擎：v{updateInfo.current}
-                    {updateInfo.hasUpdate ? ` → v${updateInfo.latest} 可更新` : "（最新）"}
-                  </p>
+                  <>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      引擎：v{updateInfo.current}
+                      {updateInfo.hasUpdate ? ` → v${updateInfo.latest} 可更新` : "（已是最新）"}
+                    </p>
+                    {updateInfo.hasUpdate && updateInfo.publishedAt && (
+                      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+                        发布：{new Date(updateInfo.publishedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                    {updateInfo.hasUpdate && updateInfo.notes && (
+                      <p className="mt-1 max-h-24 overflow-y-auto text-[11px] leading-4 text-muted-foreground/80">
+                        {updateInfo.notes}
+                      </p>
+                    )}
+                  </>
                 )}
                 {updateError && <p className="mt-1 text-xs text-[#EF4444]">{updateError}</p>}
                 <button
                   className="mt-2.5 w-full rounded-md bg-foreground px-3 py-1.5 text-xs text-background transition-colors hover:bg-foreground/90 disabled:opacity-60"
-                  disabled={updateState === "checking" || updating}
+                  disabled={updateState === "checking" || updating || (updateState === "done" && !updateInfo?.hasUpdate)}
                   onClick={() => {
                     if (updating) return;
                     // 真实检查：sidecar update.check（npm alpha 通道）
@@ -355,7 +373,7 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
                       : updateInfo?.hasUpdate
                         ? `更新引擎到 v${updateInfo.latest}`
                         : updateState === "done"
-                          ? "引擎已是最新 ✓（点击重查）"
+                          ? "引擎已是最新 ✓"
                           : updateState === "error"
                             ? "重试检查更新"
                             : "检查更新"}

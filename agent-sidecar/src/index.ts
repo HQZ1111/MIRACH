@@ -669,7 +669,14 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
           if (method === "update.check") {
             send({ type: "result", id, data: await checkEngineUpdate() });
           } else {
-            send({ type: "result", id, data: { logs: await updateEngine() } });
+            // 更新前先干净停引擎：npm 覆盖全局包文件时运行中的引擎会立刻掉线
+            // （用户报的"点击更新后直接掉线"）。停后 npm 安装，再尽力预热新版。
+            await shutdownRuntime().catch(() => {});
+            const logs = await updateEngine();
+            send({ type: "result", id, data: { logs } });
+            ensureRuntime(activeModel).catch((err) => {
+              logWarn("post-update prewarm failed: %s", err instanceof Error ? err.message : String(err));
+            });
           }
         } catch (err) {
           send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
