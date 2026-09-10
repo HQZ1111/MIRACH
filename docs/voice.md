@@ -15,16 +15,24 @@
 | 引擎侧依赖 | ✅ 已装 `dsh-multi-model-provider@0.1.0-rc.19`（提供 `realtimeModelRuntime`）、`@deepseek-ai/dsh-client-runtime@0.1.1-rc.2`、升级 `dsh-realtime-voice@0.3.3`（都进 profile 的 dependencies）|
 | 语音插件路由 | ❌ 仍 404：把 peer 放进 profile `dsh.profile.bundles` 后**引擎装配失败**（见下）|
 
-## 阻塞点：引擎 0.1.5-alpha.1 装不下 peer
+## 阻塞点：引擎装不下 peer（已排除版本因素）
 
-- 运行时自带引擎 = `0.1.5-alpha.1`（`bootstrap.rs` 的 `SDK_VERSION`）；npm 上 `latest/next` = **0.1.5-rc.1**、`alpha` = 0.1.5-alpha.2。
-- 把 `dsh-multi-model-provider` 加入 bundles → 引擎启动报 **`cannot create effect on inactive context`**（SDK initialize 阶段，进程活着但 web 面不监听）。
-- 顺带发现：**`dsh-pocket` 一旦进 bundles 也会打断引擎**，报
+- 运行时自带引擎原本是 `0.1.5-alpha.1`（`bootstrap.rs` 的 `SDK_VERSION`），而 profile 的插件树是 `0.1.5-rc.1`
+  → 已把运行时对齐到 **engine 0.1.5-rc.1 + sdk 0.1.5-rc.1**（`scripts/_upgrade_runtime_engine.ps1`，
+  即 `npm install --prefix <runtime>\agent-sidecar @deepseek-ai/dsh-sdk-client@0.1.5-rc.1`），
+  但仍**装不下 peer**：把 `dsh-multi-model-provider` 加入 bundles → 引擎装配失败
+  （`cannot create effect on inactive context`）。所以**不是 alpha/rc 版本错配**。
+- 顺带确认：**`dsh-pocket` 一旦进 bundles 也会打断引擎**，报
   `failed to apply loader entry dsh-pocket (dsh-pocket): cannot get property "webServer" without inject`
-  （它作为 dependency 装着但不激活时无碍——这就是本机原本的状态）。
-- 现状：bundles 已恢复为"不含 pocket / 不含 peer"的可知良好集合，`_boot_verdict` 实测 `runtime ready` ✓。
-
-**下一步**（未做）：把运行时引擎升到 0.1.5-rc.1（走 mirach 的引擎更新路径，或改 `SDK_VERSION` 重打运行时包），再试把 peer 放进 bundles；仍失败就查 peer 的 `spec/`、`tests/` 与 `plugin-spec.json` 找它要求的引擎版本/服务。
+  （它作为 dependency 装着但不激活时无碍）。
+- 现状：bundles 已恢复为"不含 pocket / 不含 peer"的可知良好集合，rc.1 运行时下实测 `runtime ready` ✓
+  （dev 应用与引擎正常，主对话可用）。
+- **待办（下一轮的第一步）**：拿到引擎原始的 plugin-apply 错误。已试过但不奏效：引擎直接跑（stdout/stderr
+  全静默）、`DEBUG=cordis:*`+`DSH_LOG_LEVEL=debug`、手写 JSON-RPC 发 `initialize`（引擎不回包——握手参数
+  与 SDK 的还不一致）。可行的下一步：① 照 SDK 的 `initialize` 参数逐字段复刻（含 `env`/`patches` 语义）；
+  ② 单独只留 peer 一个 bundle 做隔离启动；③ 读 peer 的 `tests/`+`spec/` 找它期望的 profile 配置。
+- 另一件该做的对齐：运行时引擎既然已是 rc.1，`bootstrap.rs` 的 `SDK_VERSION` 也应改成 `0.1.5-rc.1`
+  并重打运行时包（否则新装机器又会装回 alpha.1）。
 
 ## 工具（scripts/）
 
