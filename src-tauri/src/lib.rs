@@ -1595,6 +1595,7 @@ pub fn run() {
             open_session_window,
             hud_open,
             hud_close,
+            hud_probe_url,
             hud_set_bounds,
             hud_begin_move,
             hud_set_ignore_mouse
@@ -1904,3 +1905,29 @@ async fn hud_set_ignore_mouse(app: tauri::AppHandle, ignore: bool) -> Result<(),
     }
     Ok(())
 }
+/// 诊断命令（临时）：比较"带查询串的 App URL"与"纯 index.html"两种建窗结果。
+/// 之前四个标志组合都用带 query 的 URL，可能把 URL 与标志混在一起了。
+#[tauri::command]
+async fn hud_probe_url(app: tauri::AppHandle, kind: String) -> Result<String, String> {
+    let label = format!("probe-{kind}");
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.destroy();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    let url = if kind == "plain" {
+        tauri::WebviewUrl::App("index.html".into())
+    } else {
+        tauri::WebviewUrl::App("index.html?win=hud".into())
+    };
+    let w = tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title("probe")
+        .inner_size(400.0, 240.0)
+        .visible(false)
+        .build()
+        .map_err(|e| format!("build err: {e}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(900));
+    let hwnd = w.hwnd().map(|h| h.0 as i64);
+    let size = w.inner_size().map(|s| format!("{}x{}", s.width, s.height));
+    Ok(format!("kind={kind} hwnd={hwnd:?} size={size:?}"))
+}
+
