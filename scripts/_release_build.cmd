@@ -18,6 +18,20 @@ set "TAURI_SIGNING_PRIVATE_KEY=%KEYS%\mirach.key"
 set "TAURI_SIGNING_PRIVATE_KEY_PATH=%KEYS%\mirach.key"
 cd /d "%~dp0.."
 echo [release] key=%KEYS%\mirach.key
+rem agent-sidecar dist is a bundle resource: always rebuild so the packaged
+rem sidecar matches the source (the tauri build only rebuilds the frontend).
+pushd "%~dp0..\agent-sidecar"
+call npm run build
+if errorlevel 1 (
+  echo [release] agent-sidecar build failed
+  popd
+  exit /b 1
+)
+popd
+if not exist "%~dp0..\agent-sidecar\dist\index.js" (
+  echo [release] agent-sidecar\dist\index.js missing after build
+  exit /b 1
+)
 call npx tauri build --bundles nsis
 echo [release] exit=%errorlevel%
 endlocal

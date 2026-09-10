@@ -17,6 +17,9 @@ import { $bgState, type BackgroundProcess } from "@/store/background-processes";
 import { openSessionWindow } from "@/lib/sessionWindow";
 import { createUnlistenCollector } from "@/lib/tauri-listen";
 import { ResizeHandles } from "@/components/window/ResizeHandles";
+import { SetupFlow } from "@/components/setup/SetupFlow";
+import { $setupOpen, initBootstrap } from "@/store/bootstrap";
+import { useStore } from "@nanostores/react";
 // 插件注册（模块导入即注册到 registry）
 import "@/plugins/samples/hello";
 import "@/plugins/plugin-wake-word";
@@ -96,9 +99,12 @@ class CrashBoundary extends Component<{ children: ReactNode }, { err: Error | nu
 }
 
 function App() {
+  const setupOpen = useStore($setupOpen);
   useEffect(() => {
     // 日志捕获（导出日志弹窗用）
     initLogger();
+    // 首次启动安装门（本地依赖缺失时全屏接管）
+    void initBootstrap();
     // 对话宽度 CSS 变量初始化（设置-通用设置；参考 zosma chat-width）
     initUiSettings();
     // 对话内容宽随窗口等比缩放（官方偏好为绝对 px，最大化/还原不跟随 + 手柄贴边失效的补丁）
@@ -139,6 +145,7 @@ function App() {
         <NotifyBridge />
         <ResizeHandles />
         <KernelMirrorHost />
+        {setupOpen && <SetupFlow />}
         <CrashBoundary>
           <AppLayout />
         </CrashBoundary>

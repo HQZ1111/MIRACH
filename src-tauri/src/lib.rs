@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
+mod bootstrap;
 mod dsh_relay;
 mod relay;
 mod sessions;
@@ -1285,10 +1286,24 @@ async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::U
         .map_err(|e| format!("更新器构建失败: {e}"))
 }
 
+/// 便携包运行（exe 旁有 runtime/）= 更新必须换整包：安装器只装外壳，会把
+/// 便携版用户带到一份没有运行时的新安装里。检查更新照常，安装要指到发布页。
+fn portable_install_note() -> Option<String> {
+    if dsh_relay::is_portable_runtime() {
+        Some(
+            "便携版请手动更新：到发布页下载新版便携包并解压覆盖（安装器只含外壳，不含 Node/引擎/桥接）"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
 /// 检查应用更新：返回 {available, version, currentVersion, notes, date}。
 #[tauri::command]
 async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let updater = build_updater(&app).await?;
+    let portable = portable_install_note();
     match updater.check().await {
         Ok(Some(update)) => Ok(serde_json::json!({
             "available": true,
@@ -1296,6 +1311,9 @@ async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, St
             "currentVersion": update.current_version,
             "notes": update.body,
             "date": update.date.map(|d| d.to_string()),
+            // 便携版：前端据此把"下载并安装"替换成"去发布页下载"
+            "portable": portable.is_some(),
+            "installHint": portable,
         })),
         Ok(None) => Ok(serde_json::json!({ "available": false })),
         Err(e) => Err(format!("检查更新失败: {e}")),
@@ -1303,8 +1321,12 @@ async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, St
 }
 
 /// 下载并安装应用更新（Windows NSIS 安装器接管后应用退出，重启即为新版本）。
+/// 便携版直接拒绝：安装器不含运行时，会把用户带进坏安装。
 #[tauri::command]
 async fn app_update_install(app: tauri::AppHandle) -> Result<String, String> {
+    if let Some(hint) = portable_install_note() {
+        return Err(hint);
+    }
     let updater = build_updater(&app).await?;
     match updater.check().await {
         Ok(Some(update)) => {
@@ -1476,6 +1498,7 @@ pub fn run() {
             Ok(())
         })
         .manage(TerminalState(Mutex::new(HashMap::new())))
+        .manage(bootstrap::BootstrapState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             get_config,
@@ -1557,6 +1580,10 @@ pub fn run() {
             fetch_text,
             read_file_bytes,
             get_workspace,
+            bootstrap::bootstrap_status,
+            bootstrap::bootstrap_start,
+            bootstrap::bootstrap_cancel,
+            bootstrap::bootstrap_reset,
             app_update_check,
             app_update_install,
             set_analytics_enabled,

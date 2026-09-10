@@ -7,6 +7,12 @@ param([string]$OutDir = "dist-portable")
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+# engine checkout: same workspace as this repo unless DSH_ENGINE_ROOT overrides
+$engineRoot = if ($env:DSH_ENGINE_ROOT -and (Test-Path $env:DSH_ENGINE_ROOT)) { $env:DSH_ENGINE_ROOT } else { Split-Path -Parent (Split-Path -Parent $repo) }
+if (-not (Test-Path (Join-Path $engineRoot "pnpm-workspace.yaml"))) {
+  throw "engine checkout not found at $engineRoot (set DSH_ENGINE_ROOT to the deepseek-harness root)"
+}
+Write-Output "engine root: $engineRoot"
 
 function Clear-LongPathDir([string]$dir) {
   if (-not (Test-Path $dir)) { return }
@@ -15,6 +21,15 @@ function Clear-LongPathDir([string]$dir) {
   robocopy $empty $dir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
   Remove-Item $empty -Force -ErrorAction SilentlyContinue
   Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Native tools (npm/pnpm/node/7z) write banners to stderr; with the Stop preference
+# PowerShell treats that as fatal. Each call checks $LASTEXITCODE itself, so run them
+# with Continue and restore the preference afterwards.
+function Invoke-Native([scriptblock]$Block) {
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try { & $Block } finally { $ErrorActionPreference = $prev }
 }
 
 $pkg = Join-Path $repo "$OutDir\Mirach"
@@ -37,7 +52,7 @@ Write-Output "node copied ($nodeSrc)"
 
 # 3) agent-sidecar：先预编译（发布态跑 dist/index.js，不再依赖 devDependency tsx）
 Push-Location (Join-Path $repo "agent-sidecar")
-& npm run build 2>&1 | Select-Object -Last 2
+Invoke-Native { npm run build 2>&1 | Select-Object -Last 2 }
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "agent-sidecar build failed" }
 Pop-Location
 robocopy (Join-Path $repo "agent-sidecar\src") (Join-Path $rt "agent-sidecar\src") /E /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -49,17 +64,22 @@ robocopy (Join-Path $repo "agent-sidecar\node_modules") (Join-Path $rt "agent-si
 if (-not (Test-Path (Join-Path $rt "agent-sidecar\dist\index.js"))) { throw "agent-sidecar dist missing after copy" }
 Write-Output "agent-sidecar copied (dist + config + node_modules)"
 
-# 4a) engine source WITHOUT node_modules and WITHOUT following junctions (/XJ)
+# 4a) engine source WITHOUT node_modules and WITHOUT following junctions (/XJ);
+#     build outputs and the output dir itself are excluded: without that exclusion
+#     robocopy mirrors its own growing output (once ran away to 95 GB).
+$outLeaf = Split-Path -Leaf ([System.IO.Path]::GetFullPath((Join-Path $repo $OutDir)))
 $engDir = Join-Path $rt "deepseek-harness"
-robocopy "D:\deepseek-harness-master" $engDir /E /XJ /NFL /NDL /NJH /NJS /NP /XD node_modules .sessions .git .turbo coverage dist-cache .github python website /MT:8 > (Join-Path $repo "scripts\_robo-engine.log")
+robocopy $engineRoot $engDir /E /XJ /NFL /NDL /NJH /NJS /NP /XD node_modules .sessions .git .turbo coverage dist-cache .github python website target .desktop-build .zcode $outLeaf /MT:8 > (Join-Path $repo "scripts\_robo-engine.log")
 $rc = $LASTEXITCODE
 if ($rc -ge 8) { throw "engine robocopy failed with exit code $rc (see scripts\_robo-engine.log)" }
 Write-Output ("engine source copied (robocopy rc=$rc)")
 
-# 4b) prod-only hoisted node_modules (real files; CI=true silences purge prompt)
+# 4b) prod-only hoisted node_modules (real files; CI=true silences purge prompt).
+#     CI mode implies --frozen-lockfile, but the snapshot may carry a lockfile that
+#     lags one workspace package.json - allow resolution instead of failing the build.
 $env:CI = "true"
 Push-Location $engDir
-& pnpm install --prod --prefer-offline --node-linker=hoisted --ignore-scripts 2>&1 | Select-Object -Last 3
+Invoke-Native { pnpm install --prod --no-frozen-lockfile --prefer-offline --node-linker=hoisted --ignore-scripts 2>&1 | Select-Object -Last 5 }
 $pnpmExit = $LASTEXITCODE
 Pop-Location
 if ($pnpmExit -ne 0) { throw "pnpm install failed with exit code $pnpmExit" }
@@ -67,12 +87,12 @@ Write-Output "engine node_modules (prod hoisted) done"
 
 # 4c) workspace packages are NOT installed by pnpm --prod: junction all
 #     @deepseek-ai/* sources into engine-root node_modules (tsx runs TS sources)
-& node (Join-Path $repo "scripts\rebuild_root_links.mjs") $engDir
+Invoke-Native { node (Join-Path $repo "scripts\rebuild_root_links.mjs") $engDir }
 # 4d) remove private scoped links left inside workspace projects (resolution must
 #     fall through to root copies)
-& node (Join-Path $repo "scripts\drop_private_links.mjs") $engDir
+Invoke-Native { node (Join-Path $repo "scripts\drop_private_links.mjs") $engDir }
 # 4e) prune circular-dep nesting (pnpm hoisted duplicates @deepseek-ai/* recursively)
-& powershell -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\prune_nested.ps1") -EngineRoot $engDir | Select-Object -Last 2
+Invoke-Native { powershell -ExecutionPolicy Bypass -File (Join-Path $repo "scripts\prune_nested.ps1") -EngineRoot $engDir | Select-Object -Last 2 }
 Write-Output "engine links rebuilt + pruned"
 
 # 5) readme (pre-encoded UTF-8 file from repo)
@@ -81,13 +101,13 @@ Copy-Item (Join-Path $PSScriptRoot "portable-readme.txt") (Join-Path $pkg "readm
 # 6a) single zip for GitHub Release (Windows-native extraction, no 7z needed)
 $vols = Join-Path $repo $OutDir
 Write-Output "zipping (single zip for GitHub)..."
-& $sevenZip a -tzip -mx=7 (Join-Path $vols "Mirach-portable.zip") $pkg | Select-Object -Last 3
+Invoke-Native { & $sevenZip a -tzip -mx=7 (Join-Path $vols "Mirach-portable.zip") $pkg | Select-Object -Last 3 }
 if ($LASTEXITCODE -ne 0) { throw "zip failed with exit code $LASTEXITCODE" }
 Get-ChildItem $vols -Filter "Mirach-portable.zip" | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
 
-# 6b) 7z 95MB volumes for Gitee (attachment cap 100MB)
+# 6b) 7z 95MB volumes for Gitee (attachment cap 100MB)；多线程压缩（同压缩率，快得多）
 Write-Output "compressing 7z volumes (Gitee)..."
-& $sevenZip a -t7z -mx=9 "-m0=LZMA2:d=32m:fb=128" -ms=on -mmt=1 "-v95m" (Join-Path $vols "Mirach-portable.7z") $pkg | Select-Object -Last 3
+Invoke-Native { & $sevenZip a -t7z -mx=7 "-m0=LZMA2:d=32m:fb=64" -ms=on -mmt=on "-v95m" (Join-Path $vols "Mirach-portable.7z") $pkg | Select-Object -Last 3 }
 if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE" }
 Get-ChildItem $vols -Filter "Mirach-portable.7z.*" | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
 Write-Output "DONE"

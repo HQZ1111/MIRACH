@@ -113,6 +113,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 - [x] 看板 / 产物接真实数据；会话回放按回合合并
 - [x] 虚拟滚动 + delta 合帧 + 流式渲染优化（长会话流畅）
 - [x] 便携分享包（Gitee Release 分发）
+- [x] 应用内依赖安装（首次启动选择"本地安装 / 连接远端引擎" → 分阶段进度页；实现照搬 hermes bootstrap-installer，见 docs/first-run-install.md）
 - [x] 可重绑定快捷键（hermes combo/capture/conflicts 全套，设置页改键）
 - [x] 内嵌终端（portable-pty 多实例）
 - [x] 引擎一键更新（npm alpha 通道 + 版本检查）
@@ -124,7 +125,6 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 - [x] 质量门：lint 0 warning / 前端 9 测试 / sidecar 15 测试 / Rust 14 测试
 - [x] hermes 功能移植：唤醒词插件 / 提示音系统（14 完成音变体）/ 语音听写与朗读 / 抓取滚动 / 通知中心 / 会话星图 / HUD 悬浮窗 / 国产内嵌卡片（哔哩哔哩/网易云/高德/抖音/红果）
 - [x] 侧栏工作区切换器 = 官方 dsh WorkspaceBrowser（槽位渲染，随官方更新）
-- [ ] SSH 远程
 - [ ] 帧化/背压传输（大附件流式；当前为体积上限 + 明确报错）
 - [ ] 巨型组件拆分（Composer / sidebar-shell / SettingsOverlay / AppLayout）
 - [ ] 引擎任务面板真实数据（待引擎暴露 jobs.list RPC）

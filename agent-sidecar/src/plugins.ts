@@ -36,9 +36,10 @@ const DSH_HOME = (): string => mirachHome();
 const PROFILE_DIR = (): string => join(DSH_HOME(), "profiles", process.env.MIRACH_PROFILE_NAME ?? "mirach");
 const PROFILE_NM = (): string => join(PROFILE_DIR(), "node_modules");
 const PROFILE_PKG = (): string => join(PROFILE_DIR(), "package.json");
-/** 官方引擎入口（与 dsh.ts 同一解析：node 直接执行全局包 bin.js） */
+/** 官方引擎入口：优先 MIRACH_DSH_BIN（应用内安装的引擎），否则全局 npm 安装。 */
 const NPM_DSH_BIN = (): string =>
-  process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js") : "";
+  process.env.MIRACH_DSH_BIN ??
+  (process.env.APPDATA ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js") : "");
 const NODE_BIN = (): string => process.env.DSH_NODE_BIN ?? "node";
 
 /** 内置三件（UI 禁用卸载；bundle 声明随 mirach profile 发布维护） */

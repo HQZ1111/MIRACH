@@ -24,6 +24,7 @@
 
 import { DeepSeekHarness, type HarnessSession } from "@deepseek-ai/dsh-sdk-client";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log, logDebug, logError, logWarn } from "./protocol.js";
@@ -333,15 +334,31 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
     // SDK 0.1.5 启动 API：dshBin/profile/patches/dshHome/processCwd/env/initializeTimeoutMs。
     // 注意：旧 launch{command,args} 键会被 SDK 静默忽略并回落到 `--profile sdk` ——
     // 引擎"假就绪"而 mirach web 面（3212）永不监听。
-    const npmDshBin = process.env.APPDATA
+    // 引擎入口优先级：
+    //   1) MIRACH_DSH_BIN（Rust 侧按运行时布局注入）
+    //   2) sidecar 自己的 node_modules（应用内安装：<runtime>/agent-sidecar/node_modules）
+    //   3) 全局 npm 安装
+    // 都没有时交给 SDK 按同版本依赖自解析。
+    const bundledDshBin = (() => {
+      try {
+        // createRequire 从本模块位置向上找 node_modules：开发态命中仓库依赖，
+        // 安装态命中 %LOCALAPPDATA%\MirachRuntime\agent-sidecar\node_modules
+        return createRequire(import.meta.url).resolve("@deepseek-ai/dsh/lib/bin.js");
+      } catch {
+        return "";
+      }
+    })();
+    const globalDshBin = process.env.APPDATA
       ? join(process.env.APPDATA, "npm", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")
       : "";
-    const hasNpmDsh = npmDshBin && existsSync(npmDshBin);
+    const dshBin = [process.env.MIRACH_DSH_BIN, bundledDshBin, globalDshBin].find(
+      (p) => p && existsSync(p),
+    );
     const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
     const dshHome = mirachHome();
     const harnessOptions = {
-      // 显式指定全局 npm 安装的引擎入口；未安装时由 SDK 按同版本依赖自解析
-      ...(hasNpmDsh ? { dshBin: npmDshBin } : {}),
+      // 显式指定引擎入口；未安装时由 SDK 按同版本依赖自解析
+      ...(dshBin ? { dshBin } : {}),
       profile: profileName,
       // Harness home 指向 mirach 数据目录（profiles/sessions/storages 都住这）
       dshHome,

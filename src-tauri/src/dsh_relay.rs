@@ -63,9 +63,9 @@ pub struct DshAppState {
     pub mux_channels: Arc<Mutex<HashMap<String, tauri::ipc::Channel<Value>>>>,
 }
 
-/// 便携运行时根目录：约定为 exe 同级的 runtime/（分享包结构见 scripts/build_portable.ps1）。
-/// env MIRACH_RUNTIME_DIR 覆盖；不存在时返回 None（开发期走仓库相对路径回退）。
-fn runtime_root() -> Option<std::path::PathBuf> {
+/// 便携运行时根目录：exe 同级 runtime/，或 env MIRACH_RUNTIME_DIR 指定。
+/// （"便携版"语义只认这两种；应用内安装的运行时不算便携，见 installed_runtime_root）
+fn portable_runtime_root() -> Option<std::path::PathBuf> {
     if let Ok(d) = std::env::var("MIRACH_RUNTIME_DIR") {
         if !d.is_empty() {
             return Some(std::path::PathBuf::from(d));
@@ -74,10 +74,50 @@ fn runtime_root() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let portable = exe.parent()?.join("runtime");
     if portable.join("agent-sidecar").is_dir() {
-        Some(portable)
-    } else {
-        None
+        return Some(portable);
     }
+    None
+}
+
+/// 应用内安装的运行时根（首次启动安装器写入 %LOCALAPPDATA%\MirachRuntime）。
+fn installed_runtime_root() -> Option<std::path::PathBuf> {
+    let installed = crate::bootstrap::install_root();
+    if installed.join("agent-sidecar").is_dir() {
+        return Some(installed);
+    }
+    None
+}
+
+/// 运行时根目录（便携 → 应用内安装 → 都没有则 None，开发期走仓库相对路径回退）。
+/// 调试构建始终不认"应用内安装"：否则首次安装过运行时的开发机会一直跑
+/// %LOCALAPPDATA% 里的旧副本，本地改动不生效（便携目录仍然优先，供便携调试）。
+fn runtime_root() -> Option<std::path::PathBuf> {
+    if let Some(p) = portable_runtime_root() {
+        return Some(p);
+    }
+    if cfg!(debug_assertions) {
+        return None;
+    }
+    installed_runtime_root()
+}
+
+/// 运行时是否可用（便携布局 / 应用内安装 / 开发仓库三选一）。
+/// 安装门用它判断"要不要走首次安装流程"。
+pub fn sidecar_available() -> bool {
+    if runtime_root().is_some() {
+        return true;
+    }
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join("agent-sidecar").join("dist").join("index.js"));
+    dev.map(|p| p.is_file()).unwrap_or(false)
+}
+
+/// 便携包运行判定（exe 同级有 runtime/ 或 MIRACH_RUNTIME_DIR 指向它）。
+/// 便携版与安装版共用一套代码，但"自更新"语义不同（安装器只含外壳）。
+/// 注意：应用内安装（%LOCALAPPDATA%）不算便携版 —— 那种情况走正常更新器。
+pub fn is_portable_runtime() -> bool {
+    portable_runtime_root().is_some()
 }
 
 /// 侧边进程的 Node 可执行文件（dsh 运行时要求 Node ≥22.23.2，独立安装）。
@@ -315,6 +355,11 @@ pub fn spawn_sidecar() -> Result<(Child, ChildStdout, ChildStdin), String> {
         c.env("SIDECAR_LOG_LEVEL", if cfg!(debug_assertions) { "debug" } else { "warn" });
         // 便携化：把 node/引擎路径显式传给 sidecar（覆盖其硬编码候选列表）
         c.env("DSH_NODE_BIN", node_bin());
+        // 应用内安装的引擎入口优先（SDK 依赖里带下来的 dsh 包）
+        let engine = crate::bootstrap::installed_engine_bin();
+        if engine.is_file() {
+            c.env("MIRACH_DSH_BIN", engine.to_string_lossy().into_owned());
+        }
         // 手机接入：核心 web 面监听地址由配置驱动（webHost：127.0.0.1 / 0.0.0.0）
         c.env("MIRACH_WEB_HOST", cfg.web_host.clone());
         if let Some(root) = runtime_root() {

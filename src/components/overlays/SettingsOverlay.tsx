@@ -1892,7 +1892,15 @@ export function AboutContent() {
     localStorage.setItem("mirach.autoUpdateEngine", next ? "1" : "0");
   };
   // 应用自更新（Tauri updater：端点可配置，签名公钥在 tauri.conf.json）
-  const [appInfo, setAppInfo] = useState<{ available: boolean; version?: string; currentVersion?: string; notes?: string | null } | null>(null);
+  const [appInfo, setAppInfo] = useState<{
+    available: boolean;
+    version?: string;
+    currentVersion?: string;
+    notes?: string | null;
+    /** 便携版：安装器只含外壳，前端改为"去发布页下载" */
+    portable?: boolean;
+    installHint?: string | null;
+  } | null>(null);
   const [appBusy, setAppBusy] = useState(false);
   const [appLog, setAppLog] = useState("");
   const [updateEndpoint, setUpdateEndpoint] = useState("");
@@ -1971,15 +1979,31 @@ export function AboutContent() {
               </button>
             </div>
             {appInfo?.available && (
-              <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 flex-1 truncate text-[11px] text-[#B45309]">{appInfo.notes ?? "签名更新包"}</p>
-                <button
-                  onClick={installApp}
-                  disabled={appBusy}
-                  className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
-                >
-                  下载并安装
-                </button>
+              <div className="space-y-2">
+                <p className="min-w-0 text-[11px] text-[#B45309]">{appInfo.notes ?? "签名更新包"}</p>
+                {appInfo.portable ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 flex-1 text-[11px] text-muted-foreground">
+                      {appInfo.installHint ?? "便携版请下载新版便携包覆盖"}
+                    </span>
+                    <button
+                      onClick={() => void invoke("open_url", { url: "https://gitee.com/HANQINGZHOU/mirach/releases" }).catch(() => {})}
+                      className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90"
+                    >
+                      打开发布页
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex justify-end">
+                    <button
+                      onClick={installApp}
+                      disabled={appBusy}
+                      className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+                    >
+                      下载并安装
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             <div className="flex items-center gap-2">

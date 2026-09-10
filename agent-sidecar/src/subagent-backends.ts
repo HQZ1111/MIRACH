@@ -102,8 +102,9 @@ export function subagentBackendsStatus(): SubagentBackendsStatus {
   return { codex: backendStatus("codex"), claude: backendStatus("claude"), config: readSubagentBackends() };
 }
 
-/** dsh CLI 入口（与 dsh.ts 引擎启动同一全局安装）。 */
+/** dsh CLI 入口（应用内安装的引擎优先，其次全局 npm 安装）。 */
 function dshBin(): string {
+  if (process.env.MIRACH_DSH_BIN) return process.env.MIRACH_DSH_BIN;
   const npm = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "npm");
   return join(npm, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
 }
