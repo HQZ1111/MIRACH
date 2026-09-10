@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MainPanel — 主内容区
  *
  * ┌──────────────────────────────────┐
@@ -52,22 +52,9 @@ import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import {
-  Beer,
-  Boxes,
-  Code,
-  Container,
-  Cpu,
   Ellipsis,
-  GitBranch,
-  Mic,
   PanelLeft,
   PanelLeftOpen,
-  Puzzle,
-  Smartphone,
-  Table2,
-  Terminal,
-  Users,
-  type LucideIcon,
 } from "lucide-react";
 import { CommandPalette, type CommandPaletteAction } from "@/components/command-palette/CommandPalette";
 import { MagnifyingGlass, CaretDown } from "@phosphor-icons/react";
@@ -120,26 +107,60 @@ function useUserPlugins(): InstalledPluginInfo[] {
   return list;
 }
 
-/** 包名（含 scoped 前缀）→ 图标：按关键字匹配，避免每个插件长得一样。 */
-const PLUGIN_ICON_RULES: [RegExp, LucideIcon][] = [
-  [/tavern|酒馆/i, Beer],
-  [/realtime-voice|voice|语音/i, Mic],
-  [/pocket|phone|mobile|手机/i, Smartphone],
-  [/workgroup|team|group|成员/i, Users],
-  [/muv-table|table/i, Table2],
-  [/muv-engine|muv/i, Cpu],
-  [/subagent/i, Terminal],
-  [/codex/i, Code],
-  [/git/i, GitBranch],
-  [/docker|container/i, Container],
-  [/puzzle|plugin/i, Puzzle],
-];
+/** 包名（含 scoped 前缀）→ 图标：**用插件名派生的文字缩写**（用户要求）。
+ *
+ * 为什么不按关键字映射 lucide 图标：关键字表只覆盖已知的几个包，新装的插件全落兜底
+ * → "一堆一样的图标"，而且图标跟插件名对不上号。缩写是插件名的直接函数，且取**末尾
+ * 两个词**（npm 包名里区分度最高的是尾部）并去掉 provider/runtime/engine 这类噪声尾词：
+ *   @scope/dsh-subagent-claude-code → CC、dsh-subagent-codex → SC、dsh-muv-engine → MU、
+ *   dsh-realtime-voice → RV、dsh-multi-model-provider → MM、dsh-pocket → PO
+ * 每个插件再有稳定配色（名字哈希 → 固定色相），一眼能区分。 */
+export function pluginInitials(name: string): string {
+  // 去 scope、去 dsh/dsh-plugin/plugin 这类公共前缀/后缀
+  const base = name
+    .replace(/^@[^/]+\//, "")
+    .replace(/^dsh[-_]?/i, "")
+    .replace(/[-_]plugin$/i, "");
+  const words = base.split(/[-_.\s]+/).filter(Boolean);
+  if (words.length === 0) return name.slice(0, 2).toUpperCase();
+  // CJK 名（酒馆/语音…）直接取首字，不缩写成拼音首字母
+  if (/[\u3400-\u9fff]/.test(words[0])) return words[0].slice(0, 2);
+  // 尾部噪声词（"包的类型"而不是"这个包是谁"）：只在还剩别的词时才丢
+  const noise = /^(provider|runtime|engine|client|core|app|plugin|module|lib|js|ts)$/i;
+  while (words.length > 1 && noise.test(words[words.length - 1])) words.pop();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  const last = words[words.length - 1];
+  const prev = words[words.length - 2];
+  return (prev[0] + last[0]).toUpperCase();
+}
 
-function pluginIcon(name: string): LucideIcon {
-  for (const [re, icon] of PLUGIN_ICON_RULES) {
-    if (re.test(name)) return icon;
+/** 插件名的稳定配色（同一插件永远同一色；哈希 → 8 个色相之一） */
+export function pluginColor(name: string): string {
+  const palette = [
+    "#6366F1", "#0EA5E9", "#10B981", "#F59E0B",
+    "#EF4444", "#8B5CF6", "#EC4899", "#14B8A6",
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) % 100003;
   }
-  return Boxes;
+  return palette[hash % palette.length];
+}
+
+/** 缩写图标（文字徽标：同色底 + 同色字，深浅两态由 active 控制） */
+function PluginGlyph({ name, active }: { name: string; active: boolean }) {
+  const color = pluginColor(name);
+  return (
+    <span
+      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] text-[8px] font-bold leading-none"
+      style={{
+        backgroundColor: `${color}${active ? "22" : "12"}`,
+        color: active ? color : `${color}80`,
+      }}
+    >
+      {pluginInitials(name)}
+    </span>
+  );
 }
 
 // 单个插件按钮占宽（24 图标 + 4 gap）
@@ -176,7 +197,8 @@ function HeaderSection({
   /** 顶部命令搜索控制器（搜索框输入 + 结果下拉） */
   palette?: PaletteController;
   /** 插件图标点击（打开真实插件面板） */
-  onOpenPlugins?: () => void;
+  /** 打开插件面板；带包名 = 直接定位到该插件 */
+  onOpenPlugins?: (pluginName?: string) => void;
 }) {
   // 标题块固定上限（CSS max-w-[320px]）：项目名与会话名都在其内截断，
   // 插件图标条位置稳定不受会话名长短影响
@@ -255,19 +277,16 @@ function HeaderSection({
           {/* ---- 用户插件区（plugins.list：用户装的社区插件；点击打开插件面板） ---- */}
           <div ref={pluginsRef} className="flex shrink-0 items-center">
             <div className="flex items-center gap-0.5 overflow-hidden">
-              {visiblePlugins.map((p) => {
-                const Icon = pluginIcon(p.name);
-                return (
-                  <button
-                    key={p.name}
-                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-[#303030] ${p.active ? "text-muted-foreground" : "text-muted-foreground/40"}`}
-                    title={`${p.name}${p.version ? `@${p.version}` : ""}${p.active ? "" : "（未激活）"}`}
-                    onClick={() => onOpenPlugins?.()}
-                  >
-                    <Icon className="h-4 w-4" strokeWidth={2} />
-                  </button>
-                );
-              })}
+              {visiblePlugins.map((p) => (
+                <button
+                  key={p.name}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted"
+                  title={`${p.name}${p.version ? `@${p.version}` : ""}${p.active ? "" : "（未激活）"} — 点击打开插件面板`}
+                  onClick={() => onOpenPlugins?.(p.name)}
+                >
+                  <PluginGlyph name={p.name} active={p.active} />
+                </button>
+              ))}
               {pluginOverflow && (
                 <button
                   className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
@@ -288,22 +307,20 @@ function HeaderSection({
           <div className="fixed inset-0 z-30" onClick={() => setPluginsOpen(false)} />
           <div className="panel-glass menu-anim absolute left-5 top-full z-40 mt-1 w-48 rounded-xl py-1">
             <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">用户插件（已安装）</p>
-            {USER_PLUGINS.map((p) => {
-              const Icon = pluginIcon(p.name);
-              return (
-                <button
-                  key={p.name}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-body-sm text-[#303030] transition-colors hover:bg-muted"
-                  onClick={() => {
-                    setPluginsOpen(false);
-                    onOpenPlugins?.();
-                  }}
-                >
-                  <Icon className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
-                  <span className="flex-1">{p.name}</span>
-                </button>
-              );
-            })}
+            {USER_PLUGINS.map((p) => (
+              <button
+                key={p.name}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-body-sm text-[#303030] transition-colors hover:bg-muted"
+                onClick={() => {
+                  setPluginsOpen(false);
+                  onOpenPlugins?.(p.name);
+                }}
+              >
+                <PluginGlyph name={p.name} active={p.active} />
+                <span className="flex-1 truncate">{p.name}</span>
+                {!p.active && <span className="text-[10px] text-muted-foreground">未激活</span>}
+              </button>
+            ))}
           </div>
         </>
       )}
@@ -418,7 +435,8 @@ interface MainPanelProps {
   /** 主栏宽度数值（用于 HeaderSection 等内部布局；容器宽度走 CSS 变量） */
   mainWidth?: number;
   /** 打开插件面板（顶栏插件图标/更多点击） */
-  onOpenPlugins?: () => void;
+  /** 打开插件面板；带包名 = 直接定位到该插件 */
+  onOpenPlugins?: (pluginName?: string) => void;
 }
 
 // ---- 各组件共享的单例 ref：历史重放请求序号（见切环境流水线的 dsh_get_history）----

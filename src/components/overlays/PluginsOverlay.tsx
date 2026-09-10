@@ -11,7 +11,7 @@
  * 装载发生在 runtime 启动：安装/卸载后需重启应用生效。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { Download, LayoutTemplate, Package, RefreshCw, Search, Trash2 } from "lucide-react";
@@ -19,6 +19,7 @@ import { OverlayShell } from "@/components/overlays/OverlayShell";
 import { getApi } from "@/lib/api";
 import type { InstalledPluginInfo } from "@/lib/api/client";
 import { getPluginViewPages } from "@/plugins/registry";
+import { pluginColor, pluginInitials } from "@/components/layout/MainPanel";
 
 interface NpmResult {
   name: string;
@@ -44,15 +45,45 @@ function SwitchBadge({ active }: { active: boolean }) {
 export function PluginsOverlay({
   onClose,
   onOpenPluginView,
+  focusPlugin,
 }: {
   onClose: () => void;
   /** 打开插件注册的独立页面（viewId 扩展路由） */
   onOpenPluginView?: (viewId: string) => void;
+  /** 顶栏插件图标点进来时带的包名：定位到该插件（列表过滤到它 + 高亮 + 滚到可见） */
+  focusPlugin?: string | null;
 }) {
   const [tab, setTab] = useState<"installed" | "catalog" | "engine">("installed");
   const [query, setQuery] = useState("");
   // 注册表里带独立页面的插件（代码级贡献点）
   const viewPages = useMemo(() => getPluginViewPages(), []);
+  const focusRef = useRef<HTMLDivElement | null>(null);
+
+  // 定位到被点名的插件：过滤到它、切到已安装页、滚到可见
+  useEffect(() => {
+    if (!focusPlugin) return;
+    setTab("installed");
+    setQuery(focusPlugin.replace(/^@[^/]+\//, ""));
+  }, [focusPlugin]);
+  useEffect(() => {
+    if (!focusPlugin) return;
+    // 清单是异步拉的：等它渲染出来再滚（不依赖 installed 变量，避免声明顺序问题）
+    const t = window.setTimeout(() => {
+      focusRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [focusPlugin]);
+
+  /** 已安装插件 → 它自己的注册页面（没有则为 null） */
+  const viewPageFor = (name: string) => {
+    const normalized = name.replace(/^@[^/]+\//, "").replace(/^dsh[-_]?/i, "").toLowerCase();
+    return (
+      viewPages.find(({ pluginId, page }) => {
+        const id = pluginId.toLowerCase();
+        return id === normalized || normalized.includes(id) || id.includes(normalized) || page.id === name;
+      })?.page ?? null
+    );
+  };
 
   const [installed, setInstalled] = useState<Installed[] | null>(null);
   const [installName, setInstallName] = useState("");
@@ -232,10 +263,27 @@ export function PluginsOverlay({
                 </p>
               ) : (
                 <div className="space-y-1.5">
-                  {installedFiltered.map((p) => (
-                    <div key={p.name} className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-[#464646]">
-                        <Package className="h-4 w-4" strokeWidth={2} />
+                  {installedFiltered.map((p) => {
+                    const page = viewPageFor(p.name);
+                    const focused = !!focusPlugin && p.name.includes(focusPlugin.replace(/^@[^/]+\//, ""));
+                    return (
+                    <div
+                      key={p.name}
+                      ref={focused ? focusRef : undefined}
+                      className={cn(
+                        "flex items-center gap-3 rounded-md border px-3 py-2.5",
+                        focused ? "border-[#6366F1]/60 bg-[#6366F1]/[0.04]" : "border-border/60",
+                      )}
+                    >
+                      {/* 与顶栏同款：插件名缩写徽标 + 稳定配色（一眼对得上号） */}
+                      <span
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[12px] font-bold"
+                        style={{
+                          backgroundColor: `${pluginColor(p.name)}1A`,
+                          color: pluginColor(p.name),
+                        }}
+                      >
+                        {pluginInitials(p.name)}
                       </span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-body-sm font-medium text-[#303030]">
@@ -247,6 +295,14 @@ export function PluginsOverlay({
                         <p className="truncate text-[11px] text-muted-foreground">{p.description || "—"}</p>
                       </div>
                       {p.isPlugin && <SwitchBadge active={p.active} />}
+                      {page && (
+                        <button
+                          onClick={() => onOpenPluginView?.(page.id)}
+                          className="flex shrink-0 items-center gap-1 rounded-md bg-[#303030] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                        >
+                          打开面板
+                        </button>
+                      )}
                       <button
                         onClick={() => void doUninstall(p.name)}
                         disabled={p.builtin || busy}
@@ -256,7 +312,8 @@ export function PluginsOverlay({
                         <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 

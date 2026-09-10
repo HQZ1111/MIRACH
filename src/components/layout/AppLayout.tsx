@@ -62,6 +62,7 @@ import { getGroupById } from "@/store/groups";
 import { recordTavernBinding } from "@/lib/tavern";
 import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
+import { getPluginViewPages } from "@/plugins/registry";
 
 // 功能弹窗按需加载（减少主包体积，打开时才拉取）
 // 设置页已移交官方（settings-surface 浮出），不再走 SettingsOverlay 浮层
@@ -221,6 +222,8 @@ export function AppLayout() {
   };
   // 功能 Overlay（设置/消息平台/命令中心/技能与工具/排程）
   const [overlayView, setOverlayView] = useState<OverlayView | null>(null);
+  // 顶栏点插件图标时带过来的包名：插件管理器据此定位到该插件（"点图标开插件面板"）
+  const [pluginsFocus, setPluginsFocus] = useState<string | null>(null);
   // 会话对话框（「在新窗口打开」→ 应用内弹窗）
   const sessionDialogId = useStore($sessionDialog);
   // 聊天记录弹窗（Ctrl+F / 聊天记录工具按钮打开）
@@ -904,6 +907,31 @@ export function AppLayout() {
     setActiveView(viewId as ViewId);
   }, []);
 
+  /** 顶栏插件图标/列表项 → 打开插件自己的面板。
+   *
+   * 优先级（用户要求"点击打开插件本身的设置面板"）：
+   *  1) 插件在 mirach 注册表里带独立页面（viewPage）→ 直接开那个页面（插件自带面板）
+   *  2) 否则开插件管理器并**定位到该插件**（它的设置/启停/卸载面就在这里）
+   * 已安装的 npm 插件（dsh-*）目前都走 2)，因为面板由插件作者贡献、mirach 不代做。 */
+  const handleOpenPluginPanel = useCallback(
+    (pluginName?: string) => {
+      if (pluginName) {
+        const normalized = pluginName.replace(/^@[^/]+\//, "").replace(/^dsh[-_]?/i, "").toLowerCase();
+        const hit = getPluginViewPages().find(({ pluginId, page }) => {
+          const id = pluginId.toLowerCase();
+          return id === normalized || normalized.includes(id) || id.includes(normalized) || page.id === pluginName;
+        });
+        if (hit) {
+          handleOpenPluginView(hit.page.id);
+          return;
+        }
+      }
+      setPluginsFocus(pluginName ?? null);
+      setOverlayView("plugins");
+    },
+    [handleOpenPluginView],
+  );
+
   const paletteActions: CommandPaletteAction[] = useMemo(() => {
     const list: CommandPaletteAction[] = [];
     const add = (
@@ -1095,7 +1123,7 @@ export function AppLayout() {
           mainWidth={mainWidth}
           showLeft
           activeView={activeView}
-          onOpenPlugins={() => setOverlayView("plugins")}
+          onOpenPlugins={handleOpenPluginPanel}
           palette={{
             open: paletteOpen,
             query: paletteQuery,
@@ -1193,7 +1221,11 @@ export function AppLayout() {
           <WebhooksOverlay onClose={() => setOverlayView(null)} />
         )}
         {overlayView === "plugins" && (
-          <PluginsOverlay onClose={() => setOverlayView(null)} onOpenPluginView={handleOpenPluginView} />
+          <PluginsOverlay
+            onClose={() => setOverlayView(null)}
+            onOpenPluginView={handleOpenPluginView}
+            focusPlugin={pluginsFocus}
+          />
         )}
         {overlayView === "knowledge" && <StarmapOverlay onClose={() => setOverlayView(null)} />}
         {overlayView === "kanban" && (
