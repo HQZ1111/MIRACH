@@ -909,6 +909,7 @@ pub async fn dsh_mux_open(
     endpoint: String,
     payload: Value,
     page_id: Option<String>,
+    page_key: Option<String>,
     ch: tauri::ipc::Channel<Value>,
     s: State<'_, DshAppState>,
 ) -> Result<Value, String> {
@@ -919,7 +920,7 @@ pub async fn dsh_mux_open(
     s.mux_channels.lock().unwrap().insert(id.clone(), ch);
     let result = scmd_r(
         &s,
-        &serde_json::json!({"type":"mux_open","id":id,"endpoint":endpoint,"payload":payload,"pageId":page_id}),
+        &serde_json::json!({"type":"mux_open","id":id,"endpoint":endpoint,"payload":payload,"pageId":page_id,"pageKey":page_key}),
         std::time::Duration::from_secs(20),
     )
     .await;

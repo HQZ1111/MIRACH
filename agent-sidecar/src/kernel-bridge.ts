@@ -26,10 +26,10 @@ import * as dshAuth from "./dsh-auth.mjs";
 import { coreBase, isGatewayMode, gatewayAuthHeaders } from "./rpc-http.js";
 import { log, logWarn, send } from "./protocol.js";
 
-/** 逻辑流 id → 物理 WS（一次 openStream = 一条 WS；mux 协议只有 open/cancel）。 */
-const sockets = new Map<string, WebSocket>();
-/** 当前页面世代：页面重载后新世代的首个 mux_open 回收上一代遗留的 WS。 */
-let currentPageId = "";
+/** 逻辑流 id → 物理 WS（一次 openStream = 一条 WS；mux 协议只有 open/cancel）。
+ *  同时记**页面归属**：pageKey = 窗口身份（main / hud / session-*，跨重载稳定），
+ *  pageId = 该窗口本次加载的世代。多窗口的所有权回收必须按这两者一起判。 */
+const sockets = new Map<string, { ws: WebSocket; pageKey: string; pageId: string }>();
 
 /** 代发请求体上限（base64 字符数，≈192MB 原始字节；引擎聚合限制 200MB 之内）。
  *  超过直接报错而不是无限缓冲——真正的流式分帧（官方 wire.ts 形状）见
@@ -222,17 +222,20 @@ interface MuxOpenRequest {
   id: string;
   endpoint?: string;
   payload?: unknown;
-  /** 前端页面世代 id：换代（重载）时回收上一代全部 WS。 */
+  /** 该窗口本次加载的世代 id（crypto.randomUUID，每次加载都变）。 */
   pageId?: string;
+  /** 窗口身份（Tauri 窗口 label：main / hud / session-*，跨重载稳定）。
+   *  回收判据 = 同 pageKey 且 pageId 不同（同一窗口换了代）。 */
+  pageKey?: string;
 }
 
 /** 关闭一条逻辑流：通知前端 + 关闭物理 WS（幂等；事件回调按存在性去重）。 */
 function closeSocket(id: string, reason: string): void {
-  const ws = sockets.get(id);
-  if (ws === undefined) return;
+  const entry = sockets.get(id);
+  if (entry === undefined) return;
   sockets.delete(id);
   try {
-    ws.close(1000, reason.slice(0, 100));
+    entry.ws.close(1000, reason.slice(0, 100));
   } catch {
     /* 已关闭 */
   }
@@ -247,13 +250,20 @@ export function handleMuxOpen(cmd: MuxOpenRequest): void {
     send({ type: "error", id, message: "kernel bridge: mux_open requires endpoint" });
     return;
   }
-  // 页面重载：旧页面的生成器已被销毁，不会再来 mux_close——新世代首开时回收
-  if (typeof cmd.pageId === "string" && cmd.pageId !== currentPageId) {
-    if (currentPageId !== "" && sockets.size > 0) {
-      log("kernel bridge: page generation changed — closing %d stale mux sockets", sockets.size);
-      for (const stale of [...sockets.keys()]) closeSocket(stale, "page reloaded");
+  // 页面重载回收：**只清同一窗口（pageKey）的上一代（pageId 不同）流**。
+  // 判据必须是"同 pageKey 且 pageId 不同"：
+  //   - 只比 pageId（早期版本）：另一个窗口新开流时被当成"页面换代"，主窗的流被全关，
+  //     两边来回抢（日志刷 "closing N stale mux sockets"，HUD 永远"引擎未连接"）；
+  //   - 只比 pageKey（想当然的写法）：**同一页面的多条并发流会被自己人关掉**
+  //     （官方客户端一个页面同时挂好几条 mux 流），连接反复断。
+  const pageKey = typeof cmd.pageKey === "string" ? cmd.pageKey : "";
+  const pageId = typeof cmd.pageId === "string" ? cmd.pageId : "";
+  if (pageKey !== "" && pageId !== "") {
+    for (const [sid, entry] of [...sockets]) {
+      if (sid !== id && entry.pageKey === pageKey && entry.pageId !== pageId) {
+        closeSocket(sid, "page reloaded");
+      }
     }
-    currentPageId = cmd.pageId;
   }
   const auth = authHeaders();
   if (auth === null) {
@@ -289,7 +299,8 @@ export function handleMuxOpen(cmd: MuxOpenRequest): void {
     send({ type: "result", id, data: { opened: true } });
   });
   ws.addEventListener("message", (event) => {
-    if (sockets.get(id) !== ws) return; // 已被回收（页面换代/前端取消）
+    const entry = sockets.get(id);
+    if (entry === undefined || entry.ws !== ws) return; // 已被回收（页面重载/前端取消）
     const raw = typeof event.data === "string" ? event.data : String(event.data);
     let frame: unknown;
     try {
@@ -316,16 +327,16 @@ export function handleMuxOpen(cmd: MuxOpenRequest): void {
     }
     finish(`mux WebSocket closed (${event.code})`);
   });
-  sockets.set(id, ws);
+  sockets.set(id, { ws, pageKey, pageId });
 }
 
 /** 关闭一条逻辑流（前端取消/生成器收尾）。 */
 export function handleMuxClose(cmd: { id: string }): void {
-  const ws = sockets.get(cmd.id);
-  if (ws === undefined) return;
+  const entry = sockets.get(cmd.id);
+  if (entry === undefined) return;
   sockets.delete(cmd.id);
   try {
-    ws.close(1000, "client closed");
+    entry.ws.close(1000, "client closed");
   } catch {
     /* 已关闭 */
   }
@@ -334,7 +345,7 @@ export function handleMuxClose(cmd: { id: string }): void {
 
 /** 进程退出前收干净 WS（undici 在关闭中直接 exit 会触发 uv 断言）。 */
 export async function shutdownKernelBridge(): Promise<void> {
-  const all = [...sockets.values()];
+  const all = [...sockets.values()].map((entry) => entry.ws);
   sockets.clear();
   for (const ws of all) {
     try {

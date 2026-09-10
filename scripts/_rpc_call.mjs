@@ -32,9 +32,13 @@ await new Promise((res, rej) => {
 });
 await send("Runtime.enable");
 const args = argsJson ? JSON.parse(argsJson) : {};
+// 带点的 = dsh_rpc 方法（plugins.install …）；不带点的 = 直接调 Tauri 命令（hud_open …）
+const isRpc = method.includes(".");
 const expr = `(async () => {
   try {
-    const r = await window.__TAURI_INTERNALS__.invoke('dsh_rpc', { method: ${JSON.stringify(method)}, params: ${JSON.stringify(args)} });
+    const r = ${isRpc
+      ? `await window.__TAURI_INTERNALS__.invoke('dsh_rpc', { method: ${JSON.stringify(method)}, params: ${JSON.stringify(args)} })`
+      : `await window.__TAURI_INTERNALS__.invoke(${JSON.stringify(method)}, ${JSON.stringify(args)})`};
     return JSON.stringify({ ok: true, result: r ?? null }, null, 1);
   } catch (e) {
     return JSON.stringify({ ok: false, error: String(e).slice(0, 1500) }, null, 1);

@@ -25,6 +25,21 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 
 /** 本页面加载的世代 id：重载后新页面开流时，sidecar 借此回收上一代的 WS。 */
 const PAGE_ID = crypto.randomUUID();
+/** 本页面的**稳定身份**（窗口 label：main / hud / session-* …）。
+ *  pageId 每次加载都变，sidecar 光凭它分不清"同一窗口重载"和"另一个窗口新开" ——
+ *  多窗口（主窗 + HUD 悬浮窗）会互相把对方的流当成"上一代"回收，两边来回抢
+ *  （HUD 永远"引擎未连接"）。回收判据 = 同 pageKey 且 pageId 不同。 */
+const PAGE_KEY = (() => {
+  try {
+    return (
+      window as unknown as {
+        __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
+      }
+    ).__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
+  } catch {
+    return "main";
+  }
+})();
 
 /** 允许代发的路径前缀（引擎 web 面；/dsh-pocket 是社区插件同源 RPC）。 */
 const PROXY_PREFIXES = ["/api/", "/dsh-pocket/", "/dsh-realtime-voice/"];
@@ -212,7 +227,7 @@ export async function* hostOpenStream(
   signal.addEventListener("abort", abort, { once: true });
   try {
     try {
-      await invoke("dsh_mux_open", { id, endpoint, payload, pageId: PAGE_ID, ch: channel });
+      await invoke("dsh_mux_open", { id, endpoint, payload, pageId: PAGE_ID, pageKey: PAGE_KEY, ch: channel });
     } catch (error) {
       // 宿主未就绪/连接失败属于载体故障：标记 carrier 让官方流机制退避重试，
       // 而不是当成终态业务错误（后者会永久打死 session 控制流）
