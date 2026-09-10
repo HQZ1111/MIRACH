@@ -30,6 +30,7 @@ import { useHudEdge } from './hud-edge'
 import { useHudGlass } from './glass'
 import { useHudResizeHandle } from './resize-handle'
 import { watchHudShellColumns } from './shell-columns'
+import { watchHudSlots } from './hud-slots'
 import { useHudThreadFocus } from './thread-focus'
 import { useHudTranscriptBand } from './transcript-band'
 
@@ -218,6 +219,17 @@ export function HudShell() {
     }
 
     return watchHudShellColumns(root)
+  }, [])
+
+  // 官方对话面 → hermes 的 slot 词表（741 行 HUD 皮肤与 7 个 hook 都照 hermes 名写）
+  useEffect(() => {
+    const root = rootRef.current
+
+    if (!root) {
+      return
+    }
+
+    return watchHudSlots(root)
   }, [])
 
   // Whether bar + band actually cover the window（mirach 无原生 frost，恒 false

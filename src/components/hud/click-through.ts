@@ -40,7 +40,7 @@ export function hudIgnoresMouse(
     windowFocused &&
     active !== null &&
     root.contains(active) &&
-    active.closest('[data-slot="composer-rich-input"]') !== null
+    active.closest('[data-hud-slot~="composer-rich-input"]') !== null
 
   const overlayFocused = windowFocused && active !== null && !root.contains(active) && !active.contains(root)
 

@@ -1,10 +1,10 @@
 import { type RefObject, useEffect } from 'react'
 
 /** The caret is in the composer — see the `:has()` rules in styles.css. */
-const TYPING_SELECTOR = '[data-slot="composer-rich-input"]:focus'
+const TYPING_SELECTOR = '[data-hud-slot~="composer-rich-input"]:focus'
 
 /** An open completion list owns the surface; the band falls back behind it. */
-const DRAWER_SELECTOR = '[data-slot="composer-completion-drawer"]'
+const DRAWER_SELECTOR = '[data-hud-slot~="composer-completion-drawer"]'
 
 /**
  * Native frost behind the band.

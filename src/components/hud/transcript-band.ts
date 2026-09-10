@@ -31,7 +31,7 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
     const ro = new ResizeObserver(() => measure())
 
     const measure = () => {
-      const el = viewport ?? root.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]')
+      const el = viewport ?? root.querySelector<HTMLElement>('[data-hud-slot~="aui_thread-viewport"]')
 
       if (el !== viewport) {
         viewport = el
@@ -49,7 +49,7 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // rows only. Measuring to the viewport edge counted the full-window scroll
       // container (min-height: 100%) as transcript and painted a empty slab almost
       // the size of the HUD.
-      const rows = el?.querySelectorAll<HTMLElement>('[data-slot="aui_thread-content"] > *:not([data-slot])')
+      const rows = el?.querySelectorAll<HTMLElement>('[data-hud-slot~="aui_thread-content"] > *:not([data-slot])')
 
       // Zero-height rows are not a transcript. A fresh thread still renders
       // scaffolding inside the content box (clearance, empty state), so
@@ -69,7 +69,7 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // 顶到对话区外被 overflow 裁掉。
       const chatArea = root.querySelector<HTMLElement>('.dsh-native-area')
       const visible = hudTranscriptHeight({
-        barHeight: root.querySelector<HTMLElement>('[data-slot="composer-dock"]')?.getBoundingClientRect().height ?? 0,
+        barHeight: root.querySelector<HTMLElement>('[data-hud-slot~="composer-dock"]')?.getBoundingClientRect().height ?? 0,
         contentHeight: contentSpan,
         viewportHeight: chatArea?.getBoundingClientRect().height ?? window.innerHeight
       })
@@ -81,12 +81,23 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // surface var that never lands here, so the clearance silently fell back
       // to the root estimate and reserved ~20px more than the bar occupies —
       // a visible hole under the last message.
-      const bar = root.querySelector<HTMLElement>('[data-slot="composer-dock"]')
+      const bar = root.querySelector<HTMLElement>('[data-hud-slot~="composer-dock"]')
       const barHeight = bar?.getBoundingClientRect().height ?? 0
 
       if (bar) {
         ro.observe(bar)
         root.style.setProperty('--hud-bar-height', `${Math.round(barHeight)}px`)
+
+        // band 的锚点：从**它的包含块底**到 bar 顶的整段距离（含官方结构自带的
+        // 底部留白）。基准取 band.offsetParent 而不是对话区：band 是绝对定位，
+        // 它的 bottom 就是相对包含块算的，两者必须同一个基准（否则带子会飘）。
+        const bandEl = root.querySelector<HTMLElement>('[data-hud-slot~="composer-bounds"]')
+        const anchor = bandEl?.offsetParent
+        if (anchor instanceof HTMLElement) {
+          ro.observe(anchor)
+          const offset = anchor.getBoundingClientRect().bottom - bar.getBoundingClientRect().top
+          root.style.setProperty('--hud-bar-offset', `${Math.round(Math.max(0, offset))}px`)
+        }
       }
 
       setFilled(barHeight + visible >= (chatArea?.getBoundingClientRect().height ?? window.innerHeight) - 1)

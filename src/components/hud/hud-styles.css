@@ -37,6 +37,45 @@
   display: none !important;
 }
 
+/* ── mirach 结构适配：官方列 ≠ hermes 的对话面 ───────────────────────────────
+   下面是**唯一一处不是从 hermes 逐字搬来的布局**，原因是两侧对话面结构不同
+   （见 hud-slots.ts 顶部说明）：官方把 thread 与 composer 放在**同一个滚动列**里
+   （`_body > _scrollBody > [conversation.session(>viewArea), composerSeat]`），
+   而 hermes 的契约是"bar 钉在窗口底部 + 上方一条高度受控、可淡出的 band"。
+
+   做法（不搬 DOM —— 官方 React 会把它搬回去）：
+     - body / scrollBody 变 flex 列、禁掉它们自己的滚动（避免双重滚动）；
+     - composer 区不参与压缩 + `justify-content: flex-end` → 钉在列底 = 窗口底；
+     - view 区（线程）交给 hermes 的 composer-bounds 规则：绝对定位 + 高度
+       `--hud-band-height`（transcript-band.ts 量出来的）+ 贴在 bar 上方 —— 它就是
+       "看得见的那个滚动盒"。 */
+[data-hud-shell] [data-hud-conv-root] {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+[data-hud-shell] [data-hud-body],
+[data-hud-shell] [data-hud-scroll-body] {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+[data-hud-shell] [data-hud-composer-seat] {
+  flex: none !important;
+}
+
+/* 官方列的拖宽手柄（40px 热区）在 HUD 里没有用途，只会吃掉窗口边缘的点击；
+   HUD 的缩放走自己的 resize 边框。 */
+[data-hud-shell] [class*='_widthHandle'] {
+  display: none !important;
+}
+
 /* 主列自己撑满：官方列在 flex/grid 里靠 grid 列宽，两翼归零后主列必须占满高度，
    否则官方树会在小窗里被压成一条。 */
 [data-hud-shell] [data-hud-frame] {
@@ -80,7 +119,10 @@
 
    Reveal is fast, fade-out is slow — the reveal is an answer to the user, the
    fade is furniture leaving the room. */
-[data-hud-shell] [data-slot='composer-bounds'] {
+[data-hud-shell] [data-hud-slot~='composer-bounds'] {
+  /* top 必须显式 auto：官方线程区自带 top（实测 computed top=-40.5px），与 bottom/height
+     同时生效时浏览器按 top 定位、高度另算 —— 带子就飘到 bar 上方去了。 */
+  top: auto !important;
   position: absolute !important;
   /* THE BAND IS THIS BOX. It sits against the bar and is exactly as tall as the
      transcript is allowed to be — same geometry as the sheet behind it, same
@@ -96,7 +138,7 @@
 
      No fill of its own — the sheet is its own layer ([data-hud-glass]) so it
      can animate independently of the text. */
-  inset: auto var(--hud-band-inset) var(--hud-bar-height, var(--composer-fallback-height)) var(--hud-band-inset) !important;
+  inset: auto var(--hud-band-inset) var(--hud-bar-offset, var(--hud-bar-height, var(--composer-fallback-height))) var(--hud-band-inset) !important;
   height: var(--hud-band-height, 0px) !important;
   width: auto !important;
   max-width: none !important;
@@ -160,7 +202,7 @@
 [data-hud-shell] [data-hud-glass] {
   position: absolute;
   right: var(--hud-band-inset);
-  bottom: var(--hud-bar-height, var(--composer-fallback-height));
+  bottom: var(--hud-bar-offset, var(--hud-bar-height, var(--composer-fallback-height)));
   left: var(--hud-band-inset);
   z-index: 0;
   pointer-events: none;
@@ -194,7 +236,7 @@
    the tinted sheet is the thing that reads as a desktop window parked on the
    action, and it is most of the HUD's rectangle. Streaming shows words on the
    game; sitting down to read promotes the surface. */
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-hud-glass] {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-glass] {
   translate: none;
   opacity: 1;
   transition-duration: var(--hud-reveal);
@@ -246,7 +288,7 @@
 /* Engaged, the field steps up the same way the docked thread's does — but
    never below the resting tint, so a high lever cannot make focusing the
    composer paint MORE transparent than glancing at it. */
-:root[data-hermes-glass-on] [data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-hud-glass] {
+:root[data-hermes-glass-on] [data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-glass] {
   background: rgb(12 14 18 / 0.72);
 }
 
@@ -256,7 +298,7 @@
    to use it, and the transcript flew open every time it was moved. Hit-testing
    below stays on :focus-within — being permissive about what can be clicked is
    harmless, being permissive about what lights up is not. */
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-hud-glass] {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-glass] {
   background: rgb(12 14 18 / 0.82);
 }
 
@@ -290,7 +332,7 @@
    so an interactive band IS a dead zone over the action). Sitting down in the
    composer is the deliberate act that makes the transcript a surface you can
    scroll and click links in. */
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-slot='composer-bounds'] {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-slot~='composer-bounds'] {
   pointer-events: auto;
 }
 
@@ -298,14 +340,14 @@
    take clicks even if the composer never received focus. On click-through
    hosts that is a deliberate dead zone over the game; on a prompt it is a
    surface you cannot use. */
-[data-hud-shell][data-hud-held] [data-slot='composer-bounds'] {
+[data-hud-shell][data-hud-held] [data-hud-slot~='composer-bounds'] {
   pointer-events: auto;
 }
 
 /* Linux X11 is a solid window: ignore-mouse cannot restore, so a visible
    band that still has pointer-events:none swallows the click and does
    nothing. Once the band is up it is the surface. */
-[data-hud-shell][data-hud-input='solid'][data-hud-recent] [data-slot='composer-bounds'] {
+[data-hud-shell][data-hud-input='solid'][data-hud-recent] [data-hud-slot~='composer-bounds'] {
   pointer-events: auto;
 }
 
@@ -314,12 +356,12 @@
    in the composer first. Children inherit auto from these roots. */
 [data-hud-shell]
   :is(
-    [data-slot='clarify-inline'],
+    [data-hud-slot~='clarify-inline'],
     [data-clarify-choices],
     [data-clarify-batch],
-    [data-slot='tool-approval-inline'],
-    [data-slot='tool-approval-fallback'],
-    [data-slot='tool-approval-actions'],
+    [data-hud-slot~='tool-approval-inline'],
+    [data-hud-slot~='tool-approval-fallback'],
+    [data-hud-slot~='tool-approval-actions'],
     a[href]
   ) {
   pointer-events: auto;
@@ -330,7 +372,7 @@
    full-strength text over another app reads as the HUD demanding attention it
    hasn't earned. Focus is what promotes it to properly readable; the hold and
    fade then take it away from wherever it was. */
-[data-hud-shell][data-hud-recent] [data-slot='composer-bounds'] {
+[data-hud-shell][data-hud-recent] [data-hud-slot~='composer-bounds'] {
   opacity: 1;
   translate: none;
   /* Same duration AND curve as the sheet's tint step, or the two visibly ease
@@ -347,7 +389,7 @@
    HUD's legibility cannot depend on a condition being evaluated correctly; it
    is a property of the surface. The scrim below is darkened to match, so white
    is right whether the sheet is up or not. */
-[data-hud-shell] [data-slot='composer-bounds'] {
+[data-hud-shell] [data-hud-slot~='composer-bounds'] {
   --hud-overlay-ink: #fff;
   /* WoW-epic gold: reads as "yours" against white agent text and survives being
      over a dark cave or a bright loading screen. */
@@ -370,7 +412,7 @@
    band itself). The viewport clips it hard before the band's mask is ever
    consulted, which is why raising the value changed nothing on screen. Masking
    the viewport puts the ramp where the clipping actually happens. */
-[data-hud-shell] [data-slot='aui_thread-viewport'] {
+[data-hud-shell] [data-hud-slot~='aui_thread-viewport'] {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--hud-top-fade, 3.5rem));
   mask-image: linear-gradient(to bottom, transparent 0, #000 var(--hud-top-fade, 3.5rem));
 }
@@ -379,7 +421,7 @@
    markdown, timestamps — inherits it too, or the ink change reaches the
    wrapper and nothing you can actually read. Widgets carve themselves out by
    resetting the variable (see below), so this stays one rule. */
-[data-hud-shell] [data-slot='composer-bounds'] * {
+[data-hud-shell] [data-hud-slot~='composer-bounds'] * {
   color: var(--hud-overlay-ink) !important;
 }
 
@@ -402,13 +444,13 @@
    Widgets on the shared shell (components/chat/widget-shell.ts →
    `--ui-widget-surface-background`) and any chat-surface card are matched on
    their class, so new ones inherit this without touching the list. */
-[data-hud-shell] [data-slot='composer-bounds']
+[data-hud-shell] [data-hud-slot~='composer-bounds']
   :is(
-    [data-slot='clarify-inline'],
-    [data-slot='tool-block'],
-    [data-slot='file-diff-panel'],
-    [data-slot='code-card'],
-    [data-slot='aui_system-message-root'],
+    [data-hud-slot~='clarify-inline'],
+    [data-hud-slot~='tool-block'],
+    [data-hud-slot~='file-diff-panel'],
+    [data-hud-slot~='code-card'],
+    [data-hud-slot~='aui_system-message-root'],
     [class*='ui-widget-surface-background'],
     [class*='ui-chat-surface-background'],
     pre,
@@ -427,12 +469,12 @@
    ink so it costs no surface. Warm gold rather than the theme's accent: it has
    to hold up over whatever is behind the window, and a blue or purple lands on
    top of exactly the palette most games use for their own UI. */
-[data-hud-shell] :is([data-slot='aui_user-message-root'], .composer-human-message),
-[data-hud-shell] :is([data-slot='aui_user-message-root'], .composer-human-message) * {
+[data-hud-shell] :is([data-hud-slot~='aui_user-message-root'], .composer-human-message),
+[data-hud-shell] :is([data-hud-slot~='aui_user-message-root'], .composer-human-message) * {
   color: var(--hud-overlay-ink-user) !important;
 }
 
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-slot='composer-bounds'] {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-slot~='composer-bounds'] {
   opacity: 1;
   translate: none;
   transition-duration: var(--hud-reveal);
@@ -445,13 +487,13 @@
    goes fully opaque and the band falls back behind it: dimmer, fractionally
    smaller, slightly out of focus. Scaled from the bar's edge, so it reads as
    depth rather than as the panel shrinking. */
-[data-hud-shell]:has([data-slot='composer-completion-drawer']) :is([data-slot='composer-bounds'], [data-hud-glass]) {
+[data-hud-shell]:has([data-hud-slot~='composer-completion-drawer']) :is([data-hud-slot~='composer-bounds'], [data-hud-glass]) {
   opacity: 0.25 !important;
   scale: 0.97;
   filter: blur(1.5px);
 }
 
-[data-hud-shell] [data-slot='composer-completion-drawer'] {
+[data-hud-shell] [data-hud-slot~='composer-completion-drawer'] {
   background: var(--dt-card) !important;
 }
 
@@ -478,12 +520,12 @@
 /* No bubble in the HUD, ever. The band's ink already distinguishes the two
    voices (white agent / gold yours), and a light card behind gold text is the
    one thing in here that fights the overlay's own contrast. */
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) {
   --hud-bubble-fill: transparent;
   --hud-bubble-stroke: transparent;
 }
 
-[data-hud-shell] [data-slot='aui_user-message-root'] {
+[data-hud-shell] [data-hud-slot~='aui_user-message-root'] {
   background: transparent !important;
   /* Not sticky in HUD mode: the band is a short log, and a pinned bubble
      spends a third of it on a line you already read. Static rows scroll away
@@ -532,7 +574,7 @@
 
 /* No session header, no jump-to-bottom pill, no timeline rail. */
 [data-hud-shell] header,
-[data-hud-shell] [data-slot='thread-timeline'],
+[data-hud-shell] [data-hud-slot~='thread-timeline'],
 [data-hud-shell] .thread-jump-button {
   display: none !important;
 }
@@ -541,9 +583,9 @@
    transcript. Tool rows, file diffs, and background notices ("Self-improvement
    review: patched …") are the docked app's job — here they push the actual
    answer out of view and read as junk pinned over the app below. */
-[data-hud-shell] [data-slot='tool-block'],
-[data-hud-shell] [data-slot='file-diff-panel'],
-[data-hud-shell] [data-slot='aui_system-message-root'] {
+[data-hud-shell] [data-hud-slot~='tool-block'],
+[data-hud-shell] [data-hud-slot~='file-diff-panel'],
+[data-hud-shell] [data-hud-slot~='aui_system-message-root'] {
   display: none !important;
 }
 
@@ -552,20 +594,20 @@
    main on move/resize), the whole HUD mirrors vertically: composer hugs the
    window's top edge, the band hangs BELOW it, and text melts at the bottom.
    Same surfaces, same variables — only the anchors swap. */
-[data-hud-shell][data-hud-edge='top'] [data-slot='composer-dock'] {
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='composer-dock'] {
   top: 0 !important;
   bottom: auto !important;
 }
 
 /* Flipped, the band hangs from the bar instead of standing on it. */
-[data-hud-shell][data-hud-edge='top'] [data-slot='composer-bounds'] {
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='composer-bounds'] {
   top: var(--hud-bar-height, var(--composer-fallback-height)) !important;
   bottom: auto !important;
   border-radius: 0 0 0.75rem 0.75rem;
 }
 
 /* …so the edge it falls back from is the bar's, which is now above it. */
-[data-hud-shell][data-hud-edge='top'] :is([data-slot='composer-bounds'], [data-hud-glass]) {
+[data-hud-shell][data-hud-edge='top'] :is([data-hud-slot~='composer-bounds'], [data-hud-glass]) {
   transform-origin: top center;
 }
 
@@ -575,7 +617,7 @@
    there is nothing up there, so the list rendered off screen and `/` looked
    dead. Capped to the room below the bar, since the app's own cap assumes a
    full window. */
-[data-hud-shell][data-hud-edge='top'] [data-slot='composer-completion-drawer'] {
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='composer-completion-drawer'] {
   top: 100%;
   bottom: auto;
   margin-top: 0.25rem;
@@ -592,7 +634,7 @@
    else's window, and text running into the band's rounded corners reads as a
    panel that has outgrown its box. The composer keeps the full width — it is
    the object; the log is what hangs off it. */
-[data-hud-shell] [data-slot='aui_thread-content'] {
+[data-hud-shell] [data-hud-slot~='aui_thread-content'] {
   width: 92% !important;
   margin-inline: auto !important;
   padding-inline: 0.6rem !important;
@@ -607,7 +649,7 @@
 }
 
 /* Parked at the top the band hangs below the bar, so it fills downward. */
-[data-hud-shell][data-hud-edge='top'] [data-slot='aui_thread-content'] {
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='aui_thread-content'] {
   justify-content: flex-start;
 }
 
@@ -668,7 +710,7 @@
   pointer-events: none;
 }
 
-[data-hud-shell] [data-slot='composer-dock'] {
+[data-hud-shell] [data-hud-slot~='composer-dock'] {
   /* The one surface that is always there, so the one that always takes the
      mouse — everything else in the shell earns it by being on screen. */
   pointer-events: auto;
@@ -684,7 +726,7 @@
    Written as "keep the composer, hide its siblings" rather than a list of
    selectors, because those siblings carry no data-slot of their own — a list
    would silently miss whatever gets added to the dock next. */
-[data-hud-shell] [data-slot='composer-dock'] > *:not([data-slot='composer-root']) {
+[data-hud-shell] [data-hud-slot~='composer-dock'] > *:not([data-hud-slot~='composer-root']) {
   display: none !important;
 }
 
@@ -711,8 +753,8 @@
    against the nearest positioned ancestor, so making the dock static re-anchors
    that row and the composer tears in half — input in flow at the top, controls
    stranded at the bottom. */
-[data-hud-shell] [data-slot='composer-dock'],
-[data-hud-shell] [data-slot='composer-dock'][data-popped-out] {
+[data-hud-shell] [data-hud-slot~='composer-dock'],
+[data-hud-shell] [data-hud-slot~='composer-dock'][data-popped-out] {
   left: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
@@ -733,11 +775,11 @@
    when it's a panel at the bottom of a big window you're scrolling past. Here
    it IS the interface: the one permanent, fully-present object, whatever the
    transcript above it is doing. */
-[data-hud-shell] [data-slot='composer-fade'] {
+[data-hud-shell] [data-hud-slot~='composer-fade'] {
   opacity: 1 !important;
 }
 
-[data-hud-shell] [data-slot='composer-root'] {
+[data-hud-shell] [data-hud-slot~='composer-root'] {
   /* Opaque, so anything docked to the composer (status stack, queue panel)
      paints the same solid fill the bar does — they share this var. */
   --composer-fill: var(--dt-card);
@@ -753,7 +795,7 @@
    `absolute inset-0 -z-10` fill+glass div behind it (composerFill /
    composerSurfaceGlass). Two stacked fills read as a box inside a box, so the
    backing layer goes and the surface carries the single fill. */
-[data-hud-shell] [data-slot='composer-surface'] > .pointer-events-none.absolute.inset-0 {
+[data-hud-shell] [data-hud-slot~='composer-surface'] > .pointer-events-none.absolute.inset-0 {
   display: none !important;
 }
 
@@ -765,7 +807,7 @@
    compromised by whatever's behind the window, in any state. The idle/engaged
    breathing belongs to the thread and the chat surface; the bar just sits
    there, solid, like Spotlight does. */
-[data-hud-shell] [data-slot='composer-surface'] {
+[data-hud-shell] [data-hud-slot~='composer-surface'] {
   border: 1px solid var(--ui-stroke-secondary) !important;
   /* Same radius as the band's top and the window's own corners, so the HUD
      reads as one object however the band is behaving. Its top corners let a
@@ -787,7 +829,7 @@
    shadow is sawn off by the window before any CSS can shape it, and paying for
    the clearance moves the bar. Recolouring what is already drawn costs no
    space, cannot be clipped, and leaves the working arc as the only ring. */
-[data-hud-shell]:has([data-slot='composer-rich-input']:focus) [data-slot='composer-surface'] {
+[data-hud-shell]:has([data-hud-slot~='composer-rich-input']:focus) [data-hud-slot~='composer-surface'] {
   border-color: var(--dt-primary) !important;
 }
 
@@ -806,20 +848,20 @@
 
    The window keeps normal chrome-free behavior otherwise: no other state
    changes, so leaving the game hands back the standard HUD without a rebuild. */
-[data-hud-shell][data-hud-game] [data-slot='composer-dock'] {
+[data-hud-shell][data-hud-game] [data-hud-slot~='composer-dock'] {
   opacity: 0.35;
   transition: opacity var(--hud-fade) var(--hud-ease-exit);
 }
 
-[data-hud-shell][data-hud-game][data-hud-recent] [data-slot='composer-dock'],
-[data-hud-shell][data-hud-game]:focus-within [data-slot='composer-dock'],
-[data-hud-shell][data-hud-game] [data-slot='composer-dock']:hover {
+[data-hud-shell][data-hud-game][data-hud-recent] [data-hud-slot~='composer-dock'],
+[data-hud-shell][data-hud-game]:focus-within [data-hud-slot~='composer-dock'],
+[data-hud-shell][data-hud-game] [data-hud-slot~='composer-dock']:hover {
   opacity: 1;
   transition: opacity var(--hud-reveal) var(--hud-ease-enter);
 }
 
 /* Long-press drag armed — the whole bar is the handle until release. */
-[data-hud-shell] [data-slot='composer-root'][data-hud-grabbing] [data-slot='composer-dock'] {
+[data-hud-shell] [data-hud-slot~='composer-root'][data-hud-grabbing] [data-hud-slot~='composer-dock'] {
   cursor: grabbing;
 }
 
@@ -918,13 +960,13 @@
 /* The composer's drop target is a full-window dashed sheet sized for the app's
    chat column. In the HUD it is a white slab hanging under the bar on a fresh
    thread, and there is nowhere to drop anything into a bar anyway. */
-[data-hud-shell] [data-slot='chat-drop-overlay'] {
+[data-hud-shell] [data-hud-slot~='chat-drop-overlay'] {
   display: none !important;
 }
 
 /* The dock's fade-to-surface gradient assumes a chat column behind it; over a
    transparent HUD it's a grey smear. */
-[data-hud-shell] [data-slot='composer-root'] > .pointer-events-none {
+[data-hud-shell] [data-hud-slot~='composer-root'] > .pointer-events-none {
   display: none !important;
 }
 
@@ -940,26 +982,41 @@
    (1) is ours to fix in CSS; inner scrollers yield to the window instead of
    their own floor. (2) is why the menus are compact here rather than roomy —
    a HUD is a small window and a 400px menu cannot fit in it. */
-html:has([data-hud-shell]) [data-slot='dropdown-menu-content'] [class*='max-h-'],
-html:has([data-hud-shell]) [data-slot='popover-content'] [class*='max-h-'] {
+html:has([data-hud-shell]) [data-hud-slot~='dropdown-menu-content'] [class*='max-h-'],
+html:has([data-hud-shell]) [data-hud-slot~='popover-content'] [class*='max-h-'] {
   max-height: max(5rem, calc(100dvh - 9rem)) !important;
 }
 
 /* The menu panels themselves: never taller than the window minus the bar.
    Portalled out of the shell, they must still take the pointer — the HUD
    defaults to none and a right-click menu that cannot be clicked is dead. */
-html:has([data-hud-shell]) [data-slot='dropdown-menu-content'],
-html:has([data-hud-shell]) [data-slot='popover-content'] {
+html:has([data-hud-shell]) [data-hud-slot~='dropdown-menu-content'],
+html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
   max-height: calc(100dvh - 4.5rem) !important;
   overflow-y: auto;
   pointer-events: auto;
 }
 
 /* Hide the scrollbar — a HUD with a visible track stops reading as an overlay. */
-[data-hud-shell] [data-slot='composer-bounds'] * {
+[data-hud-shell] [data-hud-slot~='composer-bounds'] * {
   scrollbar-width: none;
 }
 
-[data-hud-shell] [data-slot='composer-bounds'] *::-webkit-scrollbar {
+[data-hud-shell] [data-hud-slot~='composer-bounds'] *::-webkit-scrollbar {
   display: none;
+}
+
+/* 官方"窄窗布局"的遮罩：HUD 只有 620px 宽，官方布局据此切到 narrow 模式并铺一层
+   `data-mobile-nav="backdrop"` 的 45% 黑遮罩（实测 620x304），把整块对话面压暗成灰板。
+   HUD 不要这层 —— 它自己的暗底由 [data-hud-glass] 负责（只在聚焦/有内容时出现）。 */
+[data-hud-shell] [data-mobile-nav='backdrop'] {
+  display: none !important;
+}
+
+/* 官方 composer 的 seat 自带一块不透明浅灰底（rgb(233,235,240)，620x28）：
+   hermes 的 HUD 里 bar 自己画卡片，这条底会在 bar 下方多出一条灰带。 */
+/* 特异性要压过 index.css 里那条 .dsh-native-area [class*="_composerSeat"]{background:...#{!}important}
+   （同权重、index.css 后加载 → 必须更高一级） */
+[data-hud-shell] .dsh-native-area [data-hud-composer-seat] {
+  background: transparent !important;
 }

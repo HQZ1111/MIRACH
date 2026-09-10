@@ -36,8 +36,8 @@ const expr = `(() => {
   const shell = document.querySelector('[data-hud-shell]');
   const sidebar = document.querySelector('[data-hud-hide-col]');
   const slotSidebar = document.querySelector('[data-slot="sidebar"]');
-  const dock = document.querySelector('[data-slot="composer-dock"]');
-  const band = document.querySelector('[data-slot="composer-bounds"]');
+  const dock = document.querySelector('[data-hud-slot~="composer-dock"]');
+  const band = document.querySelector('[data-hud-slot~="composer-bounds"]');
   const topbar = document.querySelector('[data-hud-topbar]');
   return JSON.stringify({
     viewport: [window.innerWidth, window.innerHeight],
