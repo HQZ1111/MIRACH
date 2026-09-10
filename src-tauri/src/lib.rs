@@ -1747,6 +1747,12 @@ fn open_quick_entry_window(app: tauri::AppHandle) -> Result<(), String> {
 // WebView2 权限钩子（麦克风）——全双工语音的前置条件
 // ================================================================
 
+/// HUD 悬浮窗 label（与前端 main.tsx 的 `?win=hud` 分流对应）
+const HUD_LABEL: &str = "hud";
+/// hermes spawnHudWindow 同款最小尺寸（与 resize-handle 的钳制值一致）
+const HUD_MIN_WIDTH: f64 = 380.0;
+const HUD_MIN_HEIGHT: f64 = 160.0;
+
 /// 给窗口的 WebView2 注册权限处理：**只放行麦克风**，其余（摄像头/位置/通知…）一律拒绝。
 ///
 /// 为什么必须自己注册：wry 只在其 clipboard 属性开启时注册 PermissionRequested，而 Tauri 默认
@@ -1801,18 +1807,6 @@ fn attach_mic_permission(win: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn attach_mic_permission(_win: &tauri::WebviewWindow) {}
 
-// ================================================================
-// HUD 悬浮窗（hermes HUD 模式移植：chrome-less 浮动会话窗）
-// ================================================================
-
-const HUD_LABEL: &str = "hud";
-/// hermes spawnHudWindow 同款最小尺寸（resize-handle.ts 的钳制值一致）
-const HUD_MIN_WIDTH: f64 = 380.0;
-const HUD_MIN_HEIGHT: f64 = 160.0;
-
-/// 打开 HUD 悬浮窗：透明、无边框、置顶、跳过任务栏（已存在则聚焦）。
-/// 与 quick-entry 不同：HUD 是完整渲染器（同一 bundle，?win=hud 分流），
-/// 会话状态由前端 store 共享，不需要跨窗会话 id 传递。
 #[tauri::command]
 async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(HUD_LABEL) {
@@ -1821,6 +1815,12 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let url = tauri::WebviewUrl::App("index.html?win=hud".into());
+    // hermes 的做法（Electron main.ts createHudWindow + wireWindowReveal）：
+    // **show:false 建窗，等页面就绪再 show**。mirach 实测：webview 就绪前就 show 时，
+    // Windows 上的透明无边框窗会变成“查得到、没句柄”的僵尸窗（build() 返回 Ok 但
+    // hwnd=Unavailable、EnumWindows 看不到、前端永远起不来）。
+    // 照搬 hermes：visible(false) 建 → 页面加载完 show + focus；再加 1.5s 兜底
+    //（hermes 也有 did-finish-load 兜底定时器，防就绪事件丢失）。
     let hud = tauri::WebviewWindowBuilder::new(&app, HUD_LABEL, url)
         .title("Mirach HUD")
         .inner_size(520.0, 420.0)
@@ -1830,8 +1830,26 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false) // hermes 同款：程序化 setBounds，防系统缩放热区
+        .visible(false)
+        .on_page_load(|win, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = win.show();
+                let _ = win.set_focus();
+                let _ = win.set_always_on_top(true);
+            }
+        })
         .build()
         .map_err(|e| e.to_string())?;
+    // 透明窗口必须显式把 WebView 背景设透明（主窗同样处理，否则透明处发黑）
+    let _ = hud.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
+    // 兜底：页面就绪事件没来也要显示（hermes 的 did-finish-load 兜底同责）
+    {
+        let win = hud.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let _ = win.show();
+        });
+    }
     // HUD 是语音条宿主，麦克风权限钩子同样要挂（语音面板可能只在 HUD 里开）
     attach_mic_permission(&hud);
     Ok(())
@@ -1840,6 +1858,7 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
 /// 关闭 HUD（主窗口或 HUD 自身都可调用）
 #[tauri::command]
 async fn hud_close(app: tauri::AppHandle) -> Result<(), String> {
+    eprintln!("[hud] close requested");
     if let Some(win) = app.get_webview_window(HUD_LABEL) {
         let _ = win.close();
     }
