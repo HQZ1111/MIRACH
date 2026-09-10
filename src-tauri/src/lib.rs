@@ -65,6 +65,9 @@ fn load_config() -> AppConfig {
     let file = app_config_dir().join("config.json");
     let from_file: Option<serde_json::Value> = std::fs::read_to_string(&file)
         .ok()
+        // 去 UTF-8 BOM：PowerShell 的 Set-Content -Encoding UTF8 等工具会写入 BOM，
+        // serde_json 遇 BOM 直接解析失败 → 所有设置静默回落默认值（曾导致远程模式不生效）
+        .map(|s| s.trim_start_matches('\u{feff}').to_string())
         .and_then(|s| serde_json::from_str(&s).ok());
 
     let get = |key: &str, env: &str, default: &str| -> String {
