@@ -1,11 +1,11 @@
 {
-    "version":  "0.1.1",
-    "notes":  "Mirach 0.1.1\n\n本轮更新：\n· 安全：移除 release 远程调试端口、文件命令路径白名单、插件安装与 RPC 方法白名单、最小 CSP\n· 稳定：sidecar 崩溃自愈与进程树回收、abort 语义、事件按会话隔离、长会话内存有界\n· 官方机制：内核装配改用官方 ClientModuleSystem、profile 读改写用官方 dsh-app-boot、应用自有 cordis overlay\n· 新功能：远程引擎（SSH，引擎跑在远端主机）、应用自更新、单实例锁、事务化插件安装\n· 工程：清理 45 个死文件与临时脚本，补 38 个自动化测试，sidecar 预编译",
-    "pub_date":  "2026-09-10T01:38:05Z",
+    "version":  "0.1.2",
+    "notes":  "# Mirach 0.1.2\n\n**首次启动自己装依赖**：安装包不再是\"空壳\"，单个 `Mirach_0.1.2_x64-setup.exe` 就能在新机器上用起来。\n\n## 新增\n\n- **应用内依赖安装**（实现照搬 hermes bootstrap-installer）\n  - 首次启动弹出选择页：**本地安装**（推荐）或**连接远端引擎**（SSH）。\n  - 本地安装 = 分阶段下载/安装，页面显示阶段列表（等待/运行中带计时/成功/跳过/失败）、总进度条、\n    可折叠实时日志、随时取消；完成后一键进入应用。\n  - 阶段：Node 运行时 → 引擎依赖（dsh + 插件）→ 桥接程序 → 完成标记。\n    安装到 `%LOCALAPPDATA%\\mirach\\runtime`，首次约 200–300MB 下载。\n  - 失败有重试；也可随时改用远端引擎分支。\n- 安装包内置安装脚本与桥接程序（`bundle.resources`），因此**不再需要下载 1.8GB 便携包**才能用。\n  便携包仍保留（离线/免安装场景）。\n\n## 修复\n\n- 安装器复用系统 Node 时增加目录校验：只认真正的 Node 安装目录（含 `node.exe` + `npm.cmd`，\n  且不是盘根），否则一律下载官方 zip。此前开发机上 `D:\\node.exe` 这种裸二进制会导致递归复制整个盘。\n- PowerShell 5.1 下读 JSON 一律显式 UTF-8（无 BOM 的中文 package.json 会被当 ANSI 读坏）。\n- 便携版判定收窄为\"exe 旁 runtime/ 或 MIRACH_RUNTIME_DIR\"，应用内安装的运行时走正常自更新。\n- 真机首装验证中修掉的问题（干净机器上都会踩）：\n  - `\\\\?\\` 扩展长度前缀让 PowerShell 的 `Join-Path` 报\"参数 drive 的值为空\"，\n    sidecar 阶段必挂（安装器路径来自 Tauri `resource_dir()`）——两侧都做了剥前缀。\n  - 安装阶段日志/失败原因乱码且丢行：PowerShell 重定向输出默认用 OEM 码页（GBK），\n    宿主按 UTF-8 严格解码一失败就停止读取（连末尾的 JSON 结果帧都丢）——\n    脚本统一 UTF-8 输出 + 写一行 flush 一行，宿主改 lossy 解码。\n  - 下载分支没建安装根目录，`Move-Item` 到不存在的父目录直接 DirectoryNotFound。\n  - 运行时安装根不能放在安装版 exe 目录（`%LOCALAPPDATA%\\Mirach`）下面，否则被误判为便携版\n    → 改成 `%LOCALAPPDATA%\\MirachRuntime`。\n  - sidecar 现在优先用**自己 node_modules 里的引擎**（`MIRACH_DSH_BIN` → 内置 → 全局 npm），\n    干净机器上不再依赖全局 npm 安装的 dsh。\n  - 安装器无结果帧时，错误信息带上输出尾部（不再是干巴巴的\"退出码 Some(1)\"）。\n\n## 说明\n\n- 自更新端点不变：`docs/latest.json`（Gitee raw），签名校验。\n- 远程引擎（SSH）分支与 0.1.1 用法一致，设置 → 通用 → 远程引擎。",
+    "pub_date":  "2026-09-10T06:15:31Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbGhpQnM5eThBOGhZU0dycVVWUUpWSXRqUWI1UktSZ0FkRkpETldkK295YTh3Sk1SZEUwc1ZGQ3FDTE1GOThFV01xWURsOWk0OU16SDdwRVBqaVUyNllMQ0JMWWNqUWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDAzOTQwCWZpbGU6TWlyYWNoXzAuMS4xX3g2NC1zZXR1cC5leGUKZXRLT0o4ZHNIcFl0RDh0Zm9QNGtaWFBjRGJoVWtGb0lVbExEQnMyQ3FpaURPZFZMeG9EajZqTXpRUTNaRFNZeGdwT2Z2dFRjTU11VFJPemhmakEvQ1E9PQo=",
-                                             "url":  "https://gitee.com/HANQINGZHOU/mirach/releases/download/v0.1.1/Mirach_0.1.1_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbGhpQnM5eThBOGxZMGl6U3cwcDNORlUrdS9XUEdGczI2T3R6b1BxK205WVFJV1hVWWkzRnJPYUtpYUt4RHFDQ0wrMHRoQXZTM3had0tyeVJ5VXFrbjYwR2p3SzhxdndZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDIwMzkxCWZpbGU6TWlyYWNoXzAuMS4yX3g2NC1zZXR1cC5leGUKeDlTK1FTOWZDQ1Y4ZVcwcWNZUUMwUXVDL3ZGeHlzclorcS9sanV3STUvV1RXSkNIbjF0U29iVTJXQ29yWGtXZzBiV0lOemhvY1Y0RG5kdGV1SzRiQmc9PQo=",
+                                             "url":  "https://gitee.com/HANQINGZHOU/mirach/releases/download/v0.1.2/Mirach_0.1.2_x64-setup.exe"
                                          }
                   }
 }

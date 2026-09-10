@@ -69,9 +69,12 @@ if ($relText -match '"id"\s*:\s*(\d+)' -and $relText -notmatch '"message"') {
 }
 
 # upload the installer unless that exact asset already exists
+# 注意：必须匹配 assets[].name 字段，不能在整个响应里找文件名 —— release 正文里
+# 有下载 URL，正文含 `...Mirach_<ver>_x64-setup.exe` 会造成"已存在"的假阳性（漏传）。
 $existing = & curl.exe -sS -H ("Authorization: token " + $token) ($api + "/releases/tags/" + $tag)
 $assetName = "Mirach_${Version}_x64-setup.exe"
-if ($existing -match [regex]::Escape($assetName)) {
+$assetNamePattern = '"name"\s*:\s*"' + [regex]::Escape($assetName) + '"'
+if ($existing -match $assetNamePattern) {
   Write-Output "asset already present, skipping: $assetName"
 } else {
   Write-Output "uploading $assetName ..."
