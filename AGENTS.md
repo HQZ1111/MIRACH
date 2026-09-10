@@ -27,6 +27,14 @@
   - `_serve_update.mjs`：本地静态服务器（自更新检查路径测试用；正式发布必须 HTTPS，`tauri.conf.json` 不得打开 `dangerousInsecureTransportProtocol`）。
 - **config.json 必须无 BOM**：`load_config` 会剥 BOM（PowerShell `Set-Content -Encoding UTF8` 会写 BOM，曾导致所有设置静默失效）；用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` 或 Rust 侧 `set_config` 写。
 - **`scripts/mirach-install.ps1` 是产品代码**（首次启动安装器载荷）：**必须纯 ASCII**（PS 5.1 按 ANSI 读无 BOM 文件，中文注释即解析失败）；读 JSON 一律用 `Read-JsonFile`（显式 UTF-8，`Get-Content -Raw | ConvertFrom-Json` 遇到非 ASCII 会炸）；**禁止按 `Get-Command node` 的父目录递归复制**（开发机 `D:\node.exe` 的父目录是盘根 → 会复制整个 D 盘，必须先过 `Test-NodeInstallDir`）；Node 版本走 `dist/index.json`（`latest-vNN.x/` 是 HTML）。踩坑清单见 `docs/first-run-install.md` 末节。
+- **打包运行时的裁剪白名单是硬约束**（`scripts/_pack_runtime.ps1` + `_prune_apply.mjs`）：只能删
+  `*.map` / `*.pdb` / `*.tsbuildinfo` / `*.md` / `test|tests|__tests__|spec|docs|examples` 目录。
+  **绝不能删 `@img` 下非 win32-x64 的平台目录**（`sharp-wasm32`、`sharp-libvips-dev-*`）：引擎启动会
+  报 `cannot create effect on inactive context`（插件装配期 sharp 解析平台包失败 → cordis 上下文失活），
+  实测 100% 复现、逐类 bisect 定位。裁剪完必须跑 `scripts/_verify_archive.ps1`（解压归档 + 起引擎
+  看 `runtime ready`），不能只看"包变小了"。
+- **PowerShell 的 `Get-ChildItem -Include` 在某些路径下静默匹配 0 个文件**（`-Recurse` 也一样）：
+  删文件的脚本一律用 node（`_prune_apply.mjs` 是范本），别用 PS 过滤；写完必须打印删了多少 MB 自证。
 - **安装器 IO 层是 hermes 的代码，别"简化"**：`src-tauri/src/powershell.rs` + `src-tauri/src/events.rs` 整份照搬 `D:\hermes-agent-main\apps\bootstrap-installer\src-tauri\src\{powershell,events}.rs`（只改了：`tracing` → `eprintln!`、`which` → PATH 探测、去掉 hermes_home 参数）。**不要退回 `BufReader::lines()`**（严格 UTF-8，中文 Windows 上 GBK 错误文本会让整行/后续行连同结果 JSON 帧一起丢）、**不要以管道 EOF 作为终态**（孙进程握着写端时永不 EOF → 调用方被吊死；以进程退出为准 + `DRAIN_GRACE` 排水宽限）。这两点都有 hermes 自带的单测兜底（28 个 Rust 测试中包含它们）。
 - **质量门（每次改完先跑）**：`npm run typecheck`（tsc）+ `npm run lint`（oxlint，配置在 `.oxlintrc.json`，只查 src）+ `npm test`（vitest，`src/**/*.test.ts`）；sidecar：`cd agent-sidecar && npm run typecheck && npm test`；Rust：`cd src-tauri && cargo check && cargo test --lib`。**当前全绿：lint 0 warning / 0 error，前端 9 测试，sidecar 15 测试，Rust 14 测试**——不要新增断言/依赖抑制让它们变红。
 - **内核装配 = 官方 client 模块系统**：`dsh-kernel/module-loader-shim.ts` 安装官方 queue 门面（对齐 `packages/client/modules/src/index.ts` 的内联脚本），`boot.ts` 经 `moduleSystem.import(id)` 实例化 bundle；**新增官方 client 包 = 在 KERNEL_PLUGINS 加一行**（bundle 仍需静态 import 以便 Vite 打包）。解析语义（strip /client、重复注册、require 环）归官方，不要自实现。

@@ -27,7 +27,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 const PAGE_ID = crypto.randomUUID();
 
 /** 允许代发的路径前缀（引擎 web 面；/dsh-pocket 是社区插件同源 RPC）。 */
-const PROXY_PREFIXES = ["/api/", "/dsh-pocket/"];
+const PROXY_PREFIXES = ["/api/", "/dsh-pocket/", "/dsh-realtime-voice/"];
 
 /** 请求体分块阈值：超过则按块经 dsh_http_proxy_chunk 送（峰值内存 = 单块）。 */
 const BODY_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -120,8 +120,10 @@ function requestUrl(input: RequestInfo | URL): URL {
 }
 
 /**
- * 宿主代发 fetch：同源 /api/*、/dsh-pocket/* 经 sidecar → 引擎，其余原样走
- * 浏览器 fetch（bundle/静态资源等）。
+ * 宿主代发 fetch：同源 /api/*、/dsh-pocket/*、/dsh-realtime-voice/* 经 sidecar → 引擎，
+ * 其余原样走浏览器 fetch（bundle/静态资源等）。
+ * /dsh-realtime-voice/ 是全双工语音插件：client.js 与 audio-input-worklet.js 必须同源可加载
+ * （CSP script-src 'self' 不允许跨源脚本；worklet 也只能从同源/blob 加载）。
  */
 export async function hostFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = requestUrl(input);

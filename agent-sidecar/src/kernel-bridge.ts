@@ -110,9 +110,14 @@ export function beginChunkedBody(id: string, total: number): Promise<Buffer> {
 export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
   const id = cmd.id;
   const path = typeof cmd.path === "string" ? cmd.path : "";
-  // 只代发引擎面（内核只会打 /api/*；/dsh-pocket 是社区插件的同源 RPC）。
+  // 只代发引擎面（内核只会打 /api/*；/dsh-pocket 是社区插件的同源 RPC；
+  // /dsh-realtime-voice 是全双工语音插件的 client.js 与 audio-input-worklet.js）。
   // 先做字符串前缀检查（快速拒绝），再 URL 归一化复核（/api/../x 会绕过前者）。
-  if (!path.startsWith("/api/") && !path.startsWith("/dsh-pocket/")) {
+  if (
+    !path.startsWith("/api/") &&
+    !path.startsWith("/dsh-pocket/") &&
+    !path.startsWith("/dsh-realtime-voice/")
+  ) {
     send({ type: "error", id, message: `kernel bridge: refusing non-engine path ${path.slice(0, 80)}` });
     return;
   }

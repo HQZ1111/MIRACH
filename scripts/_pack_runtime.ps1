@@ -38,17 +38,17 @@ $rc = $LASTEXITCODE
 if ($rc -ge 8) { throw "robocopy failed: $rc" }
 
 if (-not $NoPrune) {
+  # Prune via the node helper (deterministic; PowerShell -Include/-Recurse silently matches
+  # nothing on some paths, which once hid a broken prune).
+  # VALIDATED SET (2026-09-10): maps,pdb,tsbuildinfo,testdocs,md -> 318 MB becomes ~246 MB and
+  # the engine still boots ("runtime ready").
+  # DO NOT add `foreign`: deleting the non-win32-x64 prebuilds (@img/sharp-wasm32,
+  # @img/sharp-libvips-dev-*, node-pty/prebuilds/<other arch>) makes the engine fail to boot
+  # with "cannot create effect on inactive context" - sharp's platform packages are resolved
+  # during plugin apply even on win-x64. Verified by bisect.
   $nm = Join-Path $stage "agent-sidecar\node_modules"
   $before = (Get-ChildItem $nm -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-  # not needed at runtime: source maps, debug symbols, docs, test fixtures, foreign-arch prebuilds
-  Get-ChildItem $nm -Recurse -Force -File -Include *.map,*.pdb,*.md,*.markdown,*.tsbuildinfo -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-  Get-ChildItem $nm -Recurse -Force -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -in @("test", "tests", "__tests__", "spec", "docs", "examples", "example") } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-  Get-ChildItem (Join-Path $nm "node-pty\prebuilds"), (Join-Path $nm "@img") -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch 'win32-x64' } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  & node (Join-Path $PSScriptRoot "_prune_apply.mjs") "--root=$stage" "--categories=maps,pdb,tsbuildinfo,testdocs,md"
   $after = (Get-ChildItem $nm -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
   Write-Output ("pruned node_modules: {0:N1} MB -> {1:N1} MB" -f ($before / 1MB), ($after / 1MB))
 }

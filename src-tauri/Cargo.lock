@@ -2225,6 +2225,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "ureq",
+ "webview2-com",
  "windows",
 ]
 

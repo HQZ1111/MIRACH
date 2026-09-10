@@ -1495,6 +1495,8 @@ pub fn run() {
                             );
                         }
                     }
+                    // 3) 麦克风权限（全双工语音：没有这个钩子 getUserMedia 会被直接拒绝）
+                    attach_mic_permission(&win);
                 }
             }
             Ok(())
@@ -1742,6 +1744,64 @@ fn open_quick_entry_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 // ================================================================
+// WebView2 权限钩子（麦克风）——全双工语音的前置条件
+// ================================================================
+
+/// 给窗口的 WebView2 注册权限处理：**只放行麦克风**，其余（摄像头/位置/通知…）一律拒绝。
+///
+/// 为什么必须自己注册：wry 只在其 clipboard 属性开启时注册 PermissionRequested，而 Tauri 默认
+/// clipboard=false、我们也没开 → WebView2 收不到任何处理，`getUserMedia({audio:true})` 直接
+/// 返回 `NotAllowedError: Permission denied by system`（2026-09 实测，AudioWorklet 正常）。
+/// Windows 侧的"桌面应用访问麦克风"是允许的，所以只差这一个钩子。
+#[cfg(target_os = "windows")]
+fn attach_mic_permission(win: &tauri::WebviewWindow) {
+    let _ = win.with_webview(|webview| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
+            COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
+        };
+        use webview2_com::PermissionRequestedEventHandler;
+
+        let core = match unsafe { webview.controller().CoreWebView2() } {
+            Ok(core) => core,
+            Err(e) => {
+                eprintln!("[mirach] CoreWebView2 unavailable, mic permission not wired: {e}");
+                return;
+            }
+        };
+        // WebView2 自己 AddRef 处理器，token 只是给 remove_ 用；不存也算保持存活
+        let mut token: i64 = 0;
+        let registered = unsafe {
+            core.add_PermissionRequested(
+                &PermissionRequestedEventHandler::create(Box::new(|_sender, args| {
+                    if let Some(args) = args {
+                        let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                        args.PermissionKind(&mut kind)?;
+                        let state = if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                            COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                        } else {
+                            COREWEBVIEW2_PERMISSION_STATE_DENY
+                        };
+                        // 诊断用：确认钩子真的被调用（kind=1 即 MICROPHONE）
+                        eprintln!("[mirach] permission request kind={} -> state={}", kind.0, state.0);
+                        args.SetState(state)?;
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            )
+        };
+        if let Err(e) = registered {
+            eprintln!("[mirach] add_PermissionRequested failed: {e}");
+        }
+        let _ = token;
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn attach_mic_permission(_win: &tauri::WebviewWindow) {}
+
+// ================================================================
 // HUD 悬浮窗（hermes HUD 模式移植：chrome-less 浮动会话窗）
 // ================================================================
 
@@ -1761,7 +1821,7 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let url = tauri::WebviewUrl::App("index.html?win=hud".into());
-    tauri::WebviewWindowBuilder::new(&app, HUD_LABEL, url)
+    let hud = tauri::WebviewWindowBuilder::new(&app, HUD_LABEL, url)
         .title("Mirach HUD")
         .inner_size(520.0, 420.0)
         .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
@@ -1772,6 +1832,8 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         .resizable(false) // hermes 同款：程序化 setBounds，防系统缩放热区
         .build()
         .map_err(|e| e.to_string())?;
+    // HUD 是语音条宿主，麦克风权限钩子同样要挂（语音面板可能只在 HUD 里开）
+    attach_mic_permission(&hud);
     Ok(())
 }
 

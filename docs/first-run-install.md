@@ -125,3 +125,12 @@ Node、sidecar 代码、SDK/引擎、npm 产物全部装在这里，卸载 = 删
    （`-SidecarSrc` 一带前缀，sidecar 阶段必挂，而 node/deps 因为只用 `-Root` 而看起来正常）。
    Rust 侧 `strip_extended_prefix()`（`\\?\UNC\x` → `\\x`、`\\?\C:\x` → `C:\x`）+ 脚本侧
    `Normalize-Path` 双向兜底，另有单测。
+10. **打包运行时时不能删 `@img` 的非本机平台目录**（`_pack_runtime.ps1` 的裁剪白名单）：
+   删掉 `@img/sharp-wasm32`、`@img/sharp-libvips-dev-*` 这类目录后，引擎启动会失败并报
+   **`cannot create effect on inactive context`**（插件装配期 sharp 解析平台包失败 → cordis
+   上下文失活）。用 318MB 未裁剪运行时对照可 100% 复现，逐类 bisect 定位。
+   **可安全裁剪的类别**（已逐项验证引擎仍 `runtime ready`）：`*.map`、`*.pdb`、
+   `*.tsbuildinfo`、`*.md`、`test/tests/__tests__/spec/docs/examples` 目录
+   → node_modules 222.7MB → 150.8MB，整树 318 → 246MB，7z 包 44.0MB。
+   裁剪一律走 `scripts/_prune_apply.mjs`（PowerShell 的 `-Include -Recurse` 在某些路径下
+   静默匹配零文件，曾把一次坏裁剪伪装成"已裁剪"）。

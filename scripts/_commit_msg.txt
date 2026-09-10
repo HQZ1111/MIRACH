@@ -1,0 +1,22 @@
+M1 风险解除：修掉打包裁剪坏引擎 + WebView2 麦克风钩子 + 语音插件通道
+
+- _pack_runtime.ps1 裁剪白名单纠正：**不能删 @img 非 win32-x64 平台目录**（sharp-wasm32 等），
+  删了引擎启动就报 "cannot create effect on inactive context"（逐类 bisect 定位：maps/pdb/
+  tsbuildinfo/md/test-docs 都安全，foreign prebuilds 是元凶）；改走 node 的 _prune_apply.mjs
+  （PS 的 -Include -Recurse 曾静默匹配 0 文件，把坏裁剪伪装成"已裁剪"）
+- 运行时包重打：246.2MB 解压树 / 44.0MB 7z（旧 41.1MB 那版**引擎起不来**）；归档解压后
+  实测 "runtime ready"（scripts/_verify_archive.ps1）
+- 安装包重打：54.0 → 56.9MB（含修好的运行时）
+- Rust：新增 WebView2 权限钩子 attach_mic_permission（主窗 + HUD，只放行麦克风，其余拒绝；
+  wry 只自动放行剪贴板，没有它 getUserMedia 直接被拒），加 webview2-com 0.38 依赖
+- 语音插件通道：/dsh-realtime-voice/ 加入前端 PROXY_PREFIXES 与 sidecar handleHttpProxy 白名单
+  （client.js 与 audio-input-worklet.js 同源可达，CSP 不放开）
+- 工装：_dev_with_runtime_engine.cmd（dev 前端 + 已安装运行时；debug 构建强制 src+tsx、机器级
+  NODE_22_BIN 指向 Node24 会打断引擎，这里都钉住了）/ _kill_dev_stack.ps1 / _boot_verdict.ps1 /
+  _probe_mic.mjs / _check_voice_routes.ps1 / _repair_runtime.ps1 / _compare_runtime_prune.ps1
+- 文档：AGENTS.md 增加"裁剪白名单是硬约束"与"-Include 静默匹配"两条；first-run-install.md 补第 10 条踩坑
+
+M1 结论（本机实测）：
+  AudioWorklet/WS/RTC ✅；麦克风设备 ✅；权限钩子 ✅ 触发并放行；系统麦克风总开关已按授权打开；
+  getUserMedia 仍 NotAllowedError: Permission denied by system（OS 已放行——SAPI 能开麦，故为
+  WebView2/Chromium 层缓存，待重启复验）；插件路由 404 → 需要 P1 装 peer 包 dsh-multi-model-provider
