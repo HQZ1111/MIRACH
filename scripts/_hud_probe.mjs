@@ -42,7 +42,7 @@ const invoke = (command, params) =>
     awaitPromise: true,
   }).then((m) => m.result?.result?.value ?? JSON.stringify(m.result ?? m));
 
-for (const kind of ["plain", "query"]) {
+for (const kind of ["plainwin", "plain", "query"]) {
   console.log(`hud_probe_url(${kind}) ->`, await invoke("hud_probe_url", { kind }));
 }
 ws.close();

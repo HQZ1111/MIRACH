@@ -807,7 +807,7 @@ fn git_clear_credential(host: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(format!("protocol=https\nhost={host}\n\n").as_bytes())
+            .write_all(format!("protocol=https\r\nhost={host}\r\n\r\n").as_bytes())
             .map_err(|e| e.to_string())?;
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
@@ -1841,6 +1841,12 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         })
         .build()
         .map_err(|e| e.to_string())?;
+    // 失败可见化：窗口对象建出来了但拿不到 OS 句柄时明确报错
+    if hud.hwnd().is_err() {
+        let msg = "HUD 窗口创建失败：没有得到系统窗口句柄（webview 未就绪），请重试或重启应用";
+        eprintln!("[hud] {msg}");
+        return Err(msg.to_string());
+    }
     // 透明窗口必须显式把 WebView 背景设透明（主窗同样处理，否则透明处发黑）
     let _ = hud.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
     // 兜底：页面就绪事件没来也要显示（hermes 的 did-finish-load 兜底同责）
@@ -1859,11 +1865,10 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
 /// 关闭 HUD（主窗口或 HUD 自身都可调用）
 #[tauri::command]
 async fn hud_close(app: tauri::AppHandle) -> Result<(), String> {
-    eprintln!("[hud] close requested");
-    if let Some(win) = app.get_webview_window(HUD_LABEL) {
-        let _ = win.close();
-    }
-    Ok(())
+    let win = app
+        .get_webview_window(HUD_LABEL)
+        .ok_or_else(|| "HUD 窗口不存在（可能已经关闭）".to_string())?;
+    win.close().map_err(|e| format!("关闭 HUD 失败: {e}"))
 }
 
 /// HUD 程序化改位置/尺寸（resize-handle 的 setBounds 面；Windows 透明无边框
@@ -1876,34 +1881,40 @@ async fn hud_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(HUD_LABEL) {
-        let _ = win.set_resizable(true);
-        let _ = win.set_position(tauri::LogicalPosition::new(x, y));
-        let _ = win.set_size(tauri::LogicalSize::new(
-            width.max(HUD_MIN_WIDTH),
-            height.max(HUD_MIN_HEIGHT),
-        ));
-        let _ = win.set_resizable(false);
-    }
+    let win = app
+        .get_webview_window(HUD_LABEL)
+        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    // hermes 同款（hud-ipc.ts:240-272）：禁用 resizable 的透明无边框窗上，
+    // set_position/set_size 需要临时打开 resizable 才生效，改完再关回去。
+    let _ = win.set_resizable(true);
+    win.set_position(tauri::LogicalPosition::new(x, y))
+        .map_err(|e| format!("设置 HUD 位置失败: {e}"))?;
+    win.set_size(tauri::LogicalSize::new(
+        width.max(HUD_MIN_WIDTH),
+        height.max(HUD_MIN_HEIGHT),
+    ))
+    .map_err(|e| format!("设置 HUD 尺寸失败: {e}"))?;
+    let _ = win.set_resizable(false);
     Ok(())
 }
 
 /// 拖动移动窗口（composer-drag 的 beginMove 面 → Tauri 原生拖拽）
 #[tauri::command]
 async fn hud_begin_move(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(HUD_LABEL) {
-        let _ = win.start_dragging();
-    }
-    Ok(())
+    let win = app
+        .get_webview_window(HUD_LABEL)
+        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    win.start_dragging().map_err(|e| format!("拖动 HUD 失败: {e}"))
 }
 
 /// 指针穿透开关（click-through：透明区忽略鼠标）
 #[tauri::command]
 async fn hud_set_ignore_mouse(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(HUD_LABEL) {
-        let _ = win.set_ignore_cursor_events(ignore);
-    }
-    Ok(())
+    let win = app
+        .get_webview_window(HUD_LABEL)
+        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    win.set_ignore_cursor_events(ignore)
+        .map_err(|e| format!("切换 HUD 穿透失败: {e}"))
 }
 /// 诊断命令（临时）：比较"带查询串的 App URL"与"纯 index.html"两种建窗结果。
 /// 之前四个标志组合都用带 query 的 URL，可能把 URL 与标志混在一起了。
@@ -1913,6 +1924,16 @@ async fn hud_probe_url(app: tauri::AppHandle, kind: String) -> Result<String, St
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.destroy();
         std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    if kind == "plainwin" {
+        // 不带 webview 的纯窗口：判断"运行期建 OS 窗口"这件事本身是否可用
+        let w = tauri::WindowBuilder::new(&app, &label)
+            .title("probe")
+            .inner_size(400.0, 240.0)
+            .build()
+            .map_err(|e| format!("plainwin build err: {e}"))?;
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        return Ok(format!("kind=plainwin hwnd={:?}", w.hwnd().map(|h| h.0 as i64)));
     }
     let url = if kind == "plain" {
         tauri::WebviewUrl::App("index.html".into())
