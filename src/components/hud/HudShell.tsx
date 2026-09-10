@@ -263,13 +263,10 @@ export function HudShell() {
         </button>
       </div>
 
-      {/* 官方原生聊天表面（与主对话区同一棵树；HUD 窗口独立内核实例由
-          main.tsx 的 boot 分流决定——HUD 窗口不 boot 内核镜像，主窗驱动） */}
-      <div className="relative min-h-0 flex-1" style={{ display: 'none' }}>
-        <NativeChatArea sessionId={activeSession || 'default'} />
-      </div>
-      {/* hermes 的 WiredPane chatRoutes 同位：真实 chat surface。mirach 用
-          NativeChatArea 直挂（见上），HUD 视觉由 CSS data-hud-shell 塑形。 */}
+      {/* 官方原生聊天表面（与主对话区同一棵树）。HUD 是独立 WebView：
+          内核镜像由 main.tsx 在 HUD 窗口里同样 boot（见那里的注释）。
+          只挂一份 —— 之前这里有一个 display:none 的重复实例，两个实例会同时对
+          同一个内核 context 调 nativeOpenSession/nativeRootTree，互相抢会话。 */}
       <div data-hud-chat-surface className="contents">
         <NativeChatArea sessionId={activeSession || 'default'} />
       </div>

@@ -20,6 +20,7 @@ import { ResizeHandles } from "@/components/window/ResizeHandles";
 import { SetupFlow } from "@/components/setup/SetupFlow";
 import { $setupOpen, initBootstrap } from "@/store/bootstrap";
 import { useStore } from "@nanostores/react";
+import { watchHudState } from "@/store/hud";
 // 插件注册（模块导入即注册到 registry）
 import "@/plugins/samples/hello";
 import "@/plugins/plugin-wake-word";
@@ -112,6 +113,8 @@ function App() {
     // 窗口几何持久化 + 关闭确认（仅主窗口）
     void initWindowState();
     void initQuitGuard();
+    // HUD 旗标跟随真实窗口（HUD 自己关掉后主窗要归位，否则下次快捷键变"关不掉"）
+    const stopHudWatch = watchHudState();
     // quick entry 提交事件
     const subs = createUnlistenCollector();
     void listen<{ text: string }>("quick-entry:submit", (e) => {
@@ -135,6 +138,7 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
+      stopHudWatch();
       subs.dispose();
     };
   }, []);

@@ -37,6 +37,7 @@ import { $gatewayState, pingGateway } from "@/store/gateway";
 import { $kernelError, $kernelReady } from "@/store/kernel-ready";
 import { $kernelConnection } from "@/store/kernel-connection";
 import { lockApp } from "@/store/password";
+import { $hudActive, toggleHud } from "@/store/hud";
 import { getToolMenuActions, type PluginIcon } from "@/plugins/registry";
 import {
   ArrowClockwise,
@@ -52,6 +53,7 @@ import {
   MagnifyingGlass,
   Moon,
   Plug,
+  PictureInPicture,
   PuzzlePiece,
   Robot,
   Sparkle,
@@ -141,6 +143,7 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   const kernelReady = useStore($kernelReady);
   const kernelError = useStore($kernelError);
   const kernelConnection = useStore($kernelConnection);
+  const hudActive = useStore($hudActive);
   const connected = gatewayState === "open" && kernelReady && kernelConnection === "open";
   // 锁定：调用 lockApp 走启动门（StartupGate → LoginPage；未设密码时登录页自动切「设置密码」模式）
   const lock = () => {
@@ -202,6 +205,12 @@ export function RightToolbar({ className, activePanel, onPanelChange }: RightToo
   }, []);
 
   const TOOL_MENU: { id: string; icon: React.ElementType; label: string; run: () => void }[] = [
+    {
+      id: "hud",
+      icon: PictureInPicture,
+      label: hudActive ? "关闭悬浮窗" : "悬浮窗（HUD）",
+      run: () => toggleHud(),
+    },
     { id: "git", icon: GitBranch, label: "Git Review", run: () => setToolOverlay("git") },
     { id: "files", icon: FolderSimple, label: "文件树", run: () => setToolOverlay("files") },
     { id: "logs", icon: DownloadSimple, label: "导出日志", run: () => setToolOverlay("logs") },

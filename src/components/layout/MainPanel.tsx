@@ -37,7 +37,7 @@ import { pushRawEvents, resetRawEvents } from "@/store/session-events";
 import { $projects, $selectedProjectId } from "@/store/projects";
 import { loadLiveHistory } from "@/store/chat";
 import { MOCK } from "@/lib/mock";
-import { getApi } from "@/lib/api";
+import { getApi, type InstalledPluginInfo } from "@/lib/api";
 import { invoke } from "@tauri-apps/api/core";
 import { $providerConfig } from "@/store/providerConfig";
 import { envById, envIdForView, $envVersion, $environments } from "@/store/environments";
@@ -52,15 +52,18 @@ import { useTodoAutoDismiss } from "@/hooks/useTodoAutoDismiss";
 import { useBackgroundAutoDismiss } from "@/hooks/useBackgroundAutoDismiss";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import {
+  Beer,
   Boxes,
   Code,
+  Container,
   Cpu,
-  Database,
   Ellipsis,
+  GitBranch,
   Mic,
   PanelLeft,
   PanelLeftOpen,
   Puzzle,
+  Smartphone,
   Table2,
   Terminal,
   Users,
@@ -79,26 +82,32 @@ import { nativeToggleSidebar } from "@/dsh-kernel/boot";
 // mirach 侧的 ActivityStep/ToolEntry 本地组件已删除。
 
 // ================================================================
-// 顶栏插件图标条（真实数据源 = 引擎装配清单 config.pluginEntries）
-// 旧版读 plugins store 的本地 mock 目录（git/docker/k8s 等假插件）已移除。
+// 顶栏插件图标条 = **用户自己装的插件**（profile 里 isPlugin && !builtin）
+// 旧实现读 config.pluginEntries（引擎装配镜像），列出来的是 dsh-user-questions /
+// dsh-typert-loader / cordis-plugin-hmr 这类**引擎内部包**，图标全落 Puzzle 兜底 ——
+// 看起来"一堆一样的图标"。改为读社区插件清单（plugins.list），并按包名映射图标。
 // ================================================================
 
-/** 真实引擎插件目录（sidecar config.pluginEntries 装配镜像；官方 UI 插件清单）。
- *  顶栏图标条真实化：旧版读本地 mock 目录（git/docker/k8s 等假插件）。 */
-function useEnginePlugins(): { id: string; name: string }[] {
-  const [list, setList] = useState<{ id: string; name: string }[]>([]);
+/** 用户插件清单（社区插件；排除引擎自带包），按"已激活"优先排序。 */
+function useUserPlugins(): InstalledPluginInfo[] {
+  const [list, setList] = useState<InstalledPluginInfo[]>([]);
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       void getApi()
-        .listEnginePlugins()
+        .listCommunityPlugins()
         .then((items) => {
-          if (!cancelled) setList(items);
+          if (cancelled) return;
+          setList(
+            items
+              .filter((p) => p.isPlugin && !p.builtin)
+              .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name)),
+          );
         })
         .catch(() => {});
     };
     load();
-    // 引擎装配随插件安装/卸载/重启变化：低频轮询即可（30s）
+    // 插件安装/卸载/重启后装配会变：低频轮询 + 配置重载事件
     const t = window.setInterval(load, 30_000);
     const onReload = () => load();
     window.addEventListener("hermes-config-reload", onReload);
@@ -111,17 +120,27 @@ function useEnginePlugins(): { id: string; name: string }[] {
   return list;
 }
 
-/** 引擎插件 id → 图标（无匹配的插件用 Puzzle 兜底图标） */
-const ENGINE_PLUGIN_ICON: Record<string, LucideIcon> = {
-  "dsh-tavern": Boxes,
-  "dsh-pocket": Database,
-  "dsh-workgroup": Users,
-  "dsh-realtime-voice": Mic,
-  "dsh-muv-engine": Cpu,
-  "dsh-muv-table": Table2,
-  "dsh-subagent-codex": Code,
-  "dsh-subagent-claude-code": Terminal,
-};
+/** 包名（含 scoped 前缀）→ 图标：按关键字匹配，避免每个插件长得一样。 */
+const PLUGIN_ICON_RULES: [RegExp, LucideIcon][] = [
+  [/tavern|酒馆/i, Beer],
+  [/realtime-voice|voice|语音/i, Mic],
+  [/pocket|phone|mobile|手机/i, Smartphone],
+  [/workgroup|team|group|成员/i, Users],
+  [/muv-table|table/i, Table2],
+  [/muv-engine|muv/i, Cpu],
+  [/subagent/i, Terminal],
+  [/codex/i, Code],
+  [/git/i, GitBranch],
+  [/docker|container/i, Container],
+  [/puzzle|plugin/i, Puzzle],
+];
+
+function pluginIcon(name: string): LucideIcon {
+  for (const [re, icon] of PLUGIN_ICON_RULES) {
+    if (re.test(name)) return icon;
+  }
+  return Boxes;
+}
 
 // 单个插件按钮占宽（24 图标 + 4 gap）
 const PLUGIN_SLOT = 28;
@@ -166,11 +185,11 @@ function HeaderSection({
   const officialHeader = useOfficialHeader();
   const projectName = officialHeader.workspaceTitle ?? "Mirach";
   // 插件图标条 = 真实引擎插件（config.pluginEntries 装配镜像；官方 UI 插件清单）
-  const ENGINE_PLUGINS = useEnginePlugins();
+  const USER_PLUGINS = useUserPlugins();
   const pluginCap = Math.max(1, Math.floor((width * 0.25) / PLUGIN_SLOT));
-  const visibleCount = Math.min(pluginCap, ENGINE_PLUGINS.length);
-  const visiblePlugins = ENGINE_PLUGINS.slice(0, visibleCount);
-  const pluginOverflow = ENGINE_PLUGINS.length > visibleCount;
+  const visibleCount = Math.min(pluginCap, USER_PLUGINS.length);
+  const visiblePlugins = USER_PLUGINS.slice(0, visibleCount);
+  const pluginOverflow = USER_PLUGINS.length > visibleCount;
   const [pluginsOpen, setPluginsOpen] = useState(false);
 
   // 插件区右侧的空白宽度（命令输入框是否显示的唯一依据）
@@ -233,16 +252,16 @@ function HeaderSection({
           <h2 title={projectName} className="truncate text-heading font-bold text-[#303030] leading-[1.4]">
             {projectName}
           </h2>
-          {/* ---- 真实引擎插件区（config.pluginEntries；点击打开插件面板） ---- */}
+          {/* ---- 用户插件区（plugins.list：用户装的社区插件；点击打开插件面板） ---- */}
           <div ref={pluginsRef} className="flex shrink-0 items-center">
             <div className="flex items-center gap-0.5 overflow-hidden">
               {visiblePlugins.map((p) => {
-                const Icon = ENGINE_PLUGIN_ICON[p.id] ?? Puzzle;
+                const Icon = pluginIcon(p.name);
                 return (
                   <button
-                    key={p.id}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#303030]"
-                    title={p.name}
+                    key={p.name}
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-[#303030] ${p.active ? "text-muted-foreground" : "text-muted-foreground/40"}`}
+                    title={`${p.name}${p.version ? `@${p.version}` : ""}${p.active ? "" : "（未激活）"}`}
                     onClick={() => onOpenPlugins?.()}
                   >
                     <Icon className="h-4 w-4" strokeWidth={2} />
@@ -268,12 +287,12 @@ function HeaderSection({
         <>
           <div className="fixed inset-0 z-30" onClick={() => setPluginsOpen(false)} />
           <div className="panel-glass menu-anim absolute left-5 top-full z-40 mt-1 w-48 rounded-xl py-1">
-            <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">引擎插件（官方装配清单）</p>
-            {ENGINE_PLUGINS.map((p) => {
-              const Icon = ENGINE_PLUGIN_ICON[p.id] ?? Puzzle;
+            <p className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground">用户插件（已安装）</p>
+            {USER_PLUGINS.map((p) => {
+              const Icon = pluginIcon(p.name);
               return (
                 <button
-                  key={p.id}
+                  key={p.name}
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-body-sm text-[#303030] transition-colors hover:bg-muted"
                   onClick={() => {
                     setPluginsOpen(false);

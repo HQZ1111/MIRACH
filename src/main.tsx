@@ -22,8 +22,9 @@ const isQuickEntry =
   new URLSearchParams(window.location.search).get("win") === "quick-entry";
 
 // HUD 悬浮窗（?win=hud）：chrome-less 浮动会话（hermes HUD 模式移植）。
-// HUD 与主窗共享同一 store 单例（同 bundle 同 localStorage），会话状态天然
-// 同步；不 boot 内核镜像（主窗驱动引擎，HUD 消费实时消息流）。
+// 注意：HUD 是**独立 WebView / 独立 JS 堆**（不是主窗 store 的共享单例），而且它
+// 渲染的是官方对话区（NativeChatArea），那棵树依赖内核镜像提供的 context ——
+// 所以 HUD 必须自己 boot 内核（否则永远停在"正在连接官方对话内核…"的占位）。
 const isHud =
   new URLSearchParams(window.location.search).get("win") === "hud";
 
@@ -37,7 +38,7 @@ const isLogin =
 const kernelEnabled =
   import.meta.env.VITE_KERNEL === "1"
   || (import.meta.env.VITE_KERNEL === undefined && import.meta.env.VITE_MOCK !== "1");
-if (kernelEnabled && !isOverlay && !isQuickEntry && !isHud) {
+if (kernelEnabled && !isOverlay && !isQuickEntry) {
   void import("./dsh-kernel/boot").then((m) => m.bootKernelMirror()).catch((e) => {
     console.warn(String(e));
     // 内核失败诊断信号：标题末尾标注原因（默认标题 "Mirach Dashboard"）
