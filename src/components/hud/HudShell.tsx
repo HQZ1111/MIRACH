@@ -20,6 +20,7 @@ import { type CSSProperties, useCallback, useEffect, useRef, useState } from 're
 import { $liveMessages, $aiStreaming } from '@/store/chat'
 import { $activeSessionId } from '@/store/session'
 import { $hudSession, closeHud } from '@/store/hud'
+import { pingGateway } from '@/store/gateway'
 
 import { NativeChatArea } from '@/components/chat/NativeChatArea'
 
@@ -199,6 +200,13 @@ export function HudShell() {
   // （hermes 的 edge 感知翻转：HUD_THREAD_ALWAYS_BELOW=true 恒 'top'，保留常量）
 
   const rootRef = useRef<HTMLDivElement | null>(null)
+
+  // HUD 是独立 WebView / 独立 JS 堆：主窗那套网关探活（pingGateway）不会替它跑，
+  // 于是 $gatewayState 永远停在 idle → HUD 上永远挂着"引擎未连接"横幅，
+  // 哪怕内核其实已经连上（[nca] open ok）。自己探一次（幂等：已 open 直接返回）。
+  useEffect(() => {
+    void pingGateway().catch(() => {})
+  }, [])
 
   // HUD 只要对话 + 输入条：官方整棵 root 树里的侧栏列/右栏列在 HUD 里必须消失
   // （hermes 的 HUD 只挂 chatRoutes，天生没有它们——见 shell-columns.ts）
