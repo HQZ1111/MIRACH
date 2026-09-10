@@ -2210,6 +2210,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "log",
  "minisign-verify",
  "portable-pty",
  "rusqlite",

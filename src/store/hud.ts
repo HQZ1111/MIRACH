@@ -72,7 +72,9 @@ export function watchHudState(): () => void {
       try {
         const { Window } = await import('@tauri-apps/api/window')
         const all = await Window.getAll()
-        $hudActive.set(all.some((w) => w.label === 'hud'))
+        // 后端会在 webview 建失败留下幻影注册条目时改用 hud-2 / hud-3… 兜底，
+        // 所以按前缀认（见 src-tauri lib.rs pick_hud_label）
+        $hudActive.set(all.some((w) => w.label === 'hud' || w.label.startsWith('hud-')))
       } catch {
         /* ignore */
       }

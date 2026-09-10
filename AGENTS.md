@@ -36,11 +36,23 @@
 - **PowerShell 的 `Get-ChildItem -Include` 在某些路径下静默匹配 0 个文件**（`-Recurse` 也一样）：
   删文件的脚本一律用 node（`_prune_apply.mjs` 是范本），别用 PS 过滤；写完必须打印删了多少 MB 自证。
 - **安装器 IO 层是 hermes 的代码，别"简化"**：`src-tauri/src/powershell.rs` + `src-tauri/src/events.rs` 整份照搬 `D:\hermes-agent-main\apps\bootstrap-installer\src-tauri\src\{powershell,events}.rs`（只改了：`tracing` → `eprintln!`、`which` → PATH 探测、去掉 hermes_home 参数）。**不要退回 `BufReader::lines()`**（严格 UTF-8，中文 Windows 上 GBK 错误文本会让整行/后续行连同结果 JSON 帧一起丢）、**不要以管道 EOF 作为终态**（孙进程握着写端时永不 EOF → 调用方被吊死；以进程退出为准 + `DRAIN_GRACE` 排水宽限）。这两点都有 hermes 自带的单测兜底（28 个 Rust 测试中包含它们）。
-- **质量门（每次改完先跑）**：`npm run typecheck`（tsc）+ `npm run lint`（oxlint，配置在 `.oxlintrc.json`，只查 src）+ `npm test`（vitest，`src/**/*.test.ts`）；sidecar：`cd agent-sidecar && npm run typecheck && npm test`；Rust：`cd src-tauri && cargo check && cargo test --lib`。**当前全绿：lint 0 warning / 0 error，前端 9 测试，sidecar 15 测试，Rust 14 测试**——不要新增断言/依赖抑制让它们变红。
+- **质量门（每次改完先跑）**：`npm run typecheck`（tsc）+ `npm run lint`（oxlint，配置在 `.oxlintrc.json`，只查 src）+ `npm test`（vitest，`src/**/*.test.ts`）；sidecar：`cd agent-sidecar && npm run typecheck && npm test`；Rust：`cd src-tauri && cargo check && cargo test --lib`。**当前全绿：lint 0 warning / 0 error，前端 9 测试，sidecar 15 测试，Rust 29 测试**——不要新增断言/依赖抑制让它们变红。
 - **内核装配 = 官方 client 模块系统**：`dsh-kernel/module-loader-shim.ts` 安装官方 queue 门面（对齐 `packages/client/modules/src/index.ts` 的内联脚本），`boot.ts` 经 `moduleSystem.import(id)` 实例化 bundle；**新增官方 client 包 = 在 KERNEL_PLUGINS 加一行**（bundle 仍需静态 import 以便 Vite 打包）。解析语义（strip /client、重复注册、require 环）归官方，不要自实现。
 - **引擎装配 = 官方 profile API**：bundles 读写走 `@deepseek-ai/dsh-app-boot` 的 `readProfileManifest`/`writeProfileManifest`，装配清单走 `loadProfileDirectory`+`composeEntries`；mirach 自有 overlay 在 `agent-sidecar/config/mirach.cordis.patch.yml`（经 SDK `patches` 注入）。
 - **Harness home 统一走 `mirachHome()`**（sidecar `runtime.ts`，官方 `resolveDshHome` 语义），不要再写 `process.env.DSH_HOME ?? ~/.mirach`。
 - **调试端口默认关闭**：release 的 `tauri.conf.json` 不含 `--remote-debugging-port`（曾有 P0：任意本地进程可接管 webview 调用全部 IPC）。需要 CDP 时用 `npm run tauri:debug`（合并 `src-tauri/tauri.dev.conf.json`）。
+- **运行期新建 webview 必须继承主窗的 `additionalBrowserArgs`**（`lib.rs` 的 `inherit_browser_args` / `inherit_browser_args_wv`，新窗口一律走它们）：
+  WebView2 的**环境在同一用户数据目录下是进程级单例，且只认第一次建环境时的那套选项**；用不同选项
+  （典型：dev 配置给主窗加了 `--remote-debugging-port=9222`，而运行期窗口默认走 wry 的
+  `--disable-features=…`）再建环境会直接失败 `HRESULT 0x8007139F ERROR_INVALID_STATE`。
+  而 Tauri 的 `WebviewWindowBuilder::build()`（走 `AppHandle`）是**发完即返回、不等回执**，失败只在
+  `tauri-runtime-wry` 里 `log::error!` 掉 → `build()` 仍返回 Ok、窗口进了 Tauri 注册表，
+  但运行时 windows 表里没有它：`get_webview_window()` 找得到、`hwnd()` 永远
+  `RawHandleError(Unavailable)`、页面永远不加载。**症状 = 内置浏览器/HUD/会话小窗全部打不开，
+  只有主窗活着；HUD 还会因为"注册表里有条目"被误判为已打开而永久打不开**（`pick_hud_label`
+  + `hud_window` 的 hwnd 验真就是为此）。诊断手段：`MIRACH_HUD_SELFTEST=1` 的
+  `hud_build_probe` A/B（`plain` 继承参数应成功 / `plainnoargs` 故意不继承应复现 0x8007139F），
+  以及 `install_diag_logger()`（把被吞掉的 `log::error!` 接到 stderr）。
 - **CSP 已启用**（`tauri.conf.json` security.csp / devCsp）：新增外部资源（字体/图片/iframe/接口域名）必须在 CSP 里放行，否则线上被静默拦截。
 - **文件命令有白名单**（lib.rs `ensure_path_allowed`）：`read_file/read_dir/rename_path/delete_path/write_user_file/read_file_bytes/reveal_path` 只能访问 工作区 / hermes_home / 数据目录 / 用户主目录下的 .mirach、.dsh、Desktop、Downloads、Documents；新增越权路径会被拒绝（这是有意的）。
 - **`dsh_rpc` 有方法白名单**（dsh_relay.rs `rpc_method_allowed` + sidecar `RPC_PASSTHROUGH`）：新增引擎 RPC 方法必须两处同步登记，否则被拒。

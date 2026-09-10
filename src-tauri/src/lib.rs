@@ -849,6 +849,8 @@ async fn browser_open(
 
     let window = app.get_window("main").ok_or("main window not found")?;
 
+    // 主窗的 WebView2 参数要在 `app` 被闭包吃掉之前取出来（环境选项不一致 → 0x8007139F）
+    let browser_args = main_browser_args(&app);
     let app2 = app.clone();
     let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 HermesBrowser/1.0";
     let builder = tauri::webview::WebviewBuilder::new(BROWSER_WEBVIEW, tauri::WebviewUrl::External(target))
@@ -862,6 +864,10 @@ async fn browser_open(
         .on_page_load(move |_wv, payload| {
             let _ = app.emit("browser-load", payload.url().to_string());
         });
+    let builder = match &browser_args {
+        Some(args) => builder.additional_browser_args(args),
+        None => builder,
+    };
 
     window
         .add_child(
@@ -1073,7 +1079,8 @@ async fn overlay_show(
 
     window
         .add_child(
-            builder,
+            // 同上：覆盖层也是独立 webview，必须继承主窗 WebView2 参数
+            inherit_browser_args_wv(&app, builder),
             tauri::LogicalPosition::new(x, y),
             tauri::LogicalSize::new(w, h),
         )
@@ -1373,7 +1380,42 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     Ok(())
 }
 
+/// 诊断日志：把 `log` 门面的错误/警告接到 stderr。
+///
+/// 为什么必须有：tauri-runtime-wry 处理 `Message::CreateWindow` 时把创建失败
+/// `log::error!("{e}")` 掉（lib.rs:4081），而 `WebviewWindowBuilder::build()` 走
+/// `AppHandle` 是**发完即返回**（不等待回执），所以 webview 建失败时 build() 依然
+/// 返回 Ok、Tauri 注册表里也有这个窗口，但运行时 windows 表里没有 → 之后对该窗口的
+/// 任何调用都变成 `RawHandleError(Unavailable)` / `FailedToReceiveMessage`。
+/// 没接 logger 的进程里这错误是哑的。
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let target = record.target();
+        // wry/tauri/tao 的 Debug 级噪音太大，只放行它们的 Warn 及以上
+        let known = target.starts_with("wry") || target.starts_with("tauri") || target.starts_with("tao");
+        let level = record.level();
+        if level <= log::Level::Warn || (known && level <= log::Level::Debug) {
+            eprintln!("[log {}] {}: {}", level, target, record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn install_diag_logger() {
+    if log::set_boxed_logger(Box::new(StderrLogger)).is_ok() {
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+}
+
 pub fn run() {
+    install_diag_logger();
     // Mirach 更名一次性迁移：旧标识数据目录（WebView2/本地存储）整体搬入新标识，
     // 密码/会话/配置无缝继承。新目录已存在（二次启动）则跳过。
     {
@@ -1472,6 +1514,35 @@ pub fn run() {
                 }
             }
             let _ = app.global_shortcut().register("Alt+Space");
+            // HUD 建窗自检（MIRACH_HUD_SELFTEST=1）：不依赖 CDP，结果直接进日志
+            if std::env::var("MIRACH_HUD_SELFTEST").is_ok() {
+                for kind in [
+                    "main",
+                    "plainwin",
+                    "plainnoargs",
+                    "plain",
+                    "query",
+                    "blank",
+                    "blankhud",
+                ] {
+                    let line = hud_build_probe(app.handle(), kind);
+                    eprintln!("[hud-selftest] {line}");
+                }
+                // 等价于点"悬浮窗"按钮：真机走一遍 hud_open，再验真一次
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    match hud_open(handle.clone()).await {
+                        Ok(()) => eprintln!("[hud-selftest] hud_open => Ok"),
+                        Err(e) => eprintln!("[hud-selftest] hud_open => Err {e}"),
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(4000));
+                    eprintln!(
+                        "[hud-selftest] hud alive after open = {}",
+                        hud_window(&handle).is_some()
+                    );
+                });
+            }
             // 简约对话引擎 sidecar（dsh 中继）——异步 spawn，不阻塞启动
             dsh_relay::setup_sidecar(app.handle(), dsh_relay::DshAppState::default());
             // 40px 圆角 + 圆角阴影：透明窗口 + 内容 rounded-40 + 面板背后同圆角阴影层（见 AppLayout）。
@@ -1714,11 +1785,14 @@ async fn open_session_window(
         return Ok(());
     }
     let url = tauri::WebviewUrl::App(format!("index.html?win={label}").into());
-    tauri::WebviewWindowBuilder::new(&app, &label, url)
-        .title("Mirach 会话")
-        .inner_size(1180.0, 800.0)
-        .build()
-        .map_err(|e| e.to_string())?;
+    inherit_browser_args(
+        &app,
+        tauri::WebviewWindowBuilder::new(&app, &label, url)
+            .title("Mirach 会话")
+            .inner_size(1180.0, 800.0),
+    )
+    .build()
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1731,16 +1805,19 @@ fn open_quick_entry_window(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let url = tauri::WebviewUrl::App("index.html?win=quick-entry".into());
-    tauri::WebviewWindowBuilder::new(&app, LABEL, url)
-        .title("Quick Entry")
-        .inner_size(520.0, 110.0)
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .center()
-        .skip_taskbar(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    inherit_browser_args(
+        &app,
+        tauri::WebviewWindowBuilder::new(&app, LABEL, url)
+            .title("Quick Entry")
+            .inner_size(520.0, 110.0)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .center()
+            .skip_taskbar(true),
+    )
+    .build()
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1753,6 +1830,55 @@ const HUD_LABEL: &str = "hud";
 /// hermes spawnHudWindow 同款最小尺寸（与 resize-handle 的钳制值一致）
 const HUD_MIN_WIDTH: f64 = 380.0;
 const HUD_MIN_HEIGHT: f64 = 160.0;
+
+/// 主窗的 WebView2 启动参数（`additionalBrowserArgs`），运行期新建 webview 时必须继承。
+///
+/// **为什么必须统一**（2026-09 实测，HRESULT 0x8007139F ERROR_INVALID_STATE）：
+/// WebView2 的环境（ICoreWebView2Environment）在**同一个用户数据目录**下是进程级单例，
+/// 且只认**第一次**建环境时的那套选项（additionalBrowserArgs、语言、滚动条样式…）。
+/// 之后用**不同**选项再建环境，`CreateCoreWebView2EnvironmentWithOptions` 直接失败：
+///   WebView2 error: WindowsError(Error { code: HRESULT(0x8007139F),
+///                     message: "组或资源的状态不是执行请求操作的正确状态" })
+/// 而 Tauri 侧 `WebviewWindowBuilder::build()`（走 AppHandle → RuntimeHandle →
+/// `Context::create_window`）是**发完即返回**、不等回执；失败只在
+/// `tauri-runtime-wry` 里 `log::error!` 掉（lib.rs:4081）。于是：
+///   - `build()` 仍返回 Ok、窗口进了 Tauri 注册表（`get_webview_window` 找得到）
+///   - 运行时 windows 表里没有它 → `hwnd()` 永远 `RawHandleError(Unavailable)`、
+///     `inner_size()` 永远 `FailedToReceiveMessage`、页面永远不加载
+/// 症状 = "内置浏览器 / HUD / 会话小窗全部打不开，只有主窗活着"。
+/// 主窗是 config 建的（dev 配置带 `--remote-debugging-port=9222`），运行期窗口默认
+/// 走 wry 的 `--disable-features=…` → 两边选项不一致 → 从第二个 webview 起全灭。
+/// 打包态两边都是 None（wry 默认）天然一致，但显式继承才能让 dev/打包行为一致。
+fn main_browser_args(app: &tauri::AppHandle) -> Option<String> {
+    app.config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .and_then(|w| w.additional_browser_args.clone())
+}
+
+/// 给运行期建的 **WebviewWindow** 继承主窗 WebView2 启动参数（见 `main_browser_args`）
+fn inherit_browser_args<'a>(
+    app: &tauri::AppHandle,
+    builder: tauri::WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle>,
+) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
+    match main_browser_args(app) {
+        Some(args) => builder.additional_browser_args(&args),
+        None => builder,
+    }
+}
+
+/// 给运行期建的 **child webview**（内置浏览器 / 覆盖层）继承主窗启动参数
+fn inherit_browser_args_wv(
+    app: &tauri::AppHandle,
+    builder: tauri::webview::WebviewBuilder<tauri::Wry>,
+) -> tauri::webview::WebviewBuilder<tauri::Wry> {
+    match main_browser_args(app) {
+        Some(args) => builder.additional_browser_args(&args),
+        None => builder,
+    }
+}
 
 /// 给窗口的 WebView2 注册权限处理：**只放行麦克风**，其余（摄像头/位置/通知…）一律拒绝。
 ///
@@ -1808,21 +1934,53 @@ fn attach_mic_permission(win: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn attach_mic_permission(_win: &tauri::WebviewWindow) {}
 
+/// 当前真实存活的 HUD 窗口 label（`hud` / `hud-2` / `hud-3`…）。
+///
+/// 为什么要记：webview 建失败时 Tauri 注册表里会留下**幻影条目**（见
+/// `main_browser_args` 注释），`get_webview_window("hud")` 之后永远返回 Some，
+/// 旧版 hud_open 一见它就 show/focus 并 return Ok —— HUD 便永久打不开了。
+/// 真伪判据只有一条：能不能拿到 OS 句柄（`hwnd()`）。
+static HUD_ACTIVE_LABEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 取 HUD 窗口：**按 hwnd 验真**，幻影一律当作不存在
+fn hud_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let label = HUD_ACTIVE_LABEL.lock().ok().and_then(|g| g.clone())?;
+    let win = app.get_webview_window(&label)?;
+    if win.hwnd().is_ok() {
+        Some(win)
+    } else {
+        None
+    }
+}
+
+/// 选一个注册表里没用过的 HUD label（hud → hud-2 → hud-3 …），绕开幻影条目
+fn pick_hud_label(app: &tauri::AppHandle) -> String {
+    if app.get_webview_window(HUD_LABEL).is_none() {
+        return HUD_LABEL.to_string();
+    }
+    for n in 2..100 {
+        let candidate = format!("{HUD_LABEL}-{n}");
+        if app.get_webview_window(&candidate).is_none() {
+            return candidate;
+        }
+    }
+    format!("{HUD_LABEL}-{}", std::process::id())
+}
+
 #[tauri::command]
 async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(HUD_LABEL) {
+    if let Some(win) = hud_window(&app) {
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
     }
+    let label = pick_hud_label(&app);
     let url = tauri::WebviewUrl::App("index.html?win=hud".into());
     // hermes 的做法（Electron main.ts createHudWindow + wireWindowReveal）：
-    // **show:false 建窗，等页面就绪再 show**。mirach 实测：webview 就绪前就 show 时，
-    // Windows 上的透明无边框窗会变成“查得到、没句柄”的僵尸窗（build() 返回 Ok 但
-    // hwnd=Unavailable、EnumWindows 看不到、前端永远起不来）。
+    // **show:false 建窗，等页面就绪再 show**。
     // 照搬 hermes：visible(false) 建 → 页面加载完 show + focus；再加 1.5s 兜底
     //（hermes 也有 did-finish-load 兜底定时器，防就绪事件丢失）。
-    let hud = tauri::WebviewWindowBuilder::new(&app, HUD_LABEL, url)
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
         .title("Mirach HUD")
         .inner_size(520.0, 420.0)
         .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
@@ -1838,14 +1996,22 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
                 let _ = win.set_focus();
                 let _ = win.set_always_on_top(true);
             }
-        })
+        });
+    // 关键：继承主窗 WebView2 启动参数（选项不一致 = 0x8007139F，webview 建不出来）
+    let hud = inherit_browser_args(&app, builder)
         .build()
         .map_err(|e| e.to_string())?;
-    // 失败可见化：窗口对象建出来了但拿不到 OS 句柄时明确报错
-    if hud.hwnd().is_err() {
-        let msg = "HUD 窗口创建失败：没有得到系统窗口句柄（webview 未就绪），请重试或重启应用";
+    // 失败可见化：`build()` 返回 Ok 不算数（发完即返回，不等回执），**hwnd 才算**
+    if let Err(e) = hud.hwnd() {
+        let msg = format!(
+            "HUD 窗口创建失败：拿不到系统窗口句柄（webview 没建出来）: {e}。\
+             若日志里出现 0x8007139F，说明 WebView2 环境选项与主窗不一致"
+        );
         eprintln!("[hud] {msg}");
-        return Err(msg.to_string());
+        return Err(msg);
+    }
+    if let Ok(mut slot) = HUD_ACTIVE_LABEL.lock() {
+        *slot = Some(label);
     }
     // 透明窗口必须显式把 WebView 背景设透明（主窗同样处理，否则透明处发黑）
     let _ = hud.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
@@ -1865,10 +2031,12 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
 /// 关闭 HUD（主窗口或 HUD 自身都可调用）
 #[tauri::command]
 async fn hud_close(app: tauri::AppHandle) -> Result<(), String> {
-    let win = app
-        .get_webview_window(HUD_LABEL)
-        .ok_or_else(|| "HUD 窗口不存在（可能已经关闭）".to_string())?;
-    win.close().map_err(|e| format!("关闭 HUD 失败: {e}"))
+    let win = hud_window(&app).ok_or_else(|| "HUD 窗口不存在（可能已经关闭）".to_string())?;
+    win.close().map_err(|e| format!("关闭 HUD 失败: {e}"))?;
+    if let Ok(mut slot) = HUD_ACTIVE_LABEL.lock() {
+        *slot = None;
+    }
+    Ok(())
 }
 
 /// HUD 程序化改位置/尺寸（resize-handle 的 setBounds 面；Windows 透明无边框
@@ -1881,9 +2049,7 @@ async fn hud_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let win = app
-        .get_webview_window(HUD_LABEL)
-        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    let win = hud_window(&app).ok_or_else(|| "HUD 窗口不存在".to_string())?;
     // hermes 同款（hud-ipc.ts:240-272）：禁用 resizable 的透明无边框窗上，
     // set_position/set_size 需要临时打开 resizable 才生效，改完再关回去。
     let _ = win.set_resizable(true);
@@ -1901,18 +2067,14 @@ async fn hud_set_bounds(
 /// 拖动移动窗口（composer-drag 的 beginMove 面 → Tauri 原生拖拽）
 #[tauri::command]
 async fn hud_begin_move(app: tauri::AppHandle) -> Result<(), String> {
-    let win = app
-        .get_webview_window(HUD_LABEL)
-        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    let win = hud_window(&app).ok_or_else(|| "HUD 窗口不存在".to_string())?;
     win.start_dragging().map_err(|e| format!("拖动 HUD 失败: {e}"))
 }
 
 /// 指针穿透开关（click-through：透明区忽略鼠标）
 #[tauri::command]
 async fn hud_set_ignore_mouse(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
-    let win = app
-        .get_webview_window(HUD_LABEL)
-        .ok_or_else(|| "HUD 窗口不存在".to_string())?;
+    let win = hud_window(&app).ok_or_else(|| "HUD 窗口不存在".to_string())?;
     win.set_ignore_cursor_events(ignore)
         .map_err(|e| format!("切换 HUD 穿透失败: {e}"))
 }
@@ -1920,35 +2082,95 @@ async fn hud_set_ignore_mouse(app: tauri::AppHandle, ignore: bool) -> Result<(),
 /// 之前四个标志组合都用带 query 的 URL，可能把 URL 与标志混在一起了。
 #[tauri::command]
 async fn hud_probe_url(app: tauri::AppHandle, kind: String) -> Result<String, String> {
+    Ok(hud_build_probe(&app, &kind))
+}
+
+/// 建窗对照探针（同步、供命令与启动自检共用）。
+///
+/// 背景：`AppHandle` 上的 `WebviewWindowBuilder::build()` 是**发完即返回**（消息投给
+/// 事件循环，不等待回执），webview 创建失败只会 `log::error!` 掉。所以"build 返回 Ok"
+/// 完全不能说明窗口建成了——真正的判据是随后能不能拿到 OS 句柄。
+///
+/// 探针矩阵（每个建完即销毁、避免留垃圾窗）：
+/// - `plainwin`  纯 Window（无 webview）——基线，证明窗口创建本身没问题
+/// - `plain`     窗口 + webview，App URL `index.html`
+/// - `query`     窗口 + webview，App URL `index.html?win=hud`
+/// - `blank`     窗口 + webview，External `about:blank`（绕开 Tauri 资源协议与前端）
+/// - `blankhud`  同 blank，但全套 HUD 标志（透明/无边框/置顶/visible(false)…）
+/// - `main`      查询既有主窗（对照：它必然健康）
+fn hud_build_probe(app: &tauri::AppHandle, kind: &str) -> String {
+    if kind == "main" {
+        let Some(w) = app.get_webview_window("main") else {
+            return "kind=main ERROR 主窗不在注册表".to_string();
+        };
+        return format!(
+            "kind=main hwnd={:?} size={:?}",
+            w.hwnd().map(|h| h.0 as i64),
+            w.inner_size()
+        );
+    }
     let label = format!("probe-{kind}");
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.destroy();
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    if kind == "plainwin" {
-        // 不带 webview 的纯窗口：判断"运行期建 OS 窗口"这件事本身是否可用
-        let w = tauri::WindowBuilder::new(&app, &label)
+    // 注册表快照：setup 期 main 已存在（config 窗口先建），这里印出来做证据
+    let registry: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let result: Result<String, String> = (|| {
+        if kind == "plainwin" {
+            let w = tauri::WindowBuilder::new(app, &label)
+                .title("probe")
+                .inner_size(400.0, 240.0)
+                .build()
+                .map_err(|e| format!("build err: {e}"))?;
+            let out = format!(
+                "kind={kind} hwnd={:?} visible={:?}",
+                w.hwnd().map(|h| h.0 as i64),
+                w.is_visible()
+            );
+            let _ = w.destroy();
+            return Ok(out);
+        }
+        let url = match kind {
+            "blank" | "blankhud" => tauri::WebviewUrl::External(
+                "about:blank".parse().map_err(|e| format!("url err: {e}"))?,
+            ),
+            "plain" | "plainnoargs" => tauri::WebviewUrl::App("index.html".into()),
+            _ => tauri::WebviewUrl::App("index.html?win=hud".into()),
+        };
+        let builder = tauri::WebviewWindowBuilder::new(app, &label, url)
             .title("probe")
-            .inner_size(400.0, 240.0)
-            .build()
-            .map_err(|e| format!("plainwin build err: {e}"))?;
+            .inner_size(400.0, 240.0);
+        let builder = if kind == "blankhud" {
+            builder
+                .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .visible(false)
+        } else {
+            builder
+        };
+        // A/B：plain 继承主窗参数（应成功），plainnoargs 故意不继承（应复现任性失败）
+        let builder = if kind == "plainnoargs" {
+            builder
+        } else {
+            inherit_browser_args(app, builder)
+        };
+        let w = builder.build().map_err(|e| format!("build err: {e}"))?;
         std::thread::sleep(std::time::Duration::from_millis(900));
-        return Ok(format!("kind=plainwin hwnd={:?}", w.hwnd().map(|h| h.0 as i64)));
-    }
-    let url = if kind == "plain" {
-        tauri::WebviewUrl::App("index.html".into())
-    } else {
-        tauri::WebviewUrl::App("index.html?win=hud".into())
-    };
-    let w = tauri::WebviewWindowBuilder::new(&app, &label, url)
-        .title("probe")
-        .inner_size(400.0, 240.0)
-        .visible(false)
-        .build()
-        .map_err(|e| format!("build err: {e}"))?;
-    std::thread::sleep(std::time::Duration::from_millis(900));
-    let hwnd = w.hwnd().map(|h| h.0 as i64);
-    let size = w.inner_size().map(|s| format!("{}x{}", s.width, s.height));
-    Ok(format!("kind={kind} hwnd={hwnd:?} size={size:?}"))
+        let out = format!(
+            "kind={kind} hwnd={:?} size={:?}",
+            w.hwnd().map(|h| h.0 as i64),
+            w.inner_size()
+        );
+        let _ = w.destroy();
+        Ok(out)
+    })();
+    let mut line = result.unwrap_or_else(|e| format!("kind={kind} ERROR {e}"));
+    line.push_str(&format!(" registry=[{}]", registry.join(",")));
+    line
 }
 
