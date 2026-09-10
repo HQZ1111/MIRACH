@@ -7,6 +7,8 @@ use tauri::{Emitter, Manager, State};
 
 mod bootstrap;
 mod dsh_relay;
+mod events;
+mod powershell;
 mod relay;
 mod sessions;
 

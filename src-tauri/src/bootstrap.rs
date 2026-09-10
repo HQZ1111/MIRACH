@@ -7,16 +7,17 @@
 //!   -Check                               → 一行 JSON：{ready,installRoot,missing[]}
 //! 驱动逐行透传 stdout/stderr 给前端（`bootstrap` 事件通道），并解析最后一行 JSON 作为阶段结果。
 
+use crate::events::{BootstrapEvent, LogStream, StageState};
+use crate::powershell::{self, CancelRx, StreamSink};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{Emitter, Manager};
 
 /// 前端 listen 的事件通道名（与 hermes 的 "bootstrap" 同名同形）。
-pub const CHANNEL: &str = "bootstrap";
+pub const CHANNEL: &str = BootstrapEvent::CHANNEL;
 const SCRIPT_NAME: &str = "mirach-install.ps1";
 /// 随应用安装的引擎 SDK 版本（= 引擎版本；profile 迁移由引擎自理）。
 const SDK_VERSION: &str = "0.1.5-alpha.1";
@@ -28,8 +29,8 @@ const SCRIPT_URL: &str = "https://gitee.com/HANQINGZHOU/mirach/raw/master/script
 #[derive(Default)]
 pub struct BootstrapState {
     running: Arc<AtomicBool>,
-    cancel: Arc<AtomicBool>,
-    child: Arc<Mutex<Option<Child>>>,
+    /// 当前阶段进程的取消信号（每次 run_script 重新注册；None = 没有在跑的阶段）
+    cancel_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<()>>>>,
 }
 
 /// 应用内安装的运行时根（便携包用 exe 旁 runtime\，安装版用这里）。
@@ -64,15 +65,6 @@ pub fn runtime_ready() -> bool {
     root.join("node").join("node.exe").is_file()
         && root.join("agent-sidecar").join("dist").join("index.js").is_file()
         && installed_engine_bin().is_file()
-}
-
-fn powershell_exe() -> PathBuf {
-    let windir = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-    PathBuf::from(windir)
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe")
 }
 
 /// 安装脚本位置：应用资源目录 → 仓库 scripts\ → 缓存 → 远端下载并缓存。
@@ -123,115 +115,71 @@ fn script_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(cache)
 }
 
-/// 跑一次脚本调用：逐行透传日志给前端，返回全部输出行。
+/// 跑一次脚本调用：逐行透传日志到 `bootstrap` 事件通道，返回完整输出。
 /// `stage` 为 None 时表示 manifest/check 这类非阶段调用。
-fn run_script(
+///
+/// IO 层用 hermes 的 `crate::powershell`（整份搬）：代码页回退解码 + 以进程退出为
+/// 权威终态 + 排水宽限 + 取消信号，避免"非 UTF-8 丢整行"和"孙进程握管道永不 EOF"。
+async fn run_script(
     app: &tauri::AppHandle,
     state: &BootstrapState,
-    args: &[&str],
+    args: &[String],
     stage: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<powershell::ScriptResult, String> {
     let script = strip_extended_prefix(script_path(app)?);
-    let mut cmd = Command::new(powershell_exe());
-    cmd.arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-File")
-        .arg(&script)
-        .args(args)
-        .arg("-Root")
-        .arg(install_root().to_string_lossy().to_string())
-        .arg("-SidecarSrc")
-        .arg(
-            strip_extended_prefix(sidecar_src(app).unwrap_or_default())
-                .to_string_lossy()
-                .to_string(),
-        )
-        .arg("-SdkVersion")
-        .arg(SDK_VERSION)
-        .arg("-AppVersion")
-        .arg(APP_VERSION)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    let mut child = cmd.spawn().map_err(|e| format!("无法启动安装器: {e}"))?;
-    let stdout = child.stdout.take().ok_or("no installer stdout")?;
-    let stderr = child.stderr.take().ok_or("no installer stderr")?;
-    *state.child.lock().unwrap() = Some(child);
+    let mut full_args: Vec<String> = args.to_vec();
+    full_args.extend([
+        "-Root".to_string(),
+        install_root().to_string_lossy().to_string(),
+        "-SidecarSrc".to_string(),
+        strip_extended_prefix(sidecar_src(app).unwrap_or_default())
+            .to_string_lossy()
+            .to_string(),
+        "-SdkVersion".to_string(),
+        SDK_VERSION.to_string(),
+        "-AppVersion".to_string(),
+        APP_VERSION.to_string(),
+    ]);
 
-    let collect = |reader: Box<dyn BufRead + Send>, stream: &'static str| {
+    let sink_for = |stream: LogStream| {
         let app = app.clone();
         let stage = stage.map(|s| s.to_string());
-        std::thread::spawn(move || {
-            let mut lines = Vec::new();
-            let mut reader = reader;
-            let mut buf: Vec<u8> = Vec::new();
-            loop {
-                buf.clear();
-                match reader.read_until(b'\n', &mut buf) {
-                    Ok(0) => break,
-                    // 逐字节读 + lossy 解码：安装器输出里混有系统 OEM 码页的错误文本
-                    // （中文 Windows 上是 GBK），严格 UTF-8 解码会失败——一旦失败就
-                    // 停止读取会丢掉末尾的 JSON 结果帧（阶段原因变"退出码 Some(1)"）。
-                    Ok(_) => {
-                        let raw = String::from_utf8_lossy(&buf);
-                        let trimmed = raw.trim_end_matches(['\r', '\n']).trim_end();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-                        let _ = app.emit(
-                            CHANNEL,
-                            json!({ "type": "log", "stage": stage, "line": trimmed, "stream": stream }),
-                        );
-                        lines.push(trimmed.to_string());
-                    }
-                    Err(e) => {
-                        let _ = app.emit(
-                            CHANNEL,
-                            json!({ "type": "log", "stage": stage, "line": format!("[reader] {e}"), "stream": stream }),
-                        );
-                        break;
-                    }
-                }
-            }
-            lines
-        })
-    };
-    let out_handle = collect(Box::new(BufReader::new(stdout)), "stdout");
-    let err_handle = collect(Box::new(BufReader::new(stderr)), "stderr");
-
-    let status = {
-        let mut guard = state.child.lock().unwrap();
-        let child = guard.as_mut().ok_or("安装进程句柄丢失")?;
-        child.wait().map_err(|e| format!("等待安装器失败: {e}"))?
-    };
-    *state.child.lock().unwrap() = None;
-    let mut lines = out_handle.join().unwrap_or_default();
-    lines.extend(err_handle.join().unwrap_or_default());
-    if state.cancel.load(Ordering::Acquire) {
-        return Err("已取消".into());
-    }
-    if !status.success() {
-        // 阶段脚本失败时最后一行 JSON 里带 reason，交给调用方解析
-        if let Some(frame) = last_json(&lines) {
-            if frame.get("ok").and_then(Value::as_bool) == Some(false) {
-                return Ok(lines);
-            }
+        move |line: &str| {
+            let _ = app.emit(
+                CHANNEL,
+                BootstrapEvent::Log {
+                    stage: stage.clone(),
+                    line: line.to_string(),
+                    stream,
+                },
+            );
         }
-        // 没有结果帧（脚本没跑起来/死在解析期）：把输出尾部带上，否则前端只能看到"退出码"
-        let tail: Vec<&str> = lines.iter().rev().take(5).rev().map(|s| s.as_str()).collect();
-        return Err(format!(
-            "安装器退出码 {:?}；输出尾部：{}",
-            status.code(),
-            tail.join(" | ")
-        ));
-    }
-    Ok(lines)
+    };
+    let sink = StreamSink {
+        on_stdout_line: Box::new(sink_for(LogStream::Stdout)),
+        on_stderr_line: Box::new(sink_for(LogStream::Stderr)),
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+    *state.cancel_tx.lock().unwrap() = Some(tx);
+    let mut cancel: Option<CancelRx> = Some(rx);
+    let result = powershell::run_script(&script, &full_args, sink, &mut cancel).await;
+    *state.cancel_tx.lock().unwrap() = None;
+    result.map_err(|e| format!("安装器执行失败: {e}"))
+}
+
+/// 输出尾部（错误信息里带上，方便定位"没有结果帧"的失败）
+fn tail_of(result: &powershell::ScriptResult, n: usize) -> String {
+    let mut lines: Vec<&str> = result
+        .stdout
+        .lines()
+        .chain(result.stderr.lines())
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let start = lines.len().saturating_sub(n);
+    lines.drain(..start);
+    lines.join(" | ")
 }
 
 /// Windows 扩展长度前缀（`\\?\`）会让 PowerShell 5.1 的 `Join-Path`/`Split-Path`
@@ -246,10 +194,6 @@ fn strip_extended_prefix(p: PathBuf) -> PathBuf {
         return PathBuf::from(rest);
     }
     p
-}
-
-fn last_json(lines: &[String]) -> Option<Value> {
-    lines.iter().rev().find_map(|l| serde_json::from_str::<Value>(l).ok())
 }
 
 /// 应用自带的 agent-sidecar 目录（dist + config + package.json）。
@@ -332,94 +276,154 @@ pub async fn bootstrap_start(
     if state.running.swap(true, Ordering::AcqRel) {
         return Err("安装已在进行中".into());
     }
-    state.cancel.store(false, Ordering::Release);
-    let running = state.running.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<BootstrapState>();
-        let manifest_lines = run_script(
-            &app,
-            &state,
-            &["-Manifest", "-NonInteractive", "-Json"],
-            None,
-        )?;
-        let manifest = last_json(&manifest_lines).ok_or("安装清单解析失败")?;
-        let stages = manifest
-            .get("stages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let _ = app.emit(
-            CHANNEL,
-            json!({
-                "type": "manifest",
-                "stages": stages,
-                "protocolVersion": manifest.get("protocol_version").cloned().unwrap_or(json!(1)),
-            }),
-        );
-        for stage in &stages {
-            let name = stage.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            if name.is_empty() {
-                continue;
-            }
-            if state.cancel.load(Ordering::Acquire) {
-                let _ = app.emit(CHANNEL, json!({ "type": "failed", "stage": name, "error": "已取消" }));
-                return Err("已取消".to_string());
-            }
-            let _ = app.emit(CHANNEL, json!({ "type": "stage", "name": name, "state": "running" }));
-            let lines = match run_script(
-                &app,
-                &state,
-                &["-Stage", &name, "-NonInteractive", "-Json"],
-                Some(&name),
-            ) {
-                Ok(l) => l,
-                Err(e) => {
-                    let _ = app.emit(CHANNEL, json!({ "type": "stage", "name": name, "state": "failed", "error": e }));
-                    let _ = app.emit(CHANNEL, json!({ "type": "failed", "stage": name, "error": e }));
-                    return Err(e);
-                }
-            };
-            let frame = last_json(&lines).unwrap_or(json!({ "ok": false, "reason": "no stage result" }));
-            let ok = frame.get("ok").and_then(Value::as_bool).unwrap_or(false);
-            let skipped = frame.get("skipped").and_then(Value::as_bool).unwrap_or(false);
-            let reason = frame.get("reason").and_then(Value::as_str).unwrap_or("").to_string();
-            let duration = frame.get("duration_ms").cloned().unwrap_or(json!(0));
-            if !ok {
-                let _ = app.emit(CHANNEL, json!({
-                    "type": "stage", "name": name, "state": "failed", "error": reason,
-                }));
-                let _ = app.emit(CHANNEL, json!({ "type": "failed", "stage": name, "error": reason }));
-                return Err(format!("阶段 {name} 失败：{reason}"));
-            }
-            let _ = app.emit(CHANNEL, json!({
-                "type": "stage",
-                "name": name,
-                "state": if skipped { "skipped" } else { "succeeded" },
-                "durationMs": duration,
-                "result": { "stage": name, "ok": true, "skipped": skipped, "reason": reason },
-            }));
-        }
-        let root = install_root();
-        let marker = root.join(".mirach-bootstrap-complete");
-        let _ = app.emit(CHANNEL, json!({
-            "type": "complete",
-            "installRoot": root.to_string_lossy(),
-            "marker": marker.to_string_lossy(),
-        }));
-        Ok(serde_json::json!({ "installRoot": root.to_string_lossy(), "ready": runtime_ready() }))
-    })
-    .await
-    .map_err(|e| format!("安装任务失败: {e}"))?;
-    running.store(false, Ordering::Release);
+    let result = run_bootstrap(&app, &state).await;
+    state.running.store(false, Ordering::Release);
     result
 }
 
-/// 取消安装：结束当前阶段进程，循环会在下一次检查时退出。
+fn emit(app: &tauri::AppHandle, event: BootstrapEvent) {
+    let _ = app.emit(CHANNEL, event);
+}
+
+fn emit_failed(app: &tauri::AppHandle, stage: &str, error: &str) {
+    emit(
+        app,
+        BootstrapEvent::Stage {
+            name: stage.to_string(),
+            state: StageState::Failed,
+            duration_ms: None,
+            result: None,
+            error: Some(error.to_string()),
+        },
+    );
+    emit(
+        app,
+        BootstrapEvent::Failed {
+            stage: Some(stage.to_string()),
+            error: error.to_string(),
+        },
+    );
+}
+
+/// 清单 → 逐阶段（每个阶段单独一个 PowerShell 进程）→ 完成事件。
+async fn run_bootstrap(app: &tauri::AppHandle, state: &BootstrapState) -> Result<Value, String> {
+    let manifest_out = run_script(
+        app,
+        state,
+        &["-Manifest".into(), "-NonInteractive".into(), "-Json".into()],
+        None,
+    )
+    .await?;
+    let manifest = powershell::parse_manifest(&manifest_out.stdout).ok_or_else(|| {
+        format!(
+            "安装清单解析失败（退出码 {:?}）；输出尾部：{}",
+            manifest_out.exit_code,
+            tail_of(&manifest_out, 5)
+        )
+    })?;
+    emit(
+        app,
+        BootstrapEvent::Manifest {
+            stages: manifest.stages.clone(),
+            protocol_version: manifest.protocol_version,
+        },
+    );
+
+    for stage in &manifest.stages {
+        emit(
+            app,
+            BootstrapEvent::Stage {
+                name: stage.name.clone(),
+                state: StageState::Running,
+                duration_ms: None,
+                result: None,
+                error: None,
+            },
+        );
+        let started = Instant::now();
+        let result = match run_script(
+            app,
+            state,
+            &[
+                "-Stage".into(),
+                stage.name.clone(),
+                "-NonInteractive".into(),
+                "-Json".into(),
+            ],
+            Some(&stage.name),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                emit_failed(app, &stage.name, &e);
+                return Err(e);
+            }
+        };
+        let duration_ms = Some(started.elapsed().as_millis() as u64);
+        if result.killed {
+            emit_failed(app, &stage.name, "已取消");
+            return Err("已取消".to_string());
+        }
+        match powershell::parse_stage_result(&result.stdout) {
+            Some(frame) if frame.ok => {
+                let skipped = frame.skipped;
+                emit(
+                    app,
+                    BootstrapEvent::Stage {
+                        name: stage.name.clone(),
+                        state: if skipped {
+                            StageState::Skipped
+                        } else {
+                            StageState::Succeeded
+                        },
+                        duration_ms,
+                        result: Some(frame),
+                        error: None,
+                    },
+                );
+            }
+            Some(frame) => {
+                let reason = frame
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| format!("阶段 {} 失败", stage.name));
+                emit_failed(app, &stage.name, &reason);
+                return Err(format!("阶段 {} 失败：{}", stage.name, reason));
+            }
+            None => {
+                let reason = format!(
+                    "阶段 {} 没有结果帧（退出码 {:?}）；输出尾部：{}",
+                    stage.name,
+                    result.exit_code,
+                    tail_of(&result, 5)
+                );
+                emit_failed(app, &stage.name, &reason);
+                return Err(reason);
+            }
+        }
+    }
+
+    let root = install_root();
+    let marker = root.join(".mirach-bootstrap-complete");
+    emit(
+        app,
+        BootstrapEvent::Complete {
+            install_root: root.to_string_lossy().to_string(),
+            marker: serde_json::from_str::<Value>(
+                &std::fs::read_to_string(&marker).unwrap_or_else(|_| "null".into()),
+            )
+            .ok(),
+        },
+    );
+    Ok(json!({ "installRoot": root.to_string_lossy(), "ready": runtime_ready() }))
+}
+
+/// 取消安装：给当前阶段进程发取消信号（IO 层会 kill 子进程并立刻返回）。
 #[tauri::command]
 pub fn bootstrap_cancel(state: tauri::State<'_, BootstrapState>) {
-    state.cancel.store(true, Ordering::Release);
-    if let Some(child) = state.child.lock().unwrap().as_mut() {
-        let _ = child.kill();
+    if let Some(tx) = state.cancel_tx.lock().unwrap().as_mut() {
+        let _ = tx.try_send(());
     }
 }
 

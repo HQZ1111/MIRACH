@@ -62,11 +62,14 @@ $SidecarDir = Join-Path $InstallRoot "agent-sidecar"
 $MarkerPath = Join-Path $InstallRoot ".mirach-bootstrap-complete"
 $NodeMajor = 22
 
+# needs_user_input mirrors hermes' manifest protocol: her Rust `Manifest` struct
+# requires the field, and a manifest without it fails to parse (the first-run UI
+# then sits on "reading the manifest"). mirach has no interactive stages -> false.
 $Stages = @(
-  @{ name = "node"; title = "Installing Node.js runtime"; category = "runtime" },
-  @{ name = "deps"; title = "Installing engine packages"; category = "packages" },
-  @{ name = "sidecar"; title = "Installing agent-sidecar"; category = "app" },
-  @{ name = "marker"; title = "Finalizing installation"; category = "app" }
+  @{ name = "node"; title = "Installing Node.js runtime"; category = "runtime"; needs_user_input = $false },
+  @{ name = "deps"; title = "Installing engine packages"; category = "packages"; needs_user_input = $false },
+  @{ name = "sidecar"; title = "Installing agent-sidecar"; category = "app"; needs_user_input = $false },
+  @{ name = "marker"; title = "Finalizing installation"; category = "app"; needs_user_input = $false }
 )
 
 function Find-ExistingNode() {

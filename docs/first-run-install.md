@@ -8,9 +8,18 @@
 | hermes | mirach | 说明 |
 | --- | --- | --- |
 | `apps/bootstrap-installer/src-tauri/src/bootstrap.rs` | `src-tauri/src/bootstrap.rs` | Rust 侧只做编排：跑 PowerShell、逐行透传日志、发 `bootstrap` 事件 |
-| `scripts/install.ps1` | `scripts/mirach-install.ps1` | 真正的安装动作（阶段脚本） |
-| `apps/bootstrap-installer/src/store.ts` | `src/store/bootstrap.ts` | nanostores 状态机（route/stages/logs/progress） |
-| `apps/bootstrap-installer/src/App.tsx` 各屏幕 | `src/components/setup/SetupFlow.tsx` | 选择页 / 进度页 / 成功页 / 失败页（+ 远端配置页） |
+| `apps/bootstrap-installer/src-tauri/src/powershell.rs` | `src-tauri/src/powershell.rs` | **整份照搬**的 IO 层：代码页回退解码、以进程退出为终态、排水宽限、取消信号、阶段/清单帧解析（含她的单测）|
+| `apps/bootstrap-installer/src-tauri/src/events.rs` | `src-tauri/src/events.rs` | **整份照搬**的类型化事件（前端 payload 形状逐字段一致）|
+| `scripts/install.ps1`（5064 行：uv/Python/playwright/仓库/桌面构建，7+ 阶段） | `scripts/mirach-install.ps1`（275 行，4 阶段 node/deps/sidecar/marker） | 阶段脚本按 mirach 载荷重写，协议不变 |
+| `apps/bootstrap-installer/src/store.ts` | `src/store/bootstrap.ts` | nanostores 状态机（route/stages/logs/progress），同样的 atom/computed/switch 结构 |
+| `apps/bootstrap-installer/src/routes/*.tsx`（独立安装器窗口） | `src/components/setup/SetupFlow.tsx` | 同样的四屏流程，并入主应用、用 mirach 设计语言 |
+
+搬运 `powershell.rs` 时只做了这些适配：`tracing::warn!` → `eprintln!`、`which` crate → 手写 PATH 探测、
+去掉 hermes 专有的 `hermes_home` 参数（改用自己的"脚本所在目录当 cwd"）、一个 Unix 用例改成 Windows 版。
+**不要退回自写的读线程/解析**（理由写在文件头注释里，另有 `runs_the_real_installer_manifest` 真机单测兜底）。
+
+清单协议注意：hermes 的 `Manifest`/`StageInfo` 反序列化**要求 `needs_user_input` 字段存在**，
+所以 `mirach-install.ps1` 的 `$Stages` 里每个阶段都要写 `needs_user_input = $false`（缺了首装会卡在"读取清单"）。
 
 ## 页面流
 

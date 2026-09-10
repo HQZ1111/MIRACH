@@ -195,7 +195,19 @@ export async function refreshStatus(): Promise<BootstrapStatus | null> {
 export async function startInstall(): Promise<void> {
   $bootstrap.set(INITIAL);
   $route.set("progress");
-  await invoke("bootstrap_start");
+  try {
+    await invoke("bootstrap_start");
+  } catch (e) {
+    // 启动/清单阶段就失败（脚本缺失、清单解析失败…）：直接进失败页，别把用户
+    // 永远留在"正在读取安装清单"的转圈界面上。
+    $bootstrap.set({
+      ...$bootstrap.get(),
+      status: "failed",
+      currentStage: null,
+      error: String(e),
+    });
+    $route.set("failure");
+  }
 }
 
 export async function cancelInstall(): Promise<void> {

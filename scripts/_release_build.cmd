@@ -32,6 +32,11 @@ if not exist "%~dp0..\agent-sidecar\dist\index.js" (
   echo [release] agent-sidecar\dist\index.js missing after build
   exit /b 1
 )
+rem The installer payload must stay pure ASCII: PowerShell 5.1 reads BOM-less
+rem files as ANSI, so any non-ASCII byte can break parsing on a zh-CN machine
+rem (seen once: a Chinese comment made the manifest stage die with a parse error).
+powershell -NoProfile -Command "$b=[System.IO.File]::ReadAllBytes('%~dp0..\scripts\mirach-install.ps1'); if ($b | Where-Object { $_ -gt 127 }) { Write-Host '[release] mirach-install.ps1 contains non-ASCII bytes'; exit 1 }"
+if errorlevel 1 exit /b 1
 call npx tauri build --bundles nsis
 echo [release] exit=%errorlevel%
 endlocal

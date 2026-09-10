@@ -43,7 +43,9 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 简约引擎中继（dsh_relay）：oneshot 回包 + spawn_blocking
-tokio = { version = "1", features = ["sync", "time", "rt"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "process", "io-util", "macros"] }
+# 安装器 IO 层（整份照搬 hermes powershell.rs，用 anyhow::Result + Context）
+anyhow = "1"
 portable-pty = "0.9"
 ureq = { version = "2", features = ["json"] }
 # sessions.db 直读（bundled 自带 SQLite + FTS5 全文索引）
