@@ -1,0 +1,11 @@
+{
+    "version":  "0.1.1",
+    "notes":  "Mirach 0.1.1\n\n本轮更新：\n· 安全：移除 release 远程调试端口、文件命令路径白名单、插件安装与 RPC 方法白名单、最小 CSP\n· 稳定：sidecar 崩溃自愈与进程树回收、abort 语义、事件按会话隔离、长会话内存有界\n· 官方机制：内核装配改用官方 ClientModuleSystem、profile 读改写用官方 dsh-app-boot、应用自有 cordis overlay\n· 新功能：远程引擎（SSH，引擎跑在远端主机）、应用自更新、单实例锁、事务化插件安装\n· 工程：清理 45 个死文件与临时脚本，补 38 个自动化测试，sidecar 预编译",
+    "pub_date":  "2026-09-10T01:38:05Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbGhpQnM5eThBOGhZU0dycVVWUUpWSXRqUWI1UktSZ0FkRkpETldkK295YTh3Sk1SZEUwc1ZGQ3FDTE1GOThFV01xWURsOWk0OU16SDdwRVBqaVUyNllMQ0JMWWNqUWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MDAzOTQwCWZpbGU6TWlyYWNoXzAuMS4xX3g2NC1zZXR1cC5leGUKZXRLT0o4ZHNIcFl0RDh0Zm9QNGtaWFBjRGJoVWtGb0lVbExEQnMyQ3FpaURPZFZMeG9EajZqTXpRUTNaRFNZeGdwT2Z2dFRjTU11VFJPemhmakEvQ1E9PQo=",
+                                             "url":  "https://gitee.com/HANQINGZHOU/mirach/releases/download/v0.1.1/Mirach_0.1.1_x64-setup.exe"
+                                         }
+                  }
+}

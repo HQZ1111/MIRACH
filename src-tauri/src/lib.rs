@@ -104,7 +104,13 @@ fn load_config() -> AppConfig {
         browser_home: get("browserHome", "HERMES_BROWSER_HOME", "https://www.bing.com"),
         data_dir: app_config_dir().to_string_lossy().to_string(),
         web_host: get("webHost", "MIRACH_WEB_HOST", "127.0.0.1"),
-        update_endpoint: get("updateEndpoint", "MIRACH_UPDATE_ENDPOINT", ""),
+        // 默认更新源 = 仓库 docs/latest.json（Gitee raw；发布脚本写入并在 push 后生效）。
+        // 签名公钥在 tauri.conf.json，端点被替换也无法通过 minisign 校验。
+        update_endpoint: get(
+            "updateEndpoint",
+            "MIRACH_UPDATE_ENDPOINT",
+            "https://gitee.com/HANQINGZHOU/mirach/raw/master/docs/latest.json",
+        ),
         remote_enabled: get_bool("remoteEnabled", "MIRACH_REMOTE", false),
         remote_host: get("remoteHost", "MIRACH_REMOTE_HOST", ""),
         remote_port: get("remotePort", "MIRACH_REMOTE_PORT", ""),
