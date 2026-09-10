@@ -14,16 +14,25 @@
  * 高级用户经 API 操作（不做硬拒绝）。
  */
 
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+// 官方 profile 清单读写 + 装配组合（apps/desktop project-manager 同源）：
+// bundles 读改写与"引擎实际装配行"都由官方实现产出，不再手搓 JSON/regex
+import {
+  composeEntries,
+  loadProfileDirectory,
+  readProfileManifest,
+  writeProfileManifest,
+  type ProfileManifest,
+} from "@deepseek-ai/dsh-app-boot";
 import { log, logWarn } from "./protocol.js";
+import { mirachHome } from "./runtime.js";
 
 const execP = promisify(exec);
 
-const DSH_HOME = (): string => process.env.DSH_HOME ?? join(homedir(), ".mirach");
+const DSH_HOME = (): string => mirachHome();
 const PROFILE_DIR = (): string => join(DSH_HOME(), "profiles", process.env.MIRACH_PROFILE_NAME ?? "mirach");
 const PROFILE_NM = (): string => join(PROFILE_DIR(), "node_modules");
 const PROFILE_PKG = (): string => join(PROFILE_DIR(), "package.json");
@@ -73,35 +82,95 @@ function profileDependencies(): Record<string, string> {
   }
 }
 
-function profileBundles(): string[] {
+/** profile bundles 清单（官方 profile 清单读取；文件缺失/损坏返回空）。 */
+export function profileBundles(): string[] {
   try {
-    return ((JSON.parse(safeRead(PROFILE_PKG())).dsh as { profile?: { bundles?: string[] } })?.profile?.bundles ?? []) as string[];
+    return readProfileManifest("mirach", PROFILE_DIR()).dsh?.profile?.bundles ?? [];
   } catch {
     return [];
   }
 }
 
+/** 写回 profile bundles（官方清单写入：2 空格 JSON + 尾换行，保留其余字段）。 */
 function writeProfileBundles(bundles: string[]): void {
   try {
-    const j = JSON.parse(safeRead(PROFILE_PKG()));
-    j.dsh = j.dsh ?? {};
-    j.dsh.profile = j.dsh.profile ?? {};
-    j.dsh.profile.bundles = bundles;
-    writeFileSync(PROFILE_PKG(), JSON.stringify(j, null, 2) + "\n", "utf8");
+    const manifest: ProfileManifest = readProfileManifest("mirach", PROFILE_DIR());
+    writeProfileManifest(PROFILE_DIR(), {
+      ...manifest,
+      dsh: {
+        ...manifest.dsh,
+        profile: {
+          ...manifest.dsh?.profile,
+          bundles,
+        },
+      },
+    });
   } catch (e) {
     logWarn("profile bundles rewrite failed: %s", e instanceof Error ? e.message : String(e));
   }
 }
 
-/** 官方 CLI：dsh plugin --profile <name> <args...>（node 直执行全局 bin.js） */
-async function dshPluginCli(args: string[]): Promise<string> {
+/**
+ * 引擎实际装配行（settings 页插件清单）：官方 `loadProfileDirectory` +
+ * `composeEntries` 组合 profile 各 bundle 的 patch 层与用户层，与引擎 boot
+ * 同源；任一环节不可用时回退到 bundles 清单。
+ */
+export function profileEntryRows(): { id: string; name: string }[] {
+  const dir = PROFILE_DIR();
+  const bin = NPM_DSH_BIN();
+  try {
+    if (bin && existsSync(bin)) {
+      const anchor = join(dirname(dirname(bin)), "package.json");
+      const profile = loadProfileDirectory("mirach", dir, anchor);
+      const rows = composeEntries([...profile.layers.map((layer) => layer.patches), profile.patches]);
+      const entries = rows
+        .filter((row) => typeof row.id === "string")
+        .map((row) => ({
+          id: String(row.id),
+          name: String((row as { name?: unknown }).name ?? ""),
+        }));
+      if (entries.length > 0) return entries;
+    }
+  } catch (err) {
+    logWarn(
+      "profile entry compose failed (fallback to bundles): %s",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return profileBundles().map((name) => ({ id: name, name }));
+}
+
+/** npm 包名 / name@version / @scope/name@version（拒绝 ..、空格、shell 元字符）。 */
+const PKG_SPEC = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[0-9a-zA-Z][0-9a-zA-Z.+_-]*)?$/i;
+
+/** 校验并规范化插件安装规格；非法直接抛错（安装/卸载共用）。 */
+function assertPackageSpec(spec: string): string {
+  const s = spec.trim();
+  if (!s || s.includes("..") || !PKG_SPEC.test(s)) {
+    throw new Error("包名不合法（npm 包名或 name@version）");
+  }
+  return s;
+}
+
+/** 官方 CLI：dsh plugin --profile <name> <args...>（node 直执行全局 bin.js，数组参数不经 shell） */
+function dshPluginCli(args: string[]): Promise<string> {
   const bin = NPM_DSH_BIN();
   if (!bin || !existsSync(bin)) throw new Error("官方 dsh CLI 不存在（npm i -g @deepseek-ai/dsh@alpha）");
-  const { stdout, stderr } = await execP(
-    `"${NODE_BIN()}" "${bin}" plugin --profile ${process.env.MIRACH_PROFILE_NAME ?? "mirach"} ${args.join(" ")}`,
-    { cwd: PROFILE_DIR(), windowsHide: true, timeout: 600_000, maxBuffer: 8 * 1024 * 1024 },
-  );
-  return [stdout, stderr].filter((s) => s && s.trim()).join("\n").trim();
+  const profile = process.env.MIRACH_PROFILE_NAME ?? "mirach";
+  return new Promise((resolve, reject) => {
+    execFile(
+      NODE_BIN(),
+      [bin, "plugin", "--profile", profile, ...args],
+      { cwd: PROFILE_DIR(), windowsHide: true, timeout: 600_000, maxBuffer: 8 * 1024 * 1024, encoding: "utf8" },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`${err.message}${stderr.trim() ? `\n${stderr.trim()}` : ""}`));
+          return;
+        }
+        resolve([stdout, stderr].filter((s) => s && s.trim()).join("\n").trim());
+      },
+    );
+  });
 }
 
 /** 列出 profile dependencies 里已装的插件包（官方安装面） */
@@ -127,39 +196,103 @@ export async function listPlugins(): Promise<InstalledPlugin[]> {
   return out;
 }
 
-/** 安装：官方 CLI add → bundles 追加（幂等）。返回步骤日志。 */
-export async function installPlugin(spec: string): Promise<string[]> {
-  const pkg = spec.trim();
-  if (!/^[@a-z0-9][\w@./-]*$/i.test(pkg)) throw new Error("包名不合法（npm 包名或 name@version）");
-  const lines: string[] = [];
-  lines.push(`dsh plugin add ${pkg} …`);
-  lines.push(await dshPluginCli(["add", pkg]));
-  // 官方 CLI 只维护 dependencies；bundles 清单由调用方维护（官方 project-manager 同款）
-  const realName = resolveRealName(pkg);
-  const bundles = profileBundles();
-  if (!bundles.includes(realName)) {
-    writeProfileBundles([...bundles, realName]);
-    lines.push(`dsh.profile.bundles + ${realName}`);
-  } else {
-    lines.push("bundles 已含该插件，跳过");
+/** profile package.json 原始文本（事务回滚快照用；不存在返回 null）。 */
+function readProfileRaw(): string | null {
+  try {
+    return readFileSync(PROFILE_PKG(), "utf8");
+  } catch {
+    return null;
   }
-  lines.push("完成 —— 重启应用后生效");
-  log("plugins.install %s OK", realName);
-  return lines;
 }
 
-/** 卸载：bundles 移除 → 官方 CLI remove。返回步骤日志。 */
-export async function uninstallPlugin(pkgName: string): Promise<string[]> {
-  const lines: string[] = [];
-  const bundles = profileBundles();
-  if (bundles.includes(pkgName)) {
-    writeProfileBundles(bundles.filter((b) => b !== pkgName));
-    lines.push(`dsh.profile.bundles - ${pkgName}`);
+/** 还原 profile package.json（回滚）。 */
+function restoreProfileRaw(text: string): void {
+  try {
+    writeFileSync(PROFILE_PKG(), text, "utf8");
+  } catch (e) {
+    logWarn("profile manifest rollback failed: %s", e instanceof Error ? e.message : String(e));
   }
-  lines.push(`dsh plugin remove ${pkgName} …`);
-  lines.push(await dshPluginCli(["remove", pkgName]));
-  lines.push("完成 —— 重启应用后生效");
-  log("plugins.uninstall %s OK", pkgName);
+}
+
+/**
+ * 校验一个已安装包确实是可装配的插件（官方 project-manager 的 inspectPlugin 同款）：
+ * package.json 的 name 一致、声明 `dsh.bundle.patch` 且 patch 文件在包目录内存在。
+ */
+export function verifyInstalledPlugin(packageDir: string, expectedName: string): { version: string; patch: string } {
+  const manifest = readPkg(packageDir) as { name?: string; version?: string; dsh?: { bundle?: { patch?: unknown } } };
+  if (manifest.name !== expectedName || typeof manifest.version !== "string") {
+    throw new Error(`已安装包 ${expectedName} 的 package.json name/version 不一致`);
+  }
+  const patch = manifest.dsh?.bundle?.patch;
+  if (typeof patch !== "string" || patch === "") {
+    throw new Error(`${expectedName}@${manifest.version} 未声明 dsh.bundle.patch（不是可装配插件）`);
+  }
+  const patchPath = resolve(packageDir, patch);
+  if (!(patchPath === packageDir || patchPath.startsWith(packageDir + sep)) || !existsSync(patchPath)) {
+    throw new Error(`${expectedName}@${manifest.version} 的 bundle patch 路径非法或不存在：${patch}`);
+  }
+  return { version: manifest.version, patch: patchPath };
+}
+
+/**
+ * 安装插件（事务语义）：快照 profile 清单 → 官方 CLI add → 校验安装结果 →
+ * 追加 bundles；任一步失败则恢复清单并尽力移除已装入的包。
+ */
+export async function installPlugin(spec: string): Promise<string[]> {
+  const pkg = assertPackageSpec(spec);
+  const lines: string[] = [];
+  const snapshot = readProfileRaw();
+  try {
+    lines.push(`dsh plugin add ${pkg} …`);
+    lines.push(await dshPluginCli(["add", pkg]));
+    // 官方 CLI 只维护 dependencies；bundles 清单由调用方维护（官方 project-manager 同款）
+    const realName = resolveRealName(pkg);
+    const verified = verifyInstalledPlugin(join(PROFILE_NM(), realName), realName);
+    lines.push(`已安装 ${realName}@${verified.version}（bundle patch 校验通过）`);
+    const bundles = profileBundles();
+    if (!bundles.includes(realName)) {
+      writeProfileBundles([...bundles, realName]);
+      lines.push(`dsh.profile.bundles + ${realName}`);
+    } else {
+      lines.push("bundles 已含该插件，跳过");
+    }
+    lines.push("完成 —— 重启应用后生效");
+    log("plugins.install %s OK", realName);
+    return lines;
+  } catch (err) {
+    // 回滚：恢复清单（bundles 不会被写坏）+ 尽力移除半装成功的包
+    if (snapshot !== null) restoreProfileRaw(snapshot);
+    await dshPluginCli(["remove", pkg]).catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    logWarn("plugins.install %s failed, rolled back: %s", pkg, msg);
+    throw new Error(`安装失败已回滚：${msg}`);
+  }
+}
+
+/**
+ * 卸载插件（事务语义）：快照清单 → CLI remove → bundles 移除；CLI 失败则恢复清单
+ * （插件仍可装配，避免"清单删了包还在"的半损状态）。
+ */
+export async function uninstallPlugin(pkgName: string): Promise<string[]> {
+  const pkg = assertPackageSpec(pkgName);
+  const lines: string[] = [];
+  const snapshot = readProfileRaw();
+  lines.push(`dsh plugin remove ${pkg} …`);
+  try {
+    lines.push(await dshPluginCli(["remove", pkg]));
+  } catch (err) {
+    if (snapshot !== null) restoreProfileRaw(snapshot);
+    const msg = err instanceof Error ? err.message : String(err);
+    logWarn("plugins.uninstall %s failed, manifest restored: %s", pkg, msg);
+    throw new Error(`卸载失败（清单已恢复）：${msg}`);
+  }
+  const bundles = profileBundles();
+  if (bundles.includes(pkg)) {
+    writeProfileBundles(bundles.filter((b) => b !== pkg));
+    lines.push(`dsh.profile.bundles - ${pkg}`);
+  }
+  lines.push("完成 —— 重启应用生效");
+  log("plugins.uninstall %s OK", pkg);
   return lines;
 }
 

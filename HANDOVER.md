@@ -44,7 +44,7 @@ Mirach = DeepSeek Harness (dsh) 引擎的桌面前端。Tauri 2 + React 19 自�
 ```
 Tauri 壳（Rust）
  ├─ WebView（mirach React 前端，端口 1420 dev）
- │   └─ src/dsh-kernel/boot.ts → 内核加载官方 client 栈（KERNEL_PLUGINS 41 bundle）+ dsh-tavern
+ │   └─ src/dsh-kernel/boot.ts → 内核加载官方 client 栈（KERNEL_PLUGINS 46 bundle）+ dsh-tavern
  ├─ src-tauri（Rust 中继：sidecar 管理、文件操作、git、手机接入 web_host）
  └─ agent-sidecar（Node 进程，stdin/stdout JSON-RPC）
       ├─ 引擎启动：dsh.cmd --profile mirach（npm 全局安装的 dsh CLI）
@@ -94,7 +94,7 @@ Tauri 壳（Rust）
 - NSFW：插件自带开关在原生面板里可用；
 ### 基础设施
 - 引擎 npm 全局安装（更新 = npm i -g @deepseek-ai/dsh@alpha + 重启）
-- 内核加载完整官方 client 栈（KERNEL_PLUGINS 41 bundle：连接/gateway/remotes/session-controller/workspace-controller + 全套 client UI 包（renderer/locale/settings 及分区包/session/workspace/theme/layout/sidebar/conversation/chat/tool/attachment/reference/brand-official + 输入框/对话区/能力包/定时/目录选择器栈）；酒馆与 dsh-pocket 经 apply 侧载）
+- 内核加载完整官方 client 栈（KERNEL_PLUGINS 46 bundle：连接/gateway/remotes/session-controller/workspace-controller + 全套 client UI 包（renderer/locale/settings 及分区包/session/workspace/theme/layout/sidebar/conversation/chat/tool/attachment/reference/brand-official + 输入框/对话区/能力包/定时/目录选择器栈）；酒馆与 dsh-pocket 经 apply 侧载）
 - 插件一键安装器（npm 搜索发现 + 安装/卸载 + 步骤日志）
 - 环境记忆（per-env MEMORY.md + USER.md，sidecar set_env 注入，AI 自维护）
 - About 双标签（Mirach/引擎）+ 真实版本检查 + 一键更新 + 自动更新开关 + 更新内容展示
@@ -198,7 +198,7 @@ npm i -g @deepseek-ai/dsh@alpha
 ## 6. 已知限制 / 待做
 
 ### 待做（按优先级）
-1. **dsh 风格完整官方 ChatView 渲染**：内核已加载全部 41 个官方 bundle；chatStyle=dsh 已由 NativeChatArea 直挂官方 ConversationRoot 树。剩余为官方会话数据接通后的完整体验对齐（对齐后 dsh 风格 = 官方对话区完整体验 + 自动跟随更新）。
+1. **dsh 风格完整官方 ChatView 渲染**：内核已加载全部 46 个官方 bundle；chatStyle=dsh 已由 NativeChatArea 直挂官方 ConversationRoot 树。剩余为官方会话数据接通后的完整体验对齐（对齐后 dsh 风格 = 官方对话区完整体验 + 自动跟随更新）。
 2. **群聊增强**：状态栏卡片/剧情选项按钮在群聊已生效，但群聊上下文靠 prompt 注入最近 12 条（各成员保有自己会话记忆）。
 3. **手机端**：设置 → 手机接入 → 开开关 → 重启 → 扫码即用。已用插件实现。
 4. **dsh-agent-rp**：npm 上不存在（404），待用户提供来源。

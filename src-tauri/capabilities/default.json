@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "quick-entry", "session-*"],
+  "windows": ["main", "quick-entry", "session-*", "hud"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

@@ -25,9 +25,13 @@
 import { DeepSeekHarness, type HarnessSession } from "@deepseek-ai/dsh-sdk-client";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { log, logDebug, logError, logWarn } from "./protocol.js";
-import { resolveRuntimePaths, type RuntimePaths } from "./runtime.js";
+import { resolveRuntimePaths, mirachHome, type RuntimePaths } from "./runtime.js";
 import { subagentEnvForEngine } from "./subagent-backends.js";
+
+/** 应用自有 cordis overlay（官方 desktop.cordis.patch.yml 的 mirach 对应物）。 */
+const MIRACH_OVERLAY_PATCH = fileURLToPath(new URL("../config/mirach.cordis.patch.yml", import.meta.url));
 
 /** 设置页同步进来的完整 provider 配置（保留协议/端点/密钥/模型目录）。 */
 export interface ProviderConfig {
@@ -57,7 +61,8 @@ export interface ActiveModel {
 
 export interface DshRuntimeHandle {
   harness: DeepSeekHarness;
-  session: HarnessSession;
+  /** 会话句柄缓存（按 dsh sessionId 隔离；多会话并行时不互相顶掉）。 */
+  sessions: Map<string, HarnessSession>;
   paths: RuntimePaths;
   model: ActiveModel;
   /** 上次启动注入的 providers dict（重启判断用）。 */
@@ -314,7 +319,7 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
     await runtime.start();
     return runtime;
   }
-  startPromise = (async () => {
+  const start = (async () => {
     if (runtime) {
       log("model/config/env changed (%s/%s) — restarting runtime", model.provider, model.id);
       await runtime.dispose().catch(() => {});
@@ -333,13 +338,15 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
       : "";
     const hasNpmDsh = npmDshBin && existsSync(npmDshBin);
     const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
-    const dshHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach");
+    const dshHome = mirachHome();
     const harnessOptions = {
       // 显式指定全局 npm 安装的引擎入口；未安装时由 SDK 按同版本依赖自解析
       ...(hasNpmDsh ? { dshBin: npmDshBin } : {}),
       profile: profileName,
       // Harness home 指向 mirach 数据目录（profiles/sessions/storages 都住这）
       dshHome,
+      // 应用自有 overlay（叠在 profile 各层与用户 patch 之上；文件缺失时跳过）
+      ...(existsSync(MIRACH_OVERLAY_PATCH) ? { patches: [MIRACH_OVERLAY_PATCH] } : {}),
       processCwd: join(dshHome, "profiles", profileName),
       env: {
         ...runtimeEnv(paths, model),
@@ -365,7 +372,7 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
 
     const h: DshRuntimeHandle = {
       harness,
-      session: harness.session(`session-${cryptoRandomHex()}`),
+      sessions: new Map(),
       paths,
       model,
       providersJson,
@@ -388,24 +395,22 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
     }
     return h;
   })();
+  startPromise = start;
   try {
-    return await startPromise;
+    return await start;
   } finally {
-    startPromise = null;
+    // 只有自己仍是当前 promise 时才清空：并发调用者后写入的 promise 不被误清
+    if (startPromise === start) startPromise = null;
   }
 }
 
 /** 取一个会话句柄（sessionId 未知时由运行时惰性创建）。 */
 export function sessionFor(rt: DshRuntimeHandle, sessionId: string): HarnessSession {
-  if (rt.session.id !== sessionId) {
-    rt.session = rt.harness.session(sessionId);
-  }
-  return rt.session;
-}
-
-function cryptoRandomHex(): string {
-  // 轻量随机后缀，避免与前端 sessionId 冲突
-  return Math.random().toString(16).slice(2, 10);
+  const cached = rt.sessions.get(sessionId);
+  if (cached !== undefined) return cached;
+  const session = rt.harness.session(sessionId);
+  rt.sessions.set(sessionId, session);
+  return session;
 }
 
 /** 关闭并清空当前运行时（sidecar 退出时调用）。 */

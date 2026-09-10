@@ -66,7 +66,7 @@ export function CustomScrollbar({
       ro.disconnect();
       if (timer.current !== undefined) window.clearTimeout(timer.current);
     };
-  }, [scrollRef]);
+  }, [scrollRef, alwaysVisible]);
 
   // 拖动空心圆快速滚动
   const handleMove = (e: React.PointerEvent) => {

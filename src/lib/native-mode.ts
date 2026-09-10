@@ -29,7 +29,8 @@ export interface NativePermissionPreset {
 const $projectedPlan = computed([$rawEvents, $activeSessionId], (events, sid) => {
   if (!sid) return false;
   for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i]!;
+    const ev = events[i];
+    if (!ev) continue;
     if (ev.type === "plan/mode") {
       const d = ev.data as { active?: boolean } | null;
       return d?.active === true;

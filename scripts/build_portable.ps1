@@ -28,17 +28,26 @@ if (-not (Test-Path $exe)) { $exe = Join-Path $repo "src-tauri\target\release\mi
 Copy-Item $exe (Join-Path $pkg "Mirach.exe") -Force
 Write-Output "exe copied"
 
-# 2) portable node (v24 single exe)
+# 2) portable node (v24 single exe)；优先 NODE_22_BIN，回退本机固定路径
+$nodeSrc = if ($env:NODE_22_BIN -and (Test-Path $env:NODE_22_BIN)) { $env:NODE_22_BIN } else { "D:\node.exe" }
+if (-not (Test-Path $nodeSrc)) { throw "node.exe not found: set NODE_22_BIN to a Node >=22.23.2 binary" }
 New-Item -ItemType Directory -Path (Join-Path $rt "node") -Force | Out-Null
-Copy-Item "D:\node.exe" (Join-Path $rt "node\node.exe") -Force
-Write-Output "node copied"
+Copy-Item $nodeSrc (Join-Path $rt "node\node.exe") -Force
+Write-Output "node copied ($nodeSrc)"
 
-# 3) agent-sidecar (src + deps)
+# 3) agent-sidecar：先预编译（发布态跑 dist/index.js，不再依赖 devDependency tsx）
+Push-Location (Join-Path $repo "agent-sidecar")
+& npm run build 2>&1 | Select-Object -Last 2
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "agent-sidecar build failed" }
+Pop-Location
 robocopy (Join-Path $repo "agent-sidecar\src") (Join-Path $rt "agent-sidecar\src") /E /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy (Join-Path $repo "agent-sidecar\dist") (Join-Path $rt "agent-sidecar\dist") /E /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy (Join-Path $repo "agent-sidecar\config") (Join-Path $rt "agent-sidecar\config") /E /NFL /NDL /NJH /NJS /NP | Out-Null
 Copy-Item (Join-Path $repo "agent-sidecar\package.json") (Join-Path $rt "agent-sidecar\package.json") -Force
 Copy-Item (Join-Path $repo "agent-sidecar\tsconfig.json") (Join-Path $rt "agent-sidecar\tsconfig.json") -Force -ErrorAction SilentlyContinue
 robocopy (Join-Path $repo "agent-sidecar\node_modules") (Join-Path $rt "agent-sidecar\node_modules") /E /XJ /NFL /NDL /NJH /NJS /NP | Out-Null
-Write-Output "agent-sidecar copied"
+if (-not (Test-Path (Join-Path $rt "agent-sidecar\dist\index.js"))) { throw "agent-sidecar dist missing after copy" }
+Write-Output "agent-sidecar copied (dist + config + node_modules)"
 
 # 4a) engine source WITHOUT node_modules and WITHOUT following junctions (/XJ)
 $engDir = Join-Path $rt "deepseek-harness"

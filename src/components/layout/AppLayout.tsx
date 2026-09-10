@@ -441,7 +441,9 @@ export function AppLayout() {
             if (ridx === -1) return s;
             const i = list.length - 1 - ridx;
             const next = [...list];
-            next[i] = { ...next[i]!, text: next[i]!.text === "…" ? e.delta : next[i]!.text + e.delta };
+            const cur = next[i];
+            if (cur === undefined) return s;
+            next[i] = { ...cur, text: cur.text === "…" ? e.delta : cur.text + e.delta };
             return { ...s, memberThreads: { ...s.memberThreads, [threadKey]: next } };
           });
           break;
@@ -453,7 +455,8 @@ export function AppLayout() {
             const next = [...list];
             if (ridx >= 0) {
               const i = list.length - 1 - ridx;
-              if (e.text) next[i] = { ...next[i]!, text: e.text };
+              const cur = next[i];
+              if (e.text && cur !== undefined) next[i] = { ...cur, text: e.text };
               else next.splice(i, 1); // 纯工具回合无文本：撤掉占位气泡
             } else if (e.text) {
               next.push({ id: e.messageId, role: "member", text: e.text, time: now(), ...(from ? { from } : {}) });
@@ -495,19 +498,21 @@ export function AppLayout() {
     if (mentioned.length > 0) responders = mentioned;
     else if (g.mode === "round") {
       const turns = (projectSessionRef.current.memberThreads[groupId] ?? []).filter((mm) => mm.role === "user").length;
-      responders = [members[turns % members.length]!];
+      const pick = members[turns % members.length];
+      if (pick !== undefined) responders = [pick];
     }
     setMemberBusy((b) => ({ ...b, [groupId]: true }));
     const convo = members.map((m) => m.name).join("、");
     for (const m of responders) {
       const from = { name: m.name, initials: m.initials, avatarBg: m.avatarBg };
-      const usePreset = !!m.tavernPresetId;
-      try {
+        const presetId = m.tavernPresetId;
+        const usePreset = presetId !== undefined;
+        try {
         const dshId = await bindEngineSession(`member-${m.id}`, usePreset ? null : m.systemPrompt ?? null);
-        if (usePreset && !presetBoundRef.current.has(m.id)) {
-          const ok = await getApi().selectAgentPreset(`member-${m.id}`, m.tavernPresetId!);
+        if (presetId !== undefined && !presetBoundRef.current.has(m.id)) {
+          const ok = await getApi().selectAgentPreset(`member-${m.id}`, presetId);
           presetBoundRef.current.add(m.id);
-          if (ok && dshId) await recordTavernBinding(dshId, m.tavernPresetId!).catch(() => {});
+          if (ok && dshId) await recordTavernBinding(dshId, presetId).catch(() => {});
           if (!ok && m.systemPrompt) await bindEngineSession(`member-${m.id}`, m.systemPrompt);
         }
         // 群聊上下文：最近 12 条快照（逐成员发送前刷新，前面成员的回复可见）
@@ -593,17 +598,18 @@ export function AppLayout() {
       try {
         const member = $agents.get().find((a) => a.id === memberId);
         // 带酒馆预设的成员：人设由预设组合（persona 插件）提供，不再直注入
-        const usePreset = !!member?.tavernPresetId;
+        const presetId = member?.tavernPresetId;
+        const usePreset = presetId !== undefined;
         const dshId = await bindEngineSession(`member-${memberId}`, usePreset ? null : member?.systemPrompt ?? null);
         // 空白会话绑定酒馆预设（agentPresets.select）：世界书智能注入/记忆总结/
         // 关系网/剧情选项随挂载激活；已有回合（locked）时回退人设直注入
-        if (usePreset && !presetBoundRef.current.has(memberId)) {
-          const ok = await getApi().selectAgentPreset(`member-${memberId}`, member!.tavernPresetId!);
+        if (presetId !== undefined && !presetBoundRef.current.has(memberId)) {
+          const ok = await getApi().selectAgentPreset(`member-${memberId}`, presetId);
           presetBoundRef.current.add(memberId);
           if (ok && dshId) {
             // 登记进插件 session-bindings.json（注入门控读它）——世界书/记忆/关系网/NSFW 等由此对
             // 该成员会话激活；未登记的会话零注入（其他环境天然隔离）
-            await recordTavernBinding(dshId, member!.tavernPresetId!).catch(() => {});
+            await recordTavernBinding(dshId, presetId).catch(() => {});
           }
           if (!ok && member?.systemPrompt) {
             await bindEngineSession(`member-${memberId}`, member.systemPrompt);
@@ -808,7 +814,7 @@ export function AppLayout() {
     if (showRight) {
       setRightW(Math.min(rightW, Math.max(MIN_COL_W, avail - nMember)));
     }
-  }, [showRight, rightW, selectedMember, memberW]);
+  }, [showRight, rightW, selectedMember, memberW, panelW, minMainW]);
 
   // ---- 软件面板 = 白色圆角 1580×900（设计默认，勿改）；悬浮在透明窗口内，阴影在透明边距里 ----
 

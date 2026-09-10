@@ -40,6 +40,9 @@ export const DEFAULT_MARKET_SOURCES: MarketSource[] = [
   },
 ];
 
+/** 默认源地址（至少一个默认源；空串仅作类型兜底，不会实际出现）。 */
+export const DEFAULT_MARKET_URL: string = DEFAULT_MARKET_SOURCES[0]?.url ?? "";
+
 const SOURCES_KEY = "mirach.tavern-market.sources";
 const CACHE_KEY = "mirach.tavern-market.cache";
 const MAX_SOURCES = 10;

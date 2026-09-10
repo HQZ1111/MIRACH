@@ -11,9 +11,24 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+// 官方 Harness home 解析（~ 展开 + 绝对化 + 空白 DSH_HOME 视同未设置）
+import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { log, logError } from "./protocol.js";
+
+/** mirach 的 Harness home 默认值（与官方 CLI 的 ~/.dsh 隔离；DSH_HOME 覆盖优先）。 */
+const MIRACH_DEFAULT_HOME = (): string => join(homedir(), ".mirach");
+
+/**
+ * 解析 mirach 数据根：DSH_HOME（非空）→ ~/.mirach，经官方 resolveDshHome
+ * 归一化（展开 ~、转绝对路径、空串视为未设置）。
+ */
+export function mirachHome(): string {
+  const fromEnv = process.env.DSH_HOME?.trim();
+  return resolveDshHome(fromEnv !== undefined && fromEnv.length > 0 ? fromEnv : MIRACH_DEFAULT_HOME());
+}
 
 /**
  * harness checkout 候选根目录（按序探测，第一个存在的生效；DSH_HARNESS_ROOT
@@ -81,7 +96,7 @@ export function resolveRuntimePaths(): RuntimePaths {
   // package.json（bundles = base + sdk-app + web-app）。官方 profile 同时提供
   // stdio JSON-RPC（sdk 面）与 HTTP/WS（web 面），插件经 profile node_modules 解析。
   const npmDsh = process.env.APPDATA ? join(process.env.APPDATA, "npm", "dsh.cmd") : "";
-  const dshHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? harnessRoot, ".mirach");
+  const dshHome = mirachHome();
   const profileName = process.env.MIRACH_PROFILE_NAME ?? "mirach";
   const profilePackage = join(dshHome, "profiles", profileName, "package.json");
   const profileMode =

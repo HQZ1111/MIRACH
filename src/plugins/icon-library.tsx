@@ -138,7 +138,10 @@ export function getIconItem(id: string | undefined): IconItem {
     const hit = byId.get(bare);
     if (hit !== undefined) return hit;
   }
-  return byId.get("bot")!;
+  const fallback = byId.get("bot");
+  if (fallback !== undefined) return fallback;
+  // 内置库至少含 bot 项；构造兜底防表被外部清空
+  return { id: "ph:bot", label: "机器人", keywords: ["bot", "AI", "助手"], Icon: Robot };
 }
 
 export interface EnvIconProps {

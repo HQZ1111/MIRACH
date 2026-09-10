@@ -17,6 +17,15 @@ export interface AppConfig {
   browserHome: string;
   /** 应用数据目录（%APPDATA%\my-hermes-rs，日志/配置存放处） */
   dataDir: string;
+  /** 应用更新源（静态 JSON 端点；空 = 未配置） */
+  updateEndpoint: string;
+  /** 远程引擎（SSH）：sidecar 跑在远端主机 */
+  remoteEnabled?: boolean;
+  remoteHost?: string;
+  remotePort?: string;
+  remoteNode?: string;
+  remoteSidecar?: string;
+  remoteIdentity?: string;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -24,6 +33,7 @@ const DEFAULT_CONFIG: AppConfig = {
   mirachHome: "",
   browserHome: "https://www.bing.com",
   dataDir: "",
+  updateEndpoint: "",
 };
 
 let cache: AppConfig | null = null;

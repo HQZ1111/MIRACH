@@ -47,7 +47,17 @@ pub async fn relay_probe(
             };
         }
         let resp = req.call().map_err(|e| e.to_string())?;
-        let v: Value = resp.into_json().map_err(|e| e.to_string())?;
+        // 体积上限：供应商端点不可信，不能无限缓冲（防内存耗尽）
+        let body = {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            resp.into_reader()
+                .take(5 * 1024 * 1024)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+            String::from_utf8_lossy(&buf).to_string()
+        };
+        let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         let list = v.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
         let models: Vec<Value> = list
             .iter()

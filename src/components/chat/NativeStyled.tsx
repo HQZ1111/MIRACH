@@ -62,7 +62,10 @@ export function useOfficialComponent<P>(
 /** 内核官方词典翻译（'chat' / 'conversation' / 'goal' 等命名空间） */
 export function useNativeTranslate(ns: string): Translate | null {
   const [tick, setTick] = useState(0);
-  const t = useMemo(() => nativeLocaleTranslate(ns), [tick]);
+  const t = useMemo(() => {
+    void tick; // 词典未就绪时 tick 递增触发重算（重试计数不是读取值，但语义上是依赖）
+    return nativeLocaleTranslate(ns);
+  }, [ns, tick]);
   useEffect(() => {
     if (t) return;
     const timer = window.setTimeout(() => setTick((v) => v + 1), 1200);

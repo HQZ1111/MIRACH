@@ -130,12 +130,25 @@ export async function hostFetch(input: RequestInfo | URL, init?: RequestInit): P
   const headers: [string, string][] = [];
   new Headers(init?.headers).forEach((value, name) => { headers.push([name, value]); });
   const bytes = await bodyToBytes(init?.body);
-  const result = await invoke<ProxyResponse>("dsh_http_proxy", {
-    path: url.pathname + url.search,
-    method: init?.method ?? "GET",
-    headers,
-    bodyBase64: bytes === null ? null : base64FromBytes(bytes),
-  });
+  // AbortSignal 透传：请求 id 由前端生成，取消时经 dsh_http_proxy_cancel 让
+  // sidecar abort 在途 HTTP（否则取消后请求仍会跑满 120s 超时）
+  const requestId = crypto.randomUUID();
+  const onAbort = (): void => {
+    void invoke("dsh_http_proxy_cancel", { streamId: requestId }).catch(() => {});
+  };
+  init?.signal?.addEventListener("abort", onAbort, { once: true });
+  let result: ProxyResponse;
+  try {
+    result = await invoke<ProxyResponse>("dsh_http_proxy", {
+      path: url.pathname + url.search,
+      method: init?.method ?? "GET",
+      headers,
+      bodyBase64: bytes === null ? null : base64FromBytes(bytes),
+      requestId,
+    });
+  } finally {
+    init?.signal?.removeEventListener("abort", onAbort);
+  }
   if (init?.signal?.aborted) throw init.signal.reason;
   const bodyBytes = result.bodyBase64 === null || result.bodyBase64 === ""
     ? null
@@ -195,7 +208,8 @@ export async function* hostOpenStream(
         if (signal.aborted) throw signal.reason;
         await new Promise<void>((resolve) => { wake = resolve; });
       }
-      const frame = inbox.shift()!;
+      const frame = inbox.shift();
+      if (frame === undefined) break;
       if (frame.type === "item") {
         yield frame.value;
         continue;
@@ -224,7 +238,22 @@ interface HostTransportGlobal {
     ownsHost?: boolean;
   };
   __DSH_FILE_UPLOAD__?: { fetch: (input: URL, init: RequestInit) => Promise<Response> };
+  /** 官方 connection 的恢复节奏（desktop-host 同款注入点）。 */
+  __DSH_CONNECTION_RECOVERY__?: Record<string, number>;
 }
+
+/**
+ * 官方连接恢复默认值（packages/client/connection/src/recovery-config.ts）。
+ * 客户端缺失该全局时按同值工作——这里显式声明，使 mirach 有一个可调单点
+ * （对齐官方 desktop-host 把宿主配置注入页面的做法）。
+ */
+const CONNECTION_RECOVERY_DEFAULTS: Record<string, number> = {
+  backoffBaseMs: 500,
+  backoffFactor: 2,
+  backoffMaxMs: 10_000,
+  generationReadyWarnMs: 3_000,
+  generationReadyTimeoutMs: 15_000,
+};
 
 /**
  * 安装宿主传输桥（幂等；必须在官方 connection/file-upload 插件 apply 前调用，
@@ -232,6 +261,9 @@ interface HostTransportGlobal {
  */
 export function installKernelTransport(): void {
   const g = globalThis as unknown as HostTransportGlobal;
+  if (g.__DSH_CONNECTION_RECOVERY__ === undefined) {
+    g.__DSH_CONNECTION_RECOVERY__ = { ...CONNECTION_RECOVERY_DEFAULTS };
+  }
   if (g.__DSH_TRANSPORT__?.ownsHost === true) return;
   g.__DSH_TRANSPORT__ = {
     // 宿主（Rust/sidecar）就在本机拥有引擎：特权面（设置文件/本地面板）按

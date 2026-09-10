@@ -110,9 +110,9 @@ function EmbedCard({ href, descriptor, sp, yt, children }: {
         sourceUrl: href,
       }
     : {
-        embedUrl: `https://open.spotify.com/embed/${sp![1]}/${sp![2]}`,
+        embedUrl: `https://open.spotify.com/embed/${sp?.[1] ?? ""}/${sp?.[2] ?? ""}`,
         height: 152,
-        id: `spotify:${sp![1]}:${sp![2]}`,
+        id: `spotify:${sp?.[1] ?? ""}:${sp?.[2] ?? ""}`,
         label: "Spotify",
         maxWidth: 480,
         provider: "spotify",

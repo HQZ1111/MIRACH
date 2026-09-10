@@ -71,7 +71,7 @@ export function getToolMenuActions(): PluginMenuAction[] {
 
 /** 所有左栏导航贡献（环境插件等） */
 export function getSidebarNavs(): PluginSidebarNav[] {
-  return registry.filter((p) => p.sidebarNav).map((p) => p.sidebarNav!);
+  return registry.flatMap((p) => (p.sidebarNav ? [p.sidebarNav] : []));
 }
 
 /** 按路由 id 查插件独立页面（ViewPages 默认分支解析用） */
@@ -84,7 +84,5 @@ export function getPluginViewPage(id: string): PluginViewPage | null {
 
 /** 所有带独立页面的插件（PluginsOverlay「扩展页面」分组用） */
 export function getPluginViewPages(): { pluginId: string; page: PluginViewPage }[] {
-  return registry
-    .filter((p) => p.viewPage)
-    .map((p) => ({ pluginId: p.id, page: p.viewPage! }));
+  return registry.flatMap((p) => (p.viewPage ? [{ pluginId: p.id, page: p.viewPage }] : []));
 }

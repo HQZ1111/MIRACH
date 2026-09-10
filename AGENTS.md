@@ -12,12 +12,25 @@
 
 ## 本项目常用操作要点
 
+- **分发形态 = 便携包（唯一）**：`scripts/build_portable.ps1`（先 `npm run build` 预编译 sidecar → 复制 dist/config/node_modules/node → 引擎源码 + prod hoisted → zip/7z）。**不要用 `pnpm tauri build` 的安装包分发**：`tauri.conf.json` 的 bundle 不含 sidecar/Node/引擎（sidecar 依赖整个 dsh 闭包 ≈250MB），装出来是空壳。发布态 sidecar 入口是 `dist/index.js`（不再依赖 devDependency tsx）；开发态回退 `src/index.ts` + tsx，可用 `MIRACH_SIDECAR_ENTRY` 强制指定。
+- **远程引擎（SSH）**：设置 → 通用 → 远程引擎；实现 = `spawn_sidecar` 在 `remoteEnabled` 时改跑 `ssh -T <host> <node> <remoteSidecar>`（JSONL 走 ssh stdin/stdout，引擎 web 面在远端 sidecar 内完成，无需隧道）。改配置后用"重启引擎连接"（`dsh_restart_sidecar`）生效。远端准备与排错见 `docs/remote-engine.md`。
+- **语言定位 = 简体中文单语**：i18n 机制保留（`lib/i18n.tsx`，设置/命令面板/消息中心等 6 个面板使用 `t()`），其余界面直接写中文——不再要求全量迁移，也不要新增英文-only 文案。
+- **质量门（每次改完先跑）**：`npm run typecheck`（tsc）+ `npm run lint`（oxlint，配置在 `.oxlintrc.json`，只查 src）+ `npm test`（vitest，`src/**/*.test.ts`）；sidecar：`cd agent-sidecar && npm run typecheck && npm test`；Rust：`cd src-tauri && cargo check && cargo test --lib`。**当前全绿：lint 0 warning / 0 error，前端 9 测试，sidecar 15 测试，Rust 14 测试**——不要新增断言/依赖抑制让它们变红。
+- **内核装配 = 官方 client 模块系统**：`dsh-kernel/module-loader-shim.ts` 安装官方 queue 门面（对齐 `packages/client/modules/src/index.ts` 的内联脚本），`boot.ts` 经 `moduleSystem.import(id)` 实例化 bundle；**新增官方 client 包 = 在 KERNEL_PLUGINS 加一行**（bundle 仍需静态 import 以便 Vite 打包）。解析语义（strip /client、重复注册、require 环）归官方，不要自实现。
+- **引擎装配 = 官方 profile API**：bundles 读写走 `@deepseek-ai/dsh-app-boot` 的 `readProfileManifest`/`writeProfileManifest`，装配清单走 `loadProfileDirectory`+`composeEntries`；mirach 自有 overlay 在 `agent-sidecar/config/mirach.cordis.patch.yml`（经 SDK `patches` 注入）。
+- **Harness home 统一走 `mirachHome()`**（sidecar `runtime.ts`，官方 `resolveDshHome` 语义），不要再写 `process.env.DSH_HOME ?? ~/.mirach`。
+- **调试端口默认关闭**：release 的 `tauri.conf.json` 不含 `--remote-debugging-port`（曾有 P0：任意本地进程可接管 webview 调用全部 IPC）。需要 CDP 时用 `npm run tauri:debug`（合并 `src-tauri/tauri.dev.conf.json`）。
+- **CSP 已启用**（`tauri.conf.json` security.csp / devCsp）：新增外部资源（字体/图片/iframe/接口域名）必须在 CSP 里放行，否则线上被静默拦截。
+- **文件命令有白名单**（lib.rs `ensure_path_allowed`）：`read_file/read_dir/rename_path/delete_path/write_user_file/read_file_bytes/reveal_path` 只能访问 工作区 / hermes_home / 数据目录 / 用户主目录下的 .mirach、.dsh、Desktop、Downloads、Documents；新增越权路径会被拒绝（这是有意的）。
+- **`dsh_rpc` 有方法白名单**（dsh_relay.rs `rpc_method_allowed` + sidecar `RPC_PASSTHROUGH`）：新增引擎 RPC 方法必须两处同步登记，否则被拒。
+- **sidecar 命令循环是并发分发**：长命令（npm 安装/更新）不再阻塞 abort/clear_queue；在飞消息由 `activeCmdId` 保护，abort 不会重复终结它。
+- **单实例锁 + 自更新**：`tauri-plugin-single-instance`（第二次启动聚焦主窗）；`tauri-plugin-updater` 端点 = 配置 `updateEndpoint`，签名私钥在 `src-tauri/.tauri-keys/`（已 gitignore，**不要入库**）。
 - **tauri dev 前必须先清 1420 端口**（vite strictPort 冲突 → 白屏）：`netstat -ano | findstr :1420` 找 PID → `taskkill /PID <pid> /F`；TaskStop 停不掉 vite 子进程。
 - **findstr 搜中文匹配不可靠**（ANSI 码页）：用 PowerShell `Select-String` 或 Read 工具。
 - **cargo build 报 exe 被占用（os error 5）**：旧进程在跑 → `taskkill /PID <pid> /F`。
-- **引擎边车进程别用 tokio::process**：std::process + 线程 + mpsc（见 dsh_relay.rs，避免 MutexGuard 跨 await 的 Send 问题）。
+- **引擎边车进程别用 tokio::process**：std::process + 线程 + mpsc（见 dsh_relay.rs，避免 MutexGuard 跨 await 的 Send 问题）；sidecar 加入 Windows Job Object（KILL_ON_JOB_CLOSE），强杀应用也不残留 node/dsh。
 - **AppConfig 双端同步**：Rust `lib.rs` 与前端 `useAppConfig.ts` 字段必须一致。
-- **用户改动的文件可能被用户自行恢复覆盖**：编辑前先 Read 最新状态。
+- **用户改动的文件可能被用户自行恢复覆盖**：编辑前先 Read 最新状态；若 Edit 报 Permission denied，先 `attrib -R <file>`（仓库里存在只读文件）。
 
 ## 架构速览（详见 HANDOVER.md），G:\deepseek-harness-master\apps\mirach\docs里是已调研过的文档。
 

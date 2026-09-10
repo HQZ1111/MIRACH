@@ -76,9 +76,16 @@ fn fts_query(query: &str) -> String {
 // 会话列表
 // ================================================================
 
-/// 会话列表（sessions.db 优先，快照降级），按更新时间倒序
+/// 会话列表（sessions.db 优先，快照降级），按更新时间倒序。
+/// async + spawn_blocking：SQLite 查询可能等锁（busy_timeout 3s），不能阻塞 UI 线程。
 #[tauri::command]
-pub fn sessions_list() -> Vec<SessionSummary> {
+pub async fn sessions_list() -> Vec<SessionSummary> {
+    tauri::async_runtime::spawn_blocking(sessions_list_blocking)
+        .await
+        .unwrap_or_default()
+}
+
+fn sessions_list_blocking() -> Vec<SessionSummary> {
     if let Ok(conn) = open_db() {
         let mut stmt = match conn.prepare(
             "SELECT id, COALESCE(title,''), COALESCE(created_at,''), COALESCE(updated_at,''), message_count
@@ -98,7 +105,11 @@ pub fn sessions_list() -> Vec<SessionSummary> {
                 })
             })
             .and_then(|it| it.collect::<Result<Vec<_>, _>>());
-        return rows.unwrap_or_default();
+        match rows {
+            Ok(v) => return v,
+            // 查询失败（库损坏/被独占）不再静默显示空列表
+            Err(e) => eprintln!("[sessions] sessions_list query failed: {e}"),
+        }
     }
     snapshot_list()
 }
@@ -155,7 +166,13 @@ fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 
 /// 会话全文搜索（messages_fts FTS5；不可用时降级 LIKE）
 #[tauri::command]
-pub fn sessions_search(query: String, limit: Option<u32>) -> Result<Vec<SessionHit>, String> {
+pub async fn sessions_search(query: String, limit: Option<u32>) -> Result<Vec<SessionHit>, String> {
+    tauri::async_runtime::spawn_blocking(move || sessions_search_blocking(query, limit))
+        .await
+        .map_err(|e| format!("sessions_search task failed: {e}"))?
+}
+
+fn sessions_search_blocking(query: String, limit: Option<u32>) -> Result<Vec<SessionHit>, String> {
     let q = query.trim();
     if q.is_empty() {
         return Err("搜索词为空".to_string());
@@ -192,12 +209,13 @@ pub fn sessions_search(query: String, limit: Option<u32>) -> Result<Vec<SessionH
         }
     }
 
-    // 降级：LIKE 模糊扫 messages
+    // 降级：LIKE 模糊扫 messages（转义 %/_，避免用户输入被当通配符）
     let like_sql = "SELECT m.id, m.session_id, m.role, m.content, COALESCE(s.title, m.session_id)
                     FROM messages m LEFT JOIN sessions s ON s.id = m.session_id
-                    WHERE m.content LIKE ?1
+                    WHERE m.content LIKE ?1 ESCAPE '\\'
                     ORDER BY m.id DESC LIMIT ?2";
-    let pattern = format!("%{q}%");
+    let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
     let mut stmt = conn.prepare(like_sql).map_err(|e| e.to_string())?;
     let hits = stmt
         .query_map(params![pattern, lim], |r| {
@@ -220,7 +238,13 @@ pub fn sessions_search(query: String, limit: Option<u32>) -> Result<Vec<SessionH
 
 /// 打开会话：取该会话全部消息（按写入序）
 #[tauri::command]
-pub fn sessions_load(session_id: String) -> Result<Vec<SessionMessage>, String> {
+pub async fn sessions_load(session_id: String) -> Result<Vec<SessionMessage>, String> {
+    tauri::async_runtime::spawn_blocking(move || sessions_load_blocking(session_id))
+        .await
+        .map_err(|e| format!("sessions_load task failed: {e}"))?
+}
+
+fn sessions_load_blocking(session_id: String) -> Result<Vec<SessionMessage>, String> {
     let conn = open_db()?;
     let mut stmt = conn
         .prepare("SELECT id, role, content FROM messages WHERE session_id = ?1 ORDER BY id")
@@ -240,7 +264,13 @@ pub fn sessions_load(session_id: String) -> Result<Vec<SessionMessage>, String> 
 
 /// 重命名会话（best-effort：引擎运行中可能锁库）
 #[tauri::command]
-pub fn sessions_rename(session_id: String, title: String) -> Result<(), String> {
+pub async fn sessions_rename(session_id: String, title: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sessions_rename_blocking(session_id, title))
+        .await
+        .map_err(|e| format!("sessions_rename task failed: {e}"))?
+}
+
+fn sessions_rename_blocking(session_id: String, title: String) -> Result<(), String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("标题不能为空".to_string());
@@ -254,16 +284,28 @@ pub fn sessions_rename(session_id: String, title: String) -> Result<(), String> 
     Ok(())
 }
 
-/// 删除会话（sessions + messages + FTS 索引）
+/// 删除会话（sessions + messages + FTS 索引；单事务，避免半删）
 #[tauri::command]
-pub fn sessions_delete(session_id: String) -> Result<(), String> {
-    let conn = open_db()?;
-    conn.execute("DELETE FROM messages_fts WHERE session_id = ?1", params![session_id])
+pub async fn sessions_delete(session_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || sessions_delete_blocking(session_id))
+        .await
+        .map_err(|e| format!("sessions_delete task failed: {e}"))?
+}
+
+fn sessions_delete_blocking(session_id: String) -> Result<(), String> {
+    let mut conn = open_db()?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    // FTS 索引表结构随引擎版本而异（独立表 / external-content）：
+    // 能按 session_id 删就删，否则交给 content 表触发器——不让整条删除失败。
+    let _ = tx.execute(
+        "DELETE FROM messages_fts WHERE session_id = ?1",
+        params![session_id],
+    );
+    tx.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])
+    tx.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
-        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     // 快照文件一并清理
     let snap = Path::new(&hermes_home())
         .join("sessions")
@@ -277,4 +319,25 @@ pub fn sessions_delete(session_id: String) -> Result<(), String> {
 /// 当前时间（RFC3339 UTC，引擎 sessions.updated_at 同格式）
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fts_query;
+
+    #[test]
+    fn fts_query_quotes_each_word() {
+        assert_eq!(fts_query("hello world"), "\"hello\" \"world\"");
+    }
+
+    #[test]
+    fn fts_query_strips_quotes() {
+        // 用户输入里的引号会破坏 FTS5 语法，必须先剔除
+        assert_eq!(fts_query("a\"b c"), "\"ab\" \"c\"");
+    }
+
+    #[test]
+    fn fts_query_handles_blank() {
+        assert_eq!(fts_query("   "), "");
+    }
 }

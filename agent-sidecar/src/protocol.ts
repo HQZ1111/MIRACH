@@ -47,13 +47,37 @@ export const logWarn = (...args: unknown[]): void => logAt("warn", ...args);
 export const logError = (...args: unknown[]): void => logAt("error", ...args);
 export const logDebug = (...args: unknown[]): void => logAt("debug", ...args);
 
-/** 向 stdout 写一条 JSON 行；EPIPE（后端已退出）时干净地结束进程。 */
+type ShutdownHook = () => Promise<void> | void;
+let shutdownHook: ShutdownHook | null = null;
+let exiting = false;
+
+/** 注册进程退出前的清理回调（index.ts 注入 shutdownKernelBridge/shutdownRuntime）。 */
+export function onShutdown(hook: ShutdownHook): void {
+  shutdownHook = hook;
+}
+
+/** 尽力清理后退出（幂等；清理超时 3s 兜底，避免管道已断时挂住进程）。 */
+export async function gracefulExit(code: number): Promise<void> {
+  if (exiting) return;
+  exiting = true;
+  try {
+    await Promise.race([
+      Promise.resolve(shutdownHook?.()),
+      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+    ]);
+  } catch (err) {
+    logWarn("shutdown hook failed: %s", err instanceof Error ? err.message : String(err));
+  }
+  process.exit(code);
+}
+
+/** 向 stdout 写一条 JSON 行；EPIPE（后端已退出）时清理子进程后结束。 */
 export function send(obj: unknown): void {
   try {
     process.stdout.write(`${JSON.stringify(obj)}\n`);
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "EPIPE") {
-      process.exit(0);
+      void gracefulExit(0);
     }
     throw err;
   }
@@ -61,6 +85,6 @@ export function send(obj: unknown): void {
 
 process.stdout.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EPIPE") {
-    process.exit(0);
+    void gracefulExit(0);
   }
 });

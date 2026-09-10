@@ -15,17 +15,18 @@ import { MarkdownText } from "@/components/chat/markdown/MarkdownText";
 
 export function PreviewPanel() {
   const target = useStore($previewTarget);
+  const targetUrl = target?.url ?? "";
   // 本地文件路径 → 读内容展示（md 用 MarkdownText 渲染；read_file >2MB 报错友好提示）
-  const isLocal = !!target && !/^https?:\/\//i.test(target.url) && /^[A-Za-z]:[\\/]/.test(target.url);
+  const isLocal = targetUrl !== "" && !/^https?:\/\//i.test(targetUrl) && /^[A-Za-z]:[\\/]/.test(targetUrl);
   const [content, setContent] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     setContent(null);
     setErr(null);
-    if (!target || !isLocal) return;
+    if (!targetUrl || !isLocal) return;
     let cancelled = false;
-    void invoke<string>("read_file", { path: target.url })
+    void invoke<string>("read_file", { path: targetUrl })
       .then((text) => {
         if (!cancelled) setContent(text);
       })
@@ -35,7 +36,7 @@ export function PreviewPanel() {
     return () => {
       cancelled = true;
     };
-  }, [target?.url, isLocal]);
+  }, [targetUrl, isLocal]);
 
   const isMd = !!target && /\.(md|markdown)$/i.test(target.url);
 

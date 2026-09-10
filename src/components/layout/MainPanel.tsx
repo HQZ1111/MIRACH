@@ -75,8 +75,8 @@ import { nativeToggleSidebar } from "@/dsh-kernel/boot";
 // ================================================================
 // 工作状态类型
 // ================================================================
-// ActivityStep 已移除 — 思考过程改用 ThinkingDisclosure 组件
-// 工具调用改用 ToolEntry 组件 + $toolCalls store
+// 思考过程/工具调用统一由官方 ui-chat 树渲染（NativeStyled/官方 ConversationRoot）；
+// mirach 侧的 ActivityStep/ToolEntry 本地组件已删除。
 
 // ================================================================
 // 顶栏插件图标条（真实数据源 = 引擎装配清单 config.pluginEntries）
@@ -571,7 +571,7 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
       if (!alive || historySeq !== historyReqSeq.current) return;
       // 切会话/切环境：原始事件日志 + 装配引擎（时间线/四投影）一并复位，
       // 再由 get_history 的历史事件重建（官方投影=会话级累计，跨会话必须清零）
-      resetRawEvents();
+      resetRawEvents(activeId);
       try {
         const r = await invoke<{
           messages?: Parameters<typeof loadLiveHistory>[0];
@@ -580,7 +580,7 @@ export function MainPanel({ className, style, showLeft = true, onExpandLeft, pal
         if (!alive || historySeq !== historyReqSeq.current) return;
         const msgs = r?.messages ?? [];
         // 历史原始事件先于消息落装配引擎（整批 O(n) 去重，与实时流重叠安全）
-        pushRawEvents(r?.events ?? []);
+        pushRawEvents(activeId, r?.events ?? []);
         // 整组替换即含清空（空历史=清空，杜绝上一会话残留）；空判断只为内容标记
         loadLiveHistory(msgs);
         if (msgs.length > 0) markSessionContent(activeId);

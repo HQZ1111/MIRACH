@@ -508,6 +508,108 @@ export function GeneralContent() {
       </FieldRow>
 
       <WorkEnvironmentsSection />
+      <RemoteEngineSection />
+    </div>
+  );
+}
+
+// ---- 远程引擎（SSH）：sidecar 跑在远端，本地只做壳 ----
+
+interface RemoteEngineConfig extends Record<string, unknown> {
+  remoteEnabled?: boolean;
+  remoteHost?: string;
+  remotePort?: string;
+  remoteNode?: string;
+  remoteSidecar?: string;
+  remoteIdentity?: string;
+}
+
+/**
+ * 远程模式 = 本地用 `ssh -T <host> <node> <远端 sidecar>` 当引擎子进程：
+ * 引擎、工具执行、会话/记忆都在远端；本地面板（文件/终端/git）仍操作本地。
+ */
+function RemoteEngineSection() {
+  const [cfg, setCfg] = useState<RemoteEngineConfig>({});
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState("");
+  useEffect(() => {
+    void invoke<RemoteEngineConfig>("get_config")
+      .then((c) => setCfg(c))
+      .catch(() => {});
+  }, []);
+  const save = (patch: RemoteEngineConfig): void => {
+    setCfg((c) => ({ ...c, ...patch }));
+    void invoke("set_config", patch).catch(() => {});
+  };
+  const test = (): void => {
+    setBusy(true);
+    setLog("连接中…");
+    void invoke<string>("ssh_test", {
+      host: cfg.remoteHost ?? "",
+      port: cfg.remotePort ?? "",
+      identity: cfg.remoteIdentity ?? "",
+      node: cfg.remoteNode || "node",
+      sidecar: cfg.remoteSidecar ?? "",
+    })
+      .then((r) => setLog(`✓ ${r}`))
+      .catch((e: unknown) => setLog(`✗ ${String(e)}`))
+      .finally(() => setBusy(false));
+  };
+  const restart = (): void => {
+    setBusy(true);
+    setLog("重启引擎连接…");
+    void invoke("dsh_restart_sidecar")
+      .then(() => setLog("已请求重启（引擎会自动重连）"))
+      .catch((e: unknown) => setLog(String(e)))
+      .finally(() => setBusy(false));
+  };
+  const inputCls =
+    "h-8 w-full rounded-md border border-border bg-transparent px-2 text-xs focus:outline-none focus:ring-1 focus:ring-[#2E5BFF]/40";
+  return (
+    <div className="mt-4 space-y-2">
+      <FieldRow
+        label="远程引擎（SSH）"
+        hint="开启后引擎在远端主机运行（需远端已部署 Node ≥22.23.2 与 agent-sidecar）；本地面板仍操作本地文件"
+      >
+        <Segmented
+          options={["关闭", "开启"]}
+          value={cfg.remoteEnabled ? "开启" : "关闭"}
+          onChange={(v) => save({ remoteEnabled: v === "开启" })}
+        />
+      </FieldRow>
+      {cfg.remoteEnabled === true && (
+        <div className="space-y-2 rounded-lg border border-border p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <input className={inputCls} placeholder="user@host" value={cfg.remoteHost ?? ""}
+              onChange={(e) => setCfg((c) => ({ ...c, remoteHost: e.target.value }))}
+              onBlur={(e) => save({ remoteHost: e.target.value.trim() })} />
+            <input className={inputCls} placeholder="端口（默认 22）" value={cfg.remotePort ?? ""}
+              onChange={(e) => setCfg((c) => ({ ...c, remotePort: e.target.value }))}
+              onBlur={(e) => save({ remotePort: e.target.value.trim() })} />
+            <input className={inputCls} placeholder="远端 node（默认 node）" value={cfg.remoteNode ?? ""}
+              onChange={(e) => setCfg((c) => ({ ...c, remoteNode: e.target.value }))}
+              onBlur={(e) => save({ remoteNode: e.target.value.trim() || "node" })} />
+            <input className={inputCls} placeholder="SSH 私钥（可选，-i）" value={cfg.remoteIdentity ?? ""}
+              onChange={(e) => setCfg((c) => ({ ...c, remoteIdentity: e.target.value }))}
+              onBlur={(e) => save({ remoteIdentity: e.target.value.trim() })} />
+          </div>
+          <input className={inputCls} placeholder="远端 sidecar 入口绝对路径（…/agent-sidecar/dist/index.js）"
+            value={cfg.remoteSidecar ?? ""}
+            onChange={(e) => setCfg((c) => ({ ...c, remoteSidecar: e.target.value }))}
+            onBlur={(e) => save({ remoteSidecar: e.target.value.trim() })} />
+          <div className="flex items-center gap-2">
+            <button onClick={test} disabled={busy}
+              className="rounded-md border border-border px-2.5 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50">
+              测试连接
+            </button>
+            <button onClick={restart} disabled={busy}
+              className="rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50">
+              重启引擎连接
+            </button>
+            {log && <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{log}</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -942,7 +1044,7 @@ export function KeybindsContent() {
     const g = new Map<string, typeof KEYBIND_ACTIONS>();
     for (const a of KEYBIND_ACTIONS) {
       if (!g.has(a.group)) g.set(a.group, []);
-      g.get(a.group)!.push(a);
+      g.get(a.group)?.push(a);
     }
     return [...g.entries()];
   }, []);
@@ -1789,6 +1891,40 @@ export function AboutContent() {
     setAutoUpdate(next);
     localStorage.setItem("mirach.autoUpdateEngine", next ? "1" : "0");
   };
+  // 应用自更新（Tauri updater：端点可配置，签名公钥在 tauri.conf.json）
+  const [appInfo, setAppInfo] = useState<{ available: boolean; version?: string; currentVersion?: string; notes?: string | null } | null>(null);
+  const [appBusy, setAppBusy] = useState(false);
+  const [appLog, setAppLog] = useState("");
+  const [updateEndpoint, setUpdateEndpoint] = useState("");
+  useEffect(() => {
+    void invoke<{ updateEndpoint?: string }>("get_config")
+      .then((c) => setUpdateEndpoint(c.updateEndpoint ?? ""))
+      .catch(() => {});
+  }, []);
+  const checkApp = (): void => {
+    setAppBusy(true);
+    setAppLog("");
+    void invoke<{ available: boolean; version?: string; currentVersion?: string; notes?: string | null }>("app_update_check")
+      .then(setAppInfo)
+      .catch((e: unknown) => {
+        setAppInfo(null);
+        setAppLog(String(e));
+      })
+      .finally(() => setAppBusy(false));
+  };
+  const installApp = (): void => {
+    setAppBusy(true);
+    setAppLog("下载并安装中（安装器接管后应用会重启）…");
+    void invoke<string>("app_update_install")
+      .then((v) => setAppLog(`已安装 ${v}，应用将重启`))
+      .catch((e: unknown) => setAppLog(String(e)))
+      .finally(() => setAppBusy(false));
+  };
+  const saveEndpoint = (value: string): void => {
+    const v = value.trim();
+    setUpdateEndpoint(v);
+    void invoke("set_config", { updateEndpoint: v }).catch(() => {});
+  };
   return (
     <div className="space-y-4 px-5 py-6">
       <div className="flex flex-col items-center gap-2">
@@ -1814,12 +1950,48 @@ export function AboutContent() {
           ))}
         </div>
         {updateTab === "mirach" ? (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#10B981]" />
-              <span className="text-body-sm font-medium text-[#303030]">v0.1.0</span>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={cn("h-2.5 w-2.5 rounded-full", appInfo === null ? "bg-[#D1D5DB]" : appInfo.available ? "bg-[#F59E0B]" : "bg-[#10B981]")} />
+                <span className="text-body-sm font-medium text-[#303030]">
+                  {appInfo === null
+                    ? "v0.1.0"
+                    : appInfo.available
+                      ? `有新版本 ${appInfo.version}（当前 ${appInfo.currentVersion ?? "0.1.0"}）`
+                      : `已是最新 v${appInfo.currentVersion ?? "0.1.0"}`}
+                </span>
+              </div>
+              <button
+                onClick={checkApp}
+                disabled={appBusy}
+                className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#464646] transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                {appBusy ? "检查中…" : "检查更新"}
+              </button>
             </div>
-            <span className="text-[11px] text-muted-foreground">Mirach 更新由开发者推送</span>
+            {appInfo?.available && (
+              <div className="flex items-center justify-between gap-2">
+                <p className="min-w-0 flex-1 truncate text-[11px] text-[#B45309]">{appInfo.notes ?? "签名更新包"}</p>
+                <button
+                  onClick={installApp}
+                  disabled={appBusy}
+                  className="shrink-0 rounded-md bg-[#017CF3] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#017CF3]/90 disabled:opacity-50"
+                >
+                  下载并安装
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                value={updateEndpoint}
+                onChange={(e) => setUpdateEndpoint(e.target.value)}
+                onBlur={(e) => saveEndpoint(e.target.value)}
+                placeholder="更新源 URL（留空 = 关闭；支持 {{target}} 占位）"
+                className="min-w-0 flex-1 rounded-md border border-border px-2 py-1 text-[11px] text-[#303030] outline-none focus:border-[#017CF3]"
+              />
+            </div>
+            {appLog && <p className="text-[11px] text-muted-foreground">{appLog}</p>}
           </div>
         ) : (
           <>

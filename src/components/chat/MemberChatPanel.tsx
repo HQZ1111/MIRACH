@@ -41,12 +41,12 @@ function parseTavernText(text: string): ParsedTavernText {
   let options: string[] | undefined;
   const sb = /(?:^|\n)状态栏[：:][ \t]*\n?([\s\S]*?)(?=\n\s*\n|$)/.exec(main);
   if (sb) {
-    status = sb[1]!.trim();
+    status = (sb[1] ?? "").trim();
     main = (main.slice(0, sb.index) + main.slice(sb.index + sb[0].length)).trim();
   }
   const opt = /接下来你想怎么做？\s*\n\s*1[.、．]\s*(.+)\n\s*2[.、．]\s*(.+)\n\s*3[.、．]\s*(.+)\s*$/.exec(main);
   if (opt) {
-    options = [opt[1]!.trim(), opt[2]!.trim(), opt[3]!.trim()];
+    options = [(opt[1] ?? "").trim(), (opt[2] ?? "").trim(), (opt[3] ?? "").trim()];
     main = main.slice(0, opt.index).trim();
   }
   return { main, status, options };

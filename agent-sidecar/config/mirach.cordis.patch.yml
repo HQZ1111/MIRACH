@@ -1,0 +1,19 @@
+# mirach 应用自有 overlay —— 官方 apps/desktop-host/config/desktop.cordis.patch.yml 的对应物
+#
+# 经 SDK 的 per-launch `patches`（@deepseek-ai/dsh-sdk-client HarnessClientOptions.patches）
+# 注入，叠在 profile 各 bundle 层与用户 cordis.patch.yml 之上。
+#
+# 为什么放应用目录而不是用户 profile：
+#   - profile 重建 / 引擎升级不会覆盖本文件
+#   - 这里只放 mirach 自身的装配差异；用户与环境配置仍留在 profile 用户层
+#
+# 当前为空：mirach 需要的行（web 面启用、credentials 注入、目录选择器）已在
+# profile 用户层与前端 KERNEL_PLUGINS 中。新增行时在此追加，例如官方桌面壳的
+# 随包预设根（待 dsh 发行包提供 config/agent-presets 目录后启用）：
+#
+#   - id: agent-presets
+#     config:
+#       roots:
+#         - path: <随包预设目录>
+#           trust: system
+[]

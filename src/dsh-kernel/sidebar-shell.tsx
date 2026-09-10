@@ -285,11 +285,12 @@ function initSidebarActions(ctx: Context): SidebarActions {
   // 工作区快照读取器：官方 workspace-controller 的 list 是快照源对象
   // （WorkspaceSource：getSnapshot()/subscribe()，不是方法）
   const wsSource = (workspaces as unknown as { list?: { getSnapshot?: () => WorkspaceSnapshotLike; subscribe?: (fn: () => void) => () => void } } | undefined)?.list;
-  workspaceSnapshotGetter =
-    typeof wsSource?.getSnapshot === "function" ? () => wsSource.getSnapshot!() ?? null : null;
+  const getSnapshot = typeof wsSource?.getSnapshot === "function" ? wsSource.getSnapshot : undefined;
+  const subscribe = typeof wsSource?.subscribe === "function" ? wsSource.subscribe : undefined;
+  workspaceSnapshotGetter = getSnapshot !== undefined ? () => getSnapshot.call(wsSource) ?? null : null;
   workspaceSourceRef =
-    typeof wsSource?.getSnapshot === "function" && typeof wsSource?.subscribe === "function"
-      ? { getSnapshot: () => wsSource.getSnapshot!() ?? null, subscribe: (fn) => wsSource.subscribe!(fn) }
+    getSnapshot !== undefined && subscribe !== undefined
+      ? { getSnapshot: () => getSnapshot.call(wsSource) ?? null, subscribe: (fn) => subscribe.call(wsSource, fn) }
       : null;
   return {
     open: (id) => { sessions?.open?.(id); },
@@ -708,6 +709,9 @@ function MirachSidebar(props: SidebarRootComponentProps) {
       deriveFlat(list, archivedSessionIds, pendingInteractions).filter((node) =>
         sessionBelongsToEnv(node.id, currentEnvId, list.current),
       ),
+    // sessionEnvIndex 只是"环境归属可能变了"的信号：deriveFlat 的输入不含它，
+    // 但环境切换必须重算（sessionBelongsToEnv 读的是引擎侧映射快照）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [list, archivedSessionIds, pendingInteractions, currentEnvId, sessionEnvIndex],
   );
 

@@ -32,7 +32,7 @@ export function getSessionChat(sessionId: string, _title: string): SessionChatMs
 /** 追加消息到指定会话（保证会话消息存在；通知订阅者） */
 function push(sessionId: string, msg: SessionChatMsg): void {
   getSessionChat(sessionId, "新会话");
-  const list = cache.get(sessionId)!;
+  const list = cache.get(sessionId) ?? [];
   // 不可变更新：必须返回新数组引用，否则 MessageList（memo 浅比较）bail out，
   // mock 模式发送的消息永远不显示
   const next = [...list, msg];

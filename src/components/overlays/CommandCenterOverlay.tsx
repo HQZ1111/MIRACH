@@ -87,7 +87,8 @@ export function CommandCenterOverlay({ initialTab = "sessions" }: { initialTab?:
   const [logFile, setLogFile] = useState("agent");
   const [logLevel, setLogLevel] = useState("all");
 
-  const section = SECTIONS.find((s) => s.id === active)!;
+  const section = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0];
+  if (!section) return null;
 
   return (
     <div className="flex h-full">

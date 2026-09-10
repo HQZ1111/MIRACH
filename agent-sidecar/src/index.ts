@@ -28,18 +28,29 @@ import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
 import { createDshAdapter } from "./adapter.js";
 import { ensureRuntime, shutdownRuntime, sessionFor, catalog, findModel, routeFor, syncProviderConfig, setEffort, setWorkspace, setSystemPrompt, workspace, DEFAULT_MODEL, PROVIDER_ROUTE, type ActiveModel, type DshRuntimeHandle } from "./dsh.js";
 import { readSessionHistory, readSessionRawEvents, listAllSessions } from "./history.js";
-import { log, logDebug, logError, logWarn, send } from "./protocol.js";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { log, logDebug, logError, logWarn, send, onShutdown, gracefulExit } from "./protocol.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
 import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
-import { handleHttpProxy, handleMuxClose, handleMuxOpen, shutdownKernelBridge } from "./kernel-bridge.js";
-import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine } from "./plugins.js";
+import { cancelHttpProxy, handleHttpProxy, handleMuxClose, handleMuxOpen, shutdownKernelBridge } from "./kernel-bridge.js";
+import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine, profileEntryRows } from "./plugins.js";
 import { subagentBackendsStatus, subagentSetEnabled } from "./subagent-backends.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
 
 // ── 状态 ──────────────────────────────────────────────────────────────────
+
+/** 允许透传到引擎 HTTP 面的方法白名单（本地方法在 rpc 分发中先行处理）。
+ *  只列前端实际使用的方法：防 confused deputy —— webview 注入脚本不能借
+ *  引擎会话凭据调用任意 RPC（如 sessions.delete / workspace 文件操作）。 */
+const RPC_PASSTHROUGH: readonly RegExp[] = [
+  /^messageFeedback\.put$/,
+  /^session\.modelCatalog$/,
+  /^session\.selectModel$/,
+  /^settings\.describe$/,
+  /^workflow\.[\w.-]+$/,
+];
 
 const queue = new MessageQueue({
   onUpdate: (steering, followUp) => {
@@ -93,12 +104,17 @@ function loadSessionMap(): void {
   }
 }
 
-/** 持久化映射（变更/换 id 后调用；失败静默——内存态仍可用）。 */
+/** 持久化映射（变更/换 id 后调用）。
+ *  原子写（临时文件 + rename）：崩溃在写一半不会留下损坏的 JSON，
+ *  也就不会在下一次启动时丢掉全部 前端会话 ↔ dsh 会话 映射。 */
 function saveSessionMap(): void {
   try {
+    const root = resolveRuntimePaths().sessionRoot;
+    mkdirSync(root, { recursive: true });
     const f = sessionMapFile();
-    mkdirSync(resolveRuntimePaths().sessionRoot, { recursive: true });
-    writeFileSync(f, JSON.stringify(Object.fromEntries(sessionMap)), "utf8");
+    const tmp = `${f}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(sessionMap)), "utf8");
+    renameSync(tmp, f);
   } catch (err) {
     logWarn("session map save failed: %s", err instanceof Error ? err.message : String(err));
   }
@@ -106,6 +122,8 @@ function saveSessionMap(): void {
 
 /** 正在执行 run 的 worker（保证单飞）。 */
 let runPromise: Promise<void> | null = null;
+/** 正在执行的消息 cmdId（abort/clear_queue 不得把它当排队项收尾）。 */
+let activeCmdId: string | null = null;
 
 function emitEvent(evt: unknown): void {
   send({ type: "event", event: evt });
@@ -146,6 +164,7 @@ async function runWorker(): Promise<void> {
     const msg = queue.peek();
     if (!msg) break;
     log("run: %s (%s) — %s", msg.kind, msg.cmdId, msg.text.slice(0, 60));
+    activeCmdId = msg.cmdId;
     try {
       await runOne(msg);
     } catch (err) {
@@ -153,6 +172,7 @@ async function runWorker(): Promise<void> {
       send({ type: "error", id: msg.cmdId, message: err instanceof Error ? err.message : String(err) });
       send({ type: "done", id: msg.cmdId });
     } finally {
+      activeCmdId = null;
       queue.dequeue(msg.cmdId);
     }
   }
@@ -372,21 +392,20 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       return;
     }
     case "abort": {
-      // 丢弃排队项并逐个补发 error/done（前端气泡需要收尾，避免永久转圈 +
-      // 后端 pending 表泄漏）；当前正在执行的 turn 引擎无 abort RPC，仍会跑完
-      while (queue.length > 0) {
-        const m = queue.peek();
-        if (!m) break;
-        queue.dequeue(m.cmdId);
-        send({ type: "error", id: m.cmdId, message: "aborted by user" });
-        send({ type: "done", id: m.cmdId });
+      // 丢弃排队项（保留正在执行的那条）并逐个补发 error/done（前端气泡需要
+      // 收尾，避免永久转圈 + 后端 pending 表泄漏）；正在执行的 turn 引擎无
+      // abort RPC，仍会跑完——其 done 由 runOne 发出，这里不得重复终结。
+      const drained = queue.drainExcept(activeCmdId);
+      for (const d of drained.dropped) {
+        send({ type: "error", id: d.cmdId, message: "aborted by user" });
+        send({ type: "done", id: d.cmdId });
       }
       send({ type: "result", id, data: { accepted: true, command: "abort" } });
       log("abort: requested (runtime 无 abort RPC，后台继续跑完当前 turn)");
       return;
     }
     case "clear_queue": {
-      const drained = queue.drain();
+      const drained = queue.drainExcept(activeCmdId);
       // drain 收回 steer/follow_up 给前端编辑；prompt 类条目没有去处，
       // 补发收尾信封防止对应气泡永久转圈
       for (const d of drained.dropped) {
@@ -798,20 +817,23 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
       // 本地方法：config.pluginEntries（设置页插件列表）——读生成 cordis.yml 的
       // 插件条目（引擎没有对应 RPC，这里是 sidecar 侧真实装配的镜像）
       if (method === "config.pluginEntries") {
+        // 装配清单 = 官方 profile 组合结果（loadProfileDirectory + composeEntries，
+        // 与引擎 boot 同源）。原实现读已删除的 cordis.generated.yml，恒空 + 每次告警。
         try {
-          const yml = readFileSync(sessionMapFile().replace("session-map.json", "cordis.generated.yml"), "utf8");
-          const entries: { id: string; name?: string }[] = [];
-          for (const m of yml.matchAll(/-\s+id:\s*(\S+)\s*\n\s*name:\s*'?([\w@/.-]+)'?/g)) {
-            entries.push({ id: m[1], name: m[2] });
-          }
-          send({ type: "result", id, data: { entries } });
+          send({ type: "result", id, data: { entries: profileEntryRows() } });
         } catch (err) {
-          logWarn("config.pluginEntries read failed: %s", err instanceof Error ? err.message : String(err));
+          logWarn("config.pluginEntries failed: %s", err instanceof Error ? err.message : String(err));
           send({ type: "result", id, data: { entries: [] } });
         }
         return;
       }
       try {
+        // 透传白名单：只允许前端实际使用的引擎方法（本地方法在上方各自处理）。
+        // 防 confused deputy：webview 注入脚本不能借引擎会话凭据调用任意 RPC。
+        if (!RPC_PASSTHROUGH.some((re) => re.test(method))) {
+          send({ type: "error", id, message: `rpc method not allowed: ${method}` });
+          return;
+        }
         // typert remote 只走引擎 web 面 /api（SDK stdio 白名单只有
         // initialize/session/prompt/shutdown——旧 harness.client.request
         // 通道全部不可达，2026-09 实测定案）。见 rpc-http.ts。
@@ -840,7 +862,14 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
     case "http_proxy": {
       // 内核（官方客户端栈）unary RPC 代发：Node 侧带 cookie 访问引擎 /api。
       // 不 await——readline 命令循环不能被单次 HTTP 往返卡住（其余命令照常排队）。
-      void handleHttpProxy({ id, path: cmd.path, method: cmd.method, headers: cmd.headers, bodyBase64: cmd.bodyBase64 });
+      void handleHttpProxy({ id, path: cmd.path, method: cmd.method, headers: cmd.headers, bodyBase64: cmd.bodyBase64 }).catch(
+        (err) => logWarn("http_proxy failed: %s", err instanceof Error ? err.message : String(err)),
+      );
+      return;
+    }
+    case "http_proxy_cancel": {
+      // 前端 AbortSignal → 中止在途 HTTP（120s 超时兜底之外的主动取消）
+      cancelHttpProxy(id);
       return;
     }
     case "mux_open": {
@@ -933,6 +962,22 @@ async function remoteCallAny(
 
 async function main(): Promise<void> {
   log("Hermes agent-sidecar starting (pid=%s)", process.pid);
+  // 退出清理钩子：EPIPE / 信号 / 致命异常都走同一条清理路径，避免引擎孤儿进程
+  onShutdown(async () => {
+    await shutdownKernelBridge().catch(() => {});
+    await shutdownRuntime().catch(() => {});
+  });
+  process.on("SIGINT", () => void gracefulExit(0));
+  process.on("SIGTERM", () => void gracefulExit(0));
+  // 浮动 promise 不再让 Node 直接崩（默认行为会杀死 sidecar 并留下引擎孤儿）
+  process.on("unhandledRejection", (reason) => {
+    logError("unhandledRejection: %s", reason instanceof Error ? reason.stack ?? reason.message : String(reason));
+  });
+  // 未捕获异常后进程状态不可信：记录并干净退出，由 Rust 侧重启 sidecar
+  process.on("uncaughtException", (err) => {
+    logError("uncaughtException: %s", err.stack ?? err.message);
+    void gracefulExit(1);
+  });
   const paths = resolveRuntimePaths();
   log("harnessRoot=%s", paths.harnessRoot);
 
@@ -954,6 +999,10 @@ async function main(): Promise<void> {
   });
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  // 并发分发：长命令（npm install 最长 300s / plugins.install 600s / rpc 300s）
+  // 不能阻塞 abort / clear_queue / set_env 等短命令的读取与处理（否则 UI 假死、
+  // 取消无效）。命令体的同步前缀按到达顺序执行，队列/映射的写入顺序不变。
+  const inflight = new Set<Promise<void>>();
   for await (const line of rl) {
     if (!line.trim()) continue;
     let cmd: InboundCommand;
@@ -963,15 +1012,23 @@ async function main(): Promise<void> {
       logWarn("Invalid JSON: %s", line.slice(0, 100));
       continue;
     }
-    try {
-      await handleCommand(cmd);
-    } catch (err) {
-      logError("command error (type=%s): %s", cmd.type, err instanceof Error ? err.message : String(err));
-      send({ type: "error", id: cmd.id ?? "unknown", message: err instanceof Error ? err.message : String(err) });
-    }
+    const run = handleCommand(cmd)
+      .catch((err) => {
+        logError("command error (type=%s): %s", cmd.type, err instanceof Error ? err.message : String(err));
+        send({ type: "error", id: cmd.id ?? "unknown", message: err instanceof Error ? err.message : String(err) });
+      })
+      .finally(() => {
+        inflight.delete(run);
+      });
+    inflight.add(run);
   }
 
-  log("Sidecar shutting down (stdin closed)");
+  log("Sidecar shutting down (stdin closed) — %d in-flight command(s)", inflight.size);
+  // 收尾等待有上限：后端已退出时不能让进程挂住
+  await Promise.race([
+    Promise.allSettled([...inflight]),
+    new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+  ]);
   await shutdownKernelBridge();
   await shutdownRuntime();
   process.exit(0);

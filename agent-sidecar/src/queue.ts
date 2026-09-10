@@ -66,19 +66,22 @@ export class MessageQueue {
     return undefined;
   }
 
-  /** 清空队列（前端 Ctrl+↑ 拉回排队消息编辑时）。
+  /** 清空队列但保留在飞条目（abort/clear_queue 不能把正在执行的 turn 当排队项
+   *  收尾——否则会与 runOne 的 done 重复终结同一 cmdId，前端收到假"已中止"）。
    *  steer/follow_up 的文本返回给前端；prompt 类条目没有去处，经 `dropped`
    *  交回调用方补收尾信封（否则对应气泡永久转圈）。 */
-  drain(): { steering: string[]; followUp: string[]; dropped: QueuedMessage[] } {
+  drainExcept(keep: string | null): { steering: string[]; followUp: string[]; dropped: QueuedMessage[] } {
+    const kept = keep === null ? [] : this.items.filter((m) => m.cmdId === keep);
+    const rest = keep === null ? this.items : this.items.filter((m) => m.cmdId !== keep);
     const steering: string[] = [];
     const followUp: string[] = [];
     const dropped: QueuedMessage[] = [];
-    for (const m of this.items) {
+    for (const m of rest) {
       if (m.kind === "steer") steering.push(m.text);
       else if (m.kind === "follow_up") followUp.push(m.text);
       else dropped.push(m);
     }
-    this.items = [];
+    this.items = kept;
     this.emit();
     return { steering, followUp, dropped };
   }

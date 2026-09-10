@@ -23,7 +23,7 @@ export const ncm: EmbedMatcher = url => {
 
   // /song?id=… /playlist?id=…（query 型）；/song/123456（路径型）
   if (['song', 'playlist', 'album', 'radio'].includes(segments[0] || '')) {
-    type = segments[0]!
+    type = segments[0] ?? ""
     id = id || segments[1] || ''
   }
 

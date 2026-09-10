@@ -362,7 +362,7 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
       }
     });
     return () => setSendHandler(null);
-  }, [onSend, standalone]);
+  }, [onSend, standalone, streamReply]);
   const [mode, setMode] = useState<AgentMode>("workspace");
   // ── 官方接线：模型 seat（VITE_KERNEL=1 时官方 ModelSelect 组件）+ 模式命令 ──
   // 模式状态官方推导：plan/mode 投影事件 > 权限预设（danger-full-access=完全访问）
@@ -683,8 +683,8 @@ export const Composer = memo(function Composer({ terminalOpen = false, onToggleT
     setHasTextState(v.trim().length > 0);
   };
   const hasText = hasTextState;
-  const modeCfg = MODES.find((m) => m.id === effMode)!;
-  const ModeIcon = modeCfg.icon;
+  const modeCfg = MODES.find((m) => m.id === effMode) ?? MODES[0];
+  const ModeIcon = modeCfg?.icon ?? null;
 
   // 上下文占用：优先官方 contextPressure 投影（dsh-assembly 折叠 = 最新请求
   // prompt 侧占用 + surface 增量重估 + request/context 路由容量，能响应压缩）；

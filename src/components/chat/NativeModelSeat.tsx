@@ -65,7 +65,10 @@ export function useNativeModelSeat(): ModelSeatComponent | null {
  *  sessionScope：成员会话等非活跃会话上下文的目标会话 id */
 export function NativeModelSeat({ locked = false, sessionScope }: { locked?: boolean; sessionScope?: string }) {
   const seat = useNativeModelSeat();
-  const t = useMemo(() => nativeLocaleTranslate("model"), [seat]);
+  const t = useMemo(() => {
+    void seat; // 官方 seat 就绪（seat 变化）时重取词典
+    return nativeLocaleTranslate("model");
+  }, [seat]);
   const store = useMemo(() => modelDirectoryStore(), []);
   useEffect(() => {
     void loadNativeModelCatalog();

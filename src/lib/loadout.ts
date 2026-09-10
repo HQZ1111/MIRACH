@@ -2,7 +2,7 @@ import { deflateSync, inflateSync } from 'fflate'
 
 // mirach 适配：hermes 的 @/lib/text 只用到 capitalize 一个函数，内联同款
 function capitalize(s: string): string {
-  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1)
+  return s.length === 0 ? s : (s[0] ?? "").toUpperCase() + s.slice(1)
 }
 
 // ── Loadout codec ─────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ export class BitWriter {
 
     for (let i = 0; i < this.bits.length; i += 1) {
       if (this.bits[i]) {
-        out[i >> 3]! |= 1 << (i & 7)
+        out[i >> 3] = (out[i >> 3] ?? 0) | (1 << (i & 7))
       }
     }
 
@@ -79,7 +79,7 @@ export class BitReader {
 
     const i = this.pos++
 
-    return (this.buf[i >> 3]! >> (i & 7)) & 1
+    return ((this.buf[i >> 3] ?? 0) >> (i & 7)) & 1
   }
 
   uint(width: number): number {

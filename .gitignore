@@ -27,6 +27,9 @@ dist-ssr
 /src-tauri/target
 /src-tauri/gen
 
+# 应用更新签名私钥（绝不入库；公钥在 tauri.conf.json）
+/src-tauri/.tauri-keys/
+
 # dsh 引擎 vendor 目录（junction 指向本机 checkout，各机器自行部署）
 vendor/
 

@@ -26,6 +26,7 @@ import { TerminalSection } from "@/components/chat/Terminal";
 import { PreviewPanel } from "@/components/layout/PreviewPanel";
 import { ConsolePanel } from "@/components/layout/ConsolePanel";
 import { allocateTerminalId, releaseTerminalId } from "@/lib/terminalIds";
+import { createUnlistenCollector } from "@/lib/tauri-listen";
 import { useAppConfig } from "@/hooks/useAppConfig";
 import { GitReviewPanel } from "@/components/files/GitReviewPanel";
 import { ArrowClockwise, ArrowLeft, ArrowRight, ArrowsOutSimple, CaretDown, ChatText, CursorClick, DotsThreeVertical, FolderSimple, Globe, MagnifyingGlass, Plus, PushPin, X } from "@phosphor-icons/react";
@@ -441,18 +442,18 @@ function BrowserPanel({ visible = true }: { visible?: boolean }) {
 
   // 监听覆盖层：zoom 动作回传 + 关闭请求（Esc / 失焦 / 点卡片外）
   useEffect(() => {
-    const unsubs: (() => void)[] = [];
+    const subs = createUnlistenCollector();
     void listen<OverlayActionPayload>("overlay:action", (e) => {
       const { type, action, percent: p } = e.payload;
       if (type === "zoom" && action === "set" && typeof p === "number") {
         applyPercent(p);
       }
       closeZoomOverlay();
-    }).then((u) => unsubs.push(u));
-    void listen("overlay:close", () => closeZoomOverlay()).then((u) => unsubs.push(u));
+    }).then(subs.track);
+    void listen("overlay:close", () => closeZoomOverlay()).then(subs.track);
     // 覆盖层页面就绪（overlay:ready）：若菜单仍开着则重发 zoom 内容
-    void listen("overlay:ready", () => reshowZoomRef.current?.()).then((u) => unsubs.push(u));
-    return () => unsubs.forEach((u) => u());
+    void listen("overlay:ready", () => reshowZoomRef.current?.()).then(subs.track);
+    return () => subs.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1052,7 +1053,7 @@ export function RightSidebar({
 
   // 监听覆盖层：动作回传（tabs/quick）+ 关闭请求（Esc / 失焦 / 点卡片外）
   useEffect(() => {
-    const unsubs: (() => void)[] = [];
+    const subs = createUnlistenCollector();
     void listen<OverlayActionPayload>("overlay:action", (e) => {
       const { type, action, id } = e.payload;
       if (type === "tabs") {
@@ -1064,11 +1065,11 @@ export function RightSidebar({
         openTab(id, MULTI_OPEN.includes(id) ? "new" : "dedupe");
       }
       closeOverlay();
-    }).then((u) => unsubs.push(u));
-    void listen("overlay:close", () => closeOverlay()).then((u) => unsubs.push(u));
+    }).then(subs.track);
+    void listen("overlay:close", () => closeOverlay()).then(subs.track);
     // 覆盖层页面就绪（overlay:ready）：若弹窗仍开着则重发内容（防首次加载竞态）
-    void listen("overlay:ready", () => reshowRef.current?.()).then((u) => unsubs.push(u));
-    return () => unsubs.forEach((u) => u());
+    void listen("overlay:ready", () => reshowRef.current?.()).then(subs.track);
+    return () => subs.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs, activeTab]);
 

@@ -114,8 +114,8 @@ function writeGraph(w: BitWriter, graph: StarmapGraph): void {
   w.varint(edges.length)
 
   for (const e of edges) {
-    w.uint(order.get(e.source)!, bits)
-    w.uint(order.get(e.target)!, bits)
+    w.uint(order.get(e.source) ?? 0, bits)
+    w.uint(order.get(e.target) ?? 0, bits)
   }
 }
 

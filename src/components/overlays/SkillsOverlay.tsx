@@ -82,7 +82,7 @@ export function SkillsOverlay() {
         const list = (r?.skills ?? [])
           .filter((x) => x.name)
           .map<Skill>((sk) => ({
-            name: sk.name!,
+            name: sk.name ?? "",
             category: sk.modelInvocable === false ? "session" : "invocable",
             provenance: undefined,
             usage: 0,

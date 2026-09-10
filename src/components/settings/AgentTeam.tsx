@@ -47,6 +47,7 @@ import {
 import { BUILTIN_CHARACTERS, CHARACTER_CATEGORIES, type BuiltinCharacter } from "@/lib/tavern-characters";
 import {
   DEFAULT_MARKET_SOURCES,
+  DEFAULT_MARKET_URL,
   addCustomSource,
   allSources,
   cachedPack,
@@ -164,13 +165,13 @@ function WorldbookDialog({
   }
 
   const patchGroup = (gi: number, patch: Partial<WbGroup>): void =>
-    setWb((w) => (w ? { ...w, groups: w.groups!.map((g, i) => (i === gi ? { ...g, ...patch } : g)) } : w));
+    setWb((w) => (w ? { ...w, groups: w.groups.map((g, i) => (i === gi ? { ...g, ...patch } : g)) } : w));
   const patchEntry = (gi: number, ei: number, patch: Partial<WbEntry>): void =>
     setWb((w) =>
       w
         ? {
             ...w,
-            groups: w.groups!.map((g, i) =>
+            groups: w.groups.map((g, i) =>
               i === gi ? { ...g, entries: g.entries.map((e, j) => (j === ei ? { ...e, ...patch } : e)) } : g,
             ),
           }
@@ -181,7 +182,7 @@ function WorldbookDialog({
       w
         ? {
             ...w,
-            groups: w.groups!.map((g, i) =>
+            groups: w.groups.map((g, i) =>
               i === gi
                 ? { ...g, entries: [...g.entries, { name: "新条目", keywords: [], content: "", enabled: true }] }
                 : g,
@@ -192,7 +193,7 @@ function WorldbookDialog({
   const removeEntry = (gi: number, ei: number): void =>
     setWb((w) =>
       w
-        ? { ...w, groups: w.groups!.map((g, i) => (i === gi ? { ...g, entries: g.entries.filter((_, j) => j !== ei) } : g)) }
+        ? { ...w, groups: w.groups.map((g, i) => (i === gi ? { ...g, entries: g.entries.filter((_, j) => j !== ei) } : g)) }
         : w,
     );
   const addGroup = (): void =>
@@ -259,7 +260,7 @@ function WorldbookDialog({
 
         {/* 分组与条目 */}
         <div className="mt-3 space-y-3">
-          {wb.groups!.map((g, gi) => (
+          {wb.groups.map((g, gi) => (
             <div key={gi} className="rounded-lg border border-black/10 p-2.5">
               <div className="flex items-center gap-2">
                 <input
@@ -325,7 +326,7 @@ function WorldbookDialog({
               </div>
             </div>
           ))}
-          {wb.groups!.length === 0 && (
+          {wb.groups.length === 0 && (
             <p className="py-4 text-center text-[11px] text-muted-foreground">空世界书——点「+ 分组」开始搭建</p>
           )}
         </div>
@@ -370,7 +371,7 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   const [wbEdit, setWbEdit] = useState<{ key: string; name: string } | null>(null);
   // 在线市场
   const [sources, setSources] = useState<MarketSource[]>(() => allSources());
-  const [marketUrl, setMarketUrl] = useState<string>(DEFAULT_MARKET_SOURCES[0]!.url);
+  const [marketUrl, setMarketUrl] = useState<string>(DEFAULT_MARKET_URL);
   const [packCache, setPackCache] = useState<Record<string, MarketCacheEntry>>(() => loadCache());
   const [marketBusy, setMarketBusy] = useState(false);
   const [newSrc, setNewSrc] = useState({ name: "", url: "" });
@@ -455,7 +456,7 @@ function TavernImportDialog({ onClose, onImported }: { onClose: () => void; onIm
   };
   const removeSource = (url: string): void => {
     setSources(removeCustomSource(url));
-    if (marketUrl === url) setMarketUrl(DEFAULT_MARKET_SOURCES[0]!.url);
+    if (marketUrl === url) setMarketUrl(DEFAULT_MARKET_URL);
   };
   useEffect(() => {
     if (tab === "market" && !packCache[marketUrl]) void refreshMarket(marketUrl);

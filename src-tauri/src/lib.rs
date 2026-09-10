@@ -9,6 +9,17 @@ mod dsh_relay;
 mod relay;
 mod sessions;
 
+/// 非交互子进程统一入口：Windows 下带 CREATE_NO_WINDOW，避免每次 spawn 闪控制台。
+fn console_command(program: &str) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c
+}
+
 // ================================================================
 // 应用配置（工作目录 / Hermes 文件夹 / 浏览器首页）
 // 解析顺序：环境变量 → %APPDATA%\my-hermes-rs\config.json → 内置默认值
@@ -26,6 +37,20 @@ struct AppConfig {
     data_dir: String,
     /// 核心 web 面监听地址（127.0.0.1 = 仅本机；0.0.0.0 = 局域网手机可访问）
     web_host: String,
+    /// 应用更新源（静态 JSON 端点；空 = 未配置，更新检查返回明确提示）
+    update_endpoint: String,
+    /// 远程引擎（SSH）：sidecar 在远端主机上运行（本地只做壳）
+    remote_enabled: bool,
+    /// SSH 目标（user@host 或 host）
+    remote_host: String,
+    /// SSH 端口（空/22 = 默认）
+    remote_port: String,
+    /// 远端 Node 可执行文件（默认 node，走远端 PATH）
+    remote_node: String,
+    /// 远端 agent-sidecar 入口绝对路径（dist/index.js）
+    remote_sidecar: String,
+    /// 可选 SSH 私钥（ssh -i）
+    remote_identity: String,
 }
 
 fn app_config_dir() -> std::path::PathBuf {
@@ -53,6 +78,22 @@ fn load_config() -> AppConfig {
             })
             .unwrap_or_else(|| default.to_string())
     };
+    let get_bool = |key: &str, env: &str, default: bool| -> bool {
+        std::env::var(env)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                from_file.as_ref().and_then(|v| {
+                    v.get(key).map(|x| match x {
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                })
+            })
+            .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(default)
+    };
 
     AppConfig {
         workspace: get("workspace", "MIRACH_WORKSPACE", "D:\\hermes-agent-main"),
@@ -60,12 +101,104 @@ fn load_config() -> AppConfig {
         browser_home: get("browserHome", "HERMES_BROWSER_HOME", "https://www.bing.com"),
         data_dir: app_config_dir().to_string_lossy().to_string(),
         web_host: get("webHost", "MIRACH_WEB_HOST", "127.0.0.1"),
+        update_endpoint: get("updateEndpoint", "MIRACH_UPDATE_ENDPOINT", ""),
+        remote_enabled: get_bool("remoteEnabled", "MIRACH_REMOTE", false),
+        remote_host: get("remoteHost", "MIRACH_REMOTE_HOST", ""),
+        remote_port: get("remotePort", "MIRACH_REMOTE_PORT", ""),
+        remote_node: get("remoteNode", "MIRACH_REMOTE_NODE", "node"),
+        remote_sidecar: get("remoteSidecar", "MIRACH_REMOTE_SIDECAR", ""),
+        remote_identity: get("remoteIdentity", "MIRACH_REMOTE_IDENTITY", ""),
     }
 }
 
 #[tauri::command]
 fn get_config() -> AppConfig {
     load_config()
+}
+
+// ================================================================
+// 路径白名单
+// webview 侧命令只能访问：项目工作区 / Mirach 目录 / 用户目录下的固定子目录。
+// 所有路径先 canonicalize（不存在的写入目标从最近的已存在祖先推导并词法规整
+// . / ..），再与白名单根做前缀匹配，阻断 .. 穿越与盘符逃逸。
+// ================================================================
+
+fn user_home() -> Option<std::path::PathBuf> {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// 宽松规范化：从最近的已存在祖先 canonicalize，再对剩余片段词法解析 . / ..
+/// （不允许越出祖先根）。用于校验尚不存在的写入目标。
+fn canonical_lenient(path: &str) -> Result<std::path::PathBuf, String> {
+    use std::ffi::OsStr;
+    let p = std::path::PathBuf::from(path);
+    if p.as_os_str().is_empty() {
+        return Err("空路径".to_string());
+    }
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p;
+    loop {
+        if cur.exists() {
+            let mut base = cur.canonicalize().map_err(|e| format!("无法解析路径 {path}: {e}"))?;
+            for part in missing.iter().rev() {
+                if part == OsStr::new("..") {
+                    if !base.pop() {
+                        return Err(format!("路径越界: {path}"));
+                    }
+                } else if part != OsStr::new(".") {
+                    base.push(part);
+                }
+            }
+            return Ok(base);
+        }
+        let name = cur
+            .file_name()
+            .ok_or_else(|| format!("非法路径: {path}"))?
+            .to_os_string();
+        missing.push(name);
+        if !cur.pop() {
+            return Err(format!("非法路径: {path}"));
+        }
+    }
+}
+
+/// 允许访问的根目录。write=true 时不放开整个用户主目录（导出/记忆走显式子目录）。
+fn allowed_roots(write: bool) -> Vec<std::path::PathBuf> {
+    let cfg = load_config();
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for s in [cfg.workspace, cfg.hermes_home, cfg.data_dir] {
+        if !s.trim().is_empty() {
+            roots.push(std::path::PathBuf::from(s));
+        }
+    }
+    if let Some(home) = user_home() {
+        for sub in [".mirach", ".dsh", "Desktop", "Downloads", "Documents"] {
+            roots.push(home.join(sub));
+        }
+        if !write {
+            roots.push(home);
+        }
+    }
+    roots
+}
+
+fn ensure_path_allowed(path: &str, write: bool) -> Result<std::path::PathBuf, String> {
+    let target = canonical_lenient(path)?;
+    for root in allowed_roots(write) {
+        let Ok(root) = canonical_lenient(&root.to_string_lossy()) else {
+            continue;
+        };
+        if target == root || target.starts_with(&root) {
+            return Ok(target);
+        }
+    }
+    Err(format!(
+        "路径不在允许范围内（仅工作区 / Mirach 目录 / 用户目录）: {path}"
+    ))
 }
 
 #[tauri::command]
@@ -243,7 +376,7 @@ struct GitStatus {
 
 /// 运行 git 返回 stdout（失败返回 None）
 fn git_out(workspace: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
+    let out = console_command("git")
         .args(args)
         .current_dir(workspace)
         .output()
@@ -255,8 +388,25 @@ fn git_out(workspace: &str, args: &[&str]) -> Option<String> {
     }
 }
 
+/// 检查工作区 git 状态（最多 5 次 git 子进程）：async + spawn_blocking，
+/// 不阻塞 UI 线程。
 #[tauri::command]
-fn check_git_workspace() -> GitStatus {
+async fn check_git_workspace() -> GitStatus {
+    tauri::async_runtime::spawn_blocking(check_git_workspace_blocking)
+        .await
+        .unwrap_or_else(|e| GitStatus {
+            in_repo: false,
+            changes: Vec::new(),
+            error: Some(format!("git 检查任务失败：{e}")),
+            branch: None,
+            added: 0,
+            removed: 0,
+            ahead: 0,
+            behind: 0,
+        })
+}
+
+fn check_git_workspace_blocking() -> GitStatus {
     // 当前工作区目录（与终端一致，取自已配置）
     let workspace = load_config().workspace;
 
@@ -291,7 +441,7 @@ fn check_git_workspace() -> GitStatus {
     }
 
     // git status --porcelain：每行 "XY path"
-    let output = std::process::Command::new("git")
+    let output = console_command("git")
         .args(["status", "--porcelain"])
         .current_dir(&workspace)
         .output();
@@ -370,6 +520,13 @@ fn set_config(
     hermes_home: Option<String>,
     browser_home: Option<String>,
     web_host: Option<String>,
+    update_endpoint: Option<String>,
+    remote_enabled: Option<bool>,
+    remote_host: Option<String>,
+    remote_port: Option<String>,
+    remote_node: Option<String>,
+    remote_sidecar: Option<String>,
+    remote_identity: Option<String>,
 ) -> Result<(), String> {
     let dir = app_config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -395,6 +552,23 @@ fn set_config(
     if let Some(v) = web_host {
         obj.insert("webHost".into(), serde_json::Value::String(v));
     }
+    if let Some(v) = update_endpoint {
+        obj.insert("updateEndpoint".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = remote_enabled {
+        obj.insert("remoteEnabled".into(), serde_json::Value::Bool(v));
+    }
+    for (key, value) in [
+        ("remoteHost", remote_host),
+        ("remotePort", remote_port),
+        ("remoteNode", remote_node),
+        ("remoteSidecar", remote_sidecar),
+        ("remoteIdentity", remote_identity),
+    ] {
+        if let Some(v) = value {
+            obj.insert(key.into(), serde_json::Value::String(v));
+        }
+    }
 
     std::fs::write(&file, serde_json::to_string_pretty(&cur).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -417,7 +591,7 @@ fn reset_config() -> Result<(), String> {
 
 /// 在工作区执行 git 命令，返回 stdout；失败返回 stderr
 fn run_git(workspace: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
+    let out = console_command("git")
         .args(args)
         .current_dir(workspace)
         .output()
@@ -475,44 +649,62 @@ fn git_unstage_all() -> Result<(), String> {
 #[tauri::command]
 fn git_revert(paths: Vec<String>) -> Result<(), String> {
     let ws = load_config().workspace;
-    let mut tracked: Vec<&str> = Vec::new();
+    let ws_root = canonical_lenient(&ws)?;
+    let mut tracked: Vec<String> = Vec::new();
     for p in &paths {
+        // 工作区相对路径 → 绝对路径并做越界校验（删除操作不接受工作区外路径）
+        let full = canonical_lenient(&ws_root.join(p).to_string_lossy())?;
+        if full != ws_root && !full.starts_with(&ws_root) {
+            return Err(format!("路径不在工作区内: {p}"));
+        }
         // ls-files --error-unmatch：已跟踪返回 Ok，未跟踪返回 Err
         if run_git(&ws, &["ls-files", "--error-unmatch", "--", p]).is_ok() {
-            tracked.push(p.as_str());
+            tracked.push(p.clone());
         } else {
-            let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+            let meta = std::fs::metadata(&full).map_err(|e| e.to_string())?;
             if meta.is_dir() {
-                std::fs::remove_dir_all(p).map_err(|e| e.to_string())?;
+                std::fs::remove_dir_all(&full).map_err(|e| e.to_string())?;
             } else {
-                std::fs::remove_file(p).map_err(|e| e.to_string())?;
+                std::fs::remove_file(&full).map_err(|e| e.to_string())?;
             }
         }
     }
     if !tracked.is_empty() {
         let mut args = vec!["restore", "--"];
-        args.extend(tracked.iter().copied());
+        args.extend(tracked.iter().map(|s| s.as_str()));
         run_git(&ws, &args)?;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn git_commit(message: String) -> Result<(), String> {
-    run_git(&load_config().workspace, &["commit", "-m", &message]).map(|_| ())
+async fn git_commit(message: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        run_git(&load_config().workspace, &["commit", "-m", &message]).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("git_commit task failed: {e}"))?
 }
 
 #[tauri::command]
-fn git_push() -> Result<(), String> {
-    run_git(&load_config().workspace, &["push"]).map(|_| ())
+async fn git_push() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| run_git(&load_config().workspace, &["push"]).map(|_| ()))
+        .await
+        .map_err(|e| format!("git_push task failed: {e}"))?
 }
 
 /// 创建 PR：先推送当前分支到 origin，再调 gh pr create（依赖 gh CLI）
 #[tauri::command]
-fn git_create_pr(title: String) -> Result<String, String> {
+async fn git_create_pr(title: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git_create_pr_blocking(title))
+        .await
+        .map_err(|e| format!("git_create_pr task failed: {e}"))?
+}
+
+fn git_create_pr_blocking(title: String) -> Result<String, String> {
     let ws = load_config().workspace;
     run_git(&ws, &["push", "-u", "origin", "HEAD"]).map_err(|e| format!("推送分支失败: {e}"))?;
-    let out = std::process::Command::new("gh")
+    let out = console_command("gh")
         .args(["pr", "create", "--title", &title, "--fill"])
         .current_dir(&ws)
         .output()
@@ -536,7 +728,7 @@ struct GitUser {
 #[tauri::command]
 fn git_get_user() -> GitUser {
     let read = |key: &str| -> Option<String> {
-        let out = std::process::Command::new("git")
+        let out = console_command("git")
             .args(["config", "--global", "--get", key])
             .output()
             .ok()?;
@@ -557,7 +749,7 @@ fn git_get_user() -> GitUser {
 #[tauri::command]
 fn git_set_user(name: Option<String>, email: Option<String>) -> Result<(), String> {
     let set = |key: &str, value: &str| -> Result<(), String> {
-        let out = std::process::Command::new("git")
+        let out = console_command("git")
             .args(["config", "--global", key, value])
             .output()
             .map_err(|e| e.to_string())?;
@@ -584,7 +776,17 @@ fn git_set_user(name: Option<String>, email: Option<String>) -> Result<(), Strin
 /// 清除后下次 push 会重新弹出登录框输入新密码——即"改密码/切换账户"的落地方式。
 #[tauri::command]
 fn git_clear_credential(host: String) -> Result<(), String> {
-    let mut child = std::process::Command::new("git")
+    // 凭据协议按行解析：host 含换行会注入额外字段（可改到别的站点）
+    let host = host.trim().to_string();
+    if host.is_empty()
+        || host.len() > 255
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']'))
+    {
+        return Err(format!("非法主机名: {host}"));
+    }
+    let mut child = console_command("git")
         .args(["credential", "reject"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -773,16 +975,20 @@ async fn browser_pick_start(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn browser_pick_result(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let wv = app.get_webview(BROWSER_WEBVIEW).ok_or("browser not open")?;
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    // tokio oneshot + timeout：不占住 async worker（原 std mpsc recv_timeout 会阻塞 800ms）
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let tx = std::sync::Mutex::new(Some(tx));
     wv.eval_with_callback(
         "(() => { const v = window.__hermesPicked; if (v) { delete window.__hermesPicked; return v; } return null; })()",
         move |res| {
-            let _ = tx.send(res);
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(res);
+            }
         },
     )
     .map_err(|e| e.to_string())?;
-    match rx.recv_timeout(std::time::Duration::from_millis(800)) {
-        Ok(s) if !s.is_empty() && s != "null" => {
+    match tokio::time::timeout(std::time::Duration::from_millis(800), rx).await {
+        Ok(Ok(s)) if !s.is_empty() && s != "null" => {
             // 结果是 JSON 序列化字符串，尝试解包
             match serde_json::from_str::<String>(&s) {
                 Ok(v) if !v.is_empty() => Ok(Some(v)),
@@ -895,7 +1101,14 @@ struct FileEntry {
 
 /// 扫描目录（跳过常见噪音目录：node_modules/.git/target/dist/.venv/__pycache__）
 #[tauri::command]
-fn read_dir(path: String) -> Result<Vec<FileEntry>, String> {
+async fn read_dir(path: String) -> Result<Vec<FileEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || read_dir_blocking(path))
+        .await
+        .map_err(|e| format!("read_dir task failed: {e}"))?
+}
+
+fn read_dir_blocking(path: String) -> Result<Vec<FileEntry>, String> {
+    let path = ensure_path_allowed(&path, false)?;
     let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -918,6 +1131,7 @@ fn read_dir(path: String) -> Result<Vec<FileEntry>, String> {
 /// 以文本读取文件（>2MB 跳过，防整读超大二进制）
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
+    let path = ensure_path_allowed(&path, false)?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.len() > 2 * 1024 * 1024 {
         return Err("文件超过 2MB，跳过预览".to_string());
@@ -927,11 +1141,20 @@ fn read_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn rename_path(from: String, to: String) -> Result<(), String> {
+    let from = ensure_path_allowed(&from, true)?;
+    let to = ensure_path_allowed(&to, true)?;
     std::fs::rename(&from, &to).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn delete_path(path: String) -> Result<(), String> {
+async fn delete_path(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_path_blocking(path))
+        .await
+        .map_err(|e| format!("delete_path task failed: {e}"))?
+}
+
+fn delete_path_blocking(path: String) -> Result<(), String> {
+    let path = ensure_path_allowed(&path, true)?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.is_dir() {
         std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
@@ -940,13 +1163,19 @@ fn delete_path(path: String) -> Result<(), String> {
     }
 }
 
-/// 在文件管理器中显示该文件/目录（Windows: explorer /select,path）
+/// 在文件管理器中显示该文件/目录（Windows: explorer /select,<path> 必须单参数）
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
-    std::process::Command::new("explorer")
-        .args(["/select,", &path])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let path = ensure_path_allowed(&path, false)?;
+    #[cfg(target_os = "windows")]
+    let child = console_command("explorer").arg(format!("/select,{}", path.display())).spawn();
+    #[cfg(target_os = "macos")]
+    let child = std::process::Command::new("open").args(["-R"]).arg(&path).spawn();
+    #[cfg(target_os = "linux")]
+    let child = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(&path))
+        .spawn();
+    child.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -955,46 +1184,36 @@ fn reveal_path(path: String) -> Result<(), String> {
 // ================================================================
 
 /// 用系统默认程序打开 URL / file:// 路径（zosma AttachmentCard 等使用）。
+/// 只接受显式白名单 scheme，且不经 shell（open 插件走 ShellExecuteW）——
+/// 避免 URL 内容被 cmd.exe 解析成命令，也避免任意本地程序被执行。
 #[tauri::command]
 async fn open_url(url: String) -> Result<(), String> {
-    // Windows：cmd /c start "" "<url>"。空标题参数 + raw_arg 引号是必须的：
-    // 不引号时 cmd 会把 & 当命令分隔符截断 URL；CREATE_NO_WINDOW 防控制台闪窗。
-    #[cfg(target_os = "windows")]
-    let result = {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd")
-            .args(["/c", "start", ""])
-            .raw_arg(format!("\"{url}\""))
-            .creation_flags(0x0800_0000)
-            .status()
-    };
-    #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(&url).status();
-    #[cfg(target_os = "linux")]
-    let result = std::process::Command::new("xdg-open").arg(&url).status();
-
-    let st = result.map_err(|e| format!("open: {e}"))?;
-    if !st.success() {
-        return Err(format!("exit: {}", st));
+    let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "mailto" | "file") {
+        return Err(format!("不支持的链接协议: {scheme}"));
     }
-    Ok(())
+    if url.chars().any(|c| c.is_control()) {
+        return Err("链接包含控制字符".to_string());
+    }
+    tauri_plugin_opener::open_url(&url, None::<&str>).map_err(|e| format!("open: {e}"))
 }
 
 /// 写用户文件（zosma 导出等；路径由前端决定）。父目录不存在时自动创建
 /// （环境记忆 .mirach/MEMORY.md 首次保存、团队导出等依赖）。
 #[tauri::command]
 async fn write_user_file(path: String, content: String) -> Result<(), String> {
-    let p = std::path::PathBuf::from(&path);
+    let p = ensure_path_allowed(&path, true)?;
     if let Some(parent) = p.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| format!("create_dir: {e}"))?;
     }
-    std::fs::write(&path, &content).map_err(|e| format!("write_file: {e}"))
+    std::fs::write(&p, &content).map_err(|e| format!("write_file: {e}"))
 }
 
 /// 读二进制文件（SillyTavern PNG 角色卡解析用）；>10MB 拒绝。
 /// 返回字节数组（JSON 序列化为 number[]，典型 PNG 卡几百 KB 可接受）。
 #[tauri::command]
 async fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
+    let path = ensure_path_allowed(&path, false)?;
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.len() > 10 * 1024 * 1024 {
         return Err("文件超过 10MB".to_string());
@@ -1036,6 +1255,60 @@ async fn fetch_text(url: String) -> Result<String, String> {
 #[tauri::command]
 fn get_workspace() -> Result<String, String> {
     Ok(load_config().workspace)
+}
+
+// ================================================================
+// 应用自更新（Tauri updater：静态 JSON 端点 + minisign 签名校验）
+// 端点来自配置 updateEndpoint（空 = 未配置）；公钥在 tauri.conf.json plugins.updater。
+// ================================================================
+
+async fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let endpoint = load_config().update_endpoint;
+    if endpoint.trim().is_empty() {
+        return Err("未配置应用更新源（config.json 的 updateEndpoint 或 MIRACH_UPDATE_ENDPOINT）".to_string());
+    }
+    let url = tauri::Url::parse(endpoint.trim()).map_err(|e| format!("更新源地址非法: {e}"))?;
+    app.updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| format!("更新源被拒绝: {e}"))?
+        .build()
+        .map_err(|e| format!("更新器构建失败: {e}"))
+}
+
+/// 检查应用更新：返回 {available, version, currentVersion, notes, date}。
+#[tauri::command]
+async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let updater = build_updater(&app).await?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "available": true,
+            "version": update.version,
+            "currentVersion": update.current_version,
+            "notes": update.body,
+            "date": update.date.map(|d| d.to_string()),
+        })),
+        Ok(None) => Ok(serde_json::json!({ "available": false })),
+        Err(e) => Err(format!("检查更新失败: {e}")),
+    }
+}
+
+/// 下载并安装应用更新（Windows NSIS 安装器接管后应用退出，重启即为新版本）。
+#[tauri::command]
+async fn app_update_install(app: tauri::AppHandle) -> Result<String, String> {
+    let updater = build_updater(&app).await?;
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            update
+                .download_and_install(|_chunk, _total| {}, || {})
+                .await
+                .map_err(|e| format!("下载/安装失败: {e}"))?;
+            Ok(version)
+        }
+        Ok(None) => Err("没有可用更新".to_string()),
+        Err(e) => Err(format!("检查更新失败: {e}")),
+    }
 }
 
 /// 遥测开关（本应用不采集遥测，兼容 zosma 前端调用）。
@@ -1108,6 +1381,16 @@ pub fn run() {
         }
     }
     tauri::Builder::default()
+        // 单实例锁必须最先注册：第二次启动只聚焦已有主窗口（官方桌面壳同款
+        // 语义；也避免两个进程同时写同一份 sidecar/引擎数据）
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+            eprintln!("[mirach] second instance blocked — focused existing window");
+        }))
         .plugin(tauri_plugin_opener::init())
         // 原生文件夹/文件选择对话框（环境插件工作区"选择文件夹"）
         .plugin(tauri_plugin_dialog::init())
@@ -1127,8 +1410,34 @@ pub fn run() {
         )
         // deep link（hermes:// 协议；Windows 需安装/注册 scheme）
         .plugin(tauri_plugin_deep_link::init())
+        // 应用自更新（端点/公钥见 AppConfig.update_endpoint 与 tauri.conf.json）
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            // 单实例竞态兜底：插件靠"找到首实例事件窗口"才退出，若第二次启动
+            // 早于首实例建窗（双击图标/开机自启），插件会放行 → 两个引擎同写
+            // 同一份数据。这里用独立命名互斥量兜底：拿不到就立即退出。
+            #[cfg(target_os = "windows")]
+            {
+                use windows::core::PCWSTR;
+                use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS};
+                use windows::Win32::System::Threading::CreateMutexW;
+                let name: Vec<u16> = "com.hanqingzhou.mirach-primary\0".encode_utf16().collect();
+                match unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) } {
+                    Ok(handle) => {
+                        if unsafe { windows::Win32::Foundation::GetLastError() } == ERROR_ALREADY_EXISTS {
+                            eprintln!("[mirach] secondary instance — exiting (primary mutex held)");
+                            unsafe {
+                                let _ = CloseHandle(handle);
+                            }
+                            std::process::exit(0);
+                        }
+                        // 持有到进程结束：句柄不关闭即持续占有该名字
+                        let _ = handle;
+                    }
+                    Err(e) => eprintln!("[mirach] single-instance mutex unavailable: {e}"),
+                }
+            }
             let _ = app.global_shortcut().register("Alt+Space");
             // 简约对话引擎 sidecar（dsh 中继）——异步 spawn，不阻塞启动
             dsh_relay::setup_sidecar(app.handle(), dsh_relay::DshAppState::default());
@@ -1223,6 +1532,9 @@ pub fn run() {
             dsh_relay::dsh_set_env,
             dsh_relay::dsh_rpc,
             dsh_relay::dsh_http_proxy,
+            dsh_relay::dsh_http_proxy_cancel,
+            dsh_relay::ssh_test,
+            dsh_relay::dsh_restart_sidecar,
             dsh_relay::dsh_mux_open,
             dsh_relay::dsh_mux_close,
             dsh_relay::dsh_list_sessions,
@@ -1235,6 +1547,8 @@ pub fn run() {
             fetch_text,
             read_file_bytes,
             get_workspace,
+            app_update_check,
+            app_update_install,
             set_analytics_enabled,
             track_analytics_event,
             open_session_window,
@@ -1254,6 +1568,40 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_lenient, ensure_path_allowed, load_config};
+
+    #[test]
+    fn path_allowlist_blocks_outside_roots() {
+        // 系统目录不在白名单内（工作区/Mirach 目录/用户目录之外）
+        let target = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/hosts"
+        };
+        assert!(ensure_path_allowed(target, false).is_err());
+    }
+
+    #[test]
+    fn canonical_lenient_removes_dotdot() {
+        let Some(home) = super::user_home() else { return };
+        let probe = format!("{}\\probe\\..\\..\\x", home.display());
+        let resolved = canonical_lenient(&probe).expect("resolvable");
+        // 词法规整后不应残留 ..（否则 OS 解析时可能越出白名单根）
+        assert!(!resolved.to_string_lossy().contains(".."));
+    }
+
+    #[test]
+    fn data_dir_is_writable() {
+        // 应用数据目录始终在白名单内（配置/记忆写入依赖）
+        let dir = load_config().data_dir;
+        if !dir.is_empty() {
+            assert!(ensure_path_allowed(&dir, true).is_ok());
+        }
+    }
 }
 
 // ================================================================

@@ -11,15 +11,13 @@
  * codex 原生 config 路径——见 apps/mirach/docs/protocol-coupling.md。
  */
 
-import { exec, execSync } from "node:child_process";
+import { execFile, execFileSync, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { logWarn } from "./protocol.js";
-
-const execP = promisify(exec);
+import { mirachHome } from "./runtime.js";
 
 export interface BackendAuth {
   apiKey?: string;
@@ -44,8 +42,9 @@ export interface SubagentBackendsStatus {
   config: SubagentBackendsConfig;
 }
 
-const DSH_HOME = (): string => process.env.DSH_HOME ?? join(homedir(), ".mirach");
-const PROFILE_NM = (): string => join(DSH_HOME(), "profiles", "mirach", "node_modules");
+const DSH_HOME = (): string => mirachHome();
+const PROFILE_NAME = (): string => process.env.MIRACH_PROFILE_NAME ?? "mirach";
+const PROFILE_NM = (): string => join(DSH_HOME(), "profiles", PROFILE_NAME(), "node_modules");
 const CONFIG_FILE = (): string => join(DSH_HOME(), "subagent-backends.json");
 
 const BACKEND_PKGS = {
@@ -109,17 +108,28 @@ function dshBin(): string {
   return join(npm, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
 }
 
-async function dshCli(args: string): Promise<string> {
-  const { stdout, stderr } = await execP(
-    `${JSON.stringify(process.execPath)} ${JSON.stringify(dshBin())} ${args}`,
-    {
-      env: { ...process.env, DSH_HOME: DSH_HOME() },
-      windowsHide: true,
-      timeout: 600_000,
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
-  return (stdout + "\n" + stderr).trim();
+/** 官方 CLI 直执行（node + bin.js，数组参数，不经 shell）。 */
+function dshCli(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [dshBin(), ...args],
+      {
+        env: { ...process.env, DSH_HOME: DSH_HOME() },
+        windowsHide: true,
+        timeout: 600_000,
+        maxBuffer: 16 * 1024 * 1024,
+        encoding: "utf8",
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`${err.message}${stderr.trim() ? `\n${stderr.trim()}` : ""}`));
+          return;
+        }
+        resolve(`${stdout}\n${stderr}`.trim());
+      },
+    );
+  });
 }
 
 /**
@@ -135,7 +145,7 @@ export async function subagentSetEnabled(kind: keyof typeof BACKEND_PKGS, enable
     if (enable) {
       lines.push(`dsh plugin add ${pkg}@alpha …`);
       try {
-        lines.push(await dshCli(`plugin --profile mirach add ${pkg}@alpha`));
+        lines.push(await dshCli(["plugin", "--profile", PROFILE_NAME(), "add", `${pkg}@alpha`]));
       } catch (err) {
         lines.push("CLI 失败：" + (err instanceof Error ? err.message : String(err)).slice(0, 200));
       }
@@ -149,16 +159,17 @@ export async function subagentSetEnabled(kind: keyof typeof BACKEND_PKGS, enable
     } else {
       lines.push(`dsh plugin remove ${pkg} …`);
       try {
-        lines.push(await dshCli(`plugin --profile mirach remove ${pkg}`));
+        lines.push(await dshCli(["plugin", "--profile", PROFILE_NAME(), "remove", pkg]));
       } catch (err) {
         lines.push("CLI 失败：" + (err instanceof Error ? err.message : String(err)).slice(0, 200));
       }
       lines.push("停用完成 —— 重启应用生效");
     }
   } finally {
-    // 同步 config.enabled（读改写保留鉴权字段）
+    // 同步 config.enabled 为实际安装态（CLI/负载失败时不得记录为已启用）
+    const status = backendStatus(kind);
     const cfg = readSubagentBackends();
-    cfg[kind] = { ...(cfg[kind] ?? {}), enabled: enable };
+    cfg[kind] = { ...(cfg[kind] ?? {}), enabled: enable && status.installed && status.payloadOk };
     try {
       writeSubagentBackends(cfg);
     } catch {
@@ -187,7 +198,7 @@ async function ensurePayload(kind: keyof typeof BACKEND_PKGS): Promise<string> {
     });
     const tgz = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
     if (!tgz) throw new Error("npm pack 未产出 tarball");
-    execSync(`tar -xzf ${JSON.stringify(join(tmp, tgz))} -C ${JSON.stringify(tmp)}`, { windowsHide: true });
+    execFileSync("tar", ["-xzf", join(tmp, tgz), "-C", tmp], { windowsHide: true });
     fs.mkdirSync(target, { recursive: true });
     fs.cpSync(join(tmp, "package"), target, { recursive: true });
     fs.rmSync(tmp, { recursive: true, force: true });

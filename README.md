@@ -116,9 +116,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 - [x] 可重绑定快捷键（hermes combo/capture/conflicts 全套，设置页改键）
 - [x] 内嵌终端（portable-pty 多实例）
 - [x] 引擎一键更新（npm alpha 通道 + 版本检查）
+- [x] 官方机制替换：内核装配 = 官方 ClientModuleSystem（`__DSH_BOOT__` 图 + `import()`）、引擎 profile 读写 = 官方 `dsh-app-boot`、home 解析 = 官方 `dsh-home-paths`、应用自有 cordis overlay（SDK patches）、unary 请求 abort 透传
+- [x] 应用自更新（Tauri updater：签名校验 + 可配置端点 + 关于页检查/安装）
+- [x] 单实例锁（第二次启动聚焦已有主窗口 + 命名互斥量竞态兜底）
+- [x] 远程引擎（SSH）：sidecar 跑在远端主机，本地只做壳（设置 → 通用 → 远程引擎；见 docs/remote-engine.md）
+- [x] 事务化插件安装/卸载（清单快照 + 安装后校验 + 失败回滚）
+- [x] 质量门：lint 0 warning / 前端 9 测试 / sidecar 15 测试 / Rust 14 测试
 - [x] hermes 功能移植：唤醒词插件 / 提示音系统（14 完成音变体）/ 语音听写与朗读 / 抓取滚动 / 通知中心 / 会话星图 / HUD 悬浮窗 / 国产内嵌卡片（哔哩哔哩/网易云/高德/抖音/红果）
 - [x] 侧栏工作区切换器 = 官方 dsh WorkspaceBrowser（槽位渲染，随官方更新）
-- [ ] SSH 远程 / 应用自更新（Tauri updater）
+- [ ] SSH 远程
+- [ ] 帧化/背压传输（大附件流式；当前为体积上限 + 明确报错）
+- [ ] 巨型组件拆分（Composer / sidebar-shell / SettingsOverlay / AppLayout）
 - [ ] 引擎任务面板真实数据（待引擎暴露 jobs.list RPC）
 
 ## 七、同步到新机器

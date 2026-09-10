@@ -46,7 +46,8 @@ const $optimistic = atom<NativeModelSelection | null>(null);
 const $projected = computed([$rawEvents, $activeSessionId], (events, sid) => {
   if (!sid) return null;
   for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i]!;
+    const ev = events[i];
+    if (!ev) continue;
     if (ev.type === "model/selection") {
       const d = ev.data as Partial<NativeModelSelection> | null;
       if (d && typeof d.provider === "string" && typeof d.model === "string") {

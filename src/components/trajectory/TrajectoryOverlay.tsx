@@ -111,8 +111,9 @@ function buildGroups(
     let stepIdx = 0;
     let rowSeq = 0;
     const flushSteps = (beforeSeq: number): void => {
-      while (stepIdx < steps.length && steps[stepIdx] && (steps[stepIdx]!.start?.seq ?? -1) < beforeSeq) {
-        const st = steps[stepIdx]!;
+      while (stepIdx < steps.length && (steps[stepIdx]?.start?.seq ?? -1) < beforeSeq) {
+        const st = steps[stepIdx];
+      if (st === undefined) break;
         const dur = st.start && st.end ? formatDuration(st.end.time - st.start.time) : undefined;
         rows.push({
           id: `t${turn}-s${st.step}`,
@@ -195,7 +196,7 @@ function buildGroups(
       });
     }
     rows.sort((a, b) => a.seq - b.seq);
-    const durMs = evs.length >= 2 ? evs[evs.length - 1]!.time - evs[0]!.time : null;
+    const durMs = evs.length >= 2 ? (evs[evs.length - 1]?.time ?? 0) - (evs[0]?.time ?? 0) : null;
     return {
       turn,
       status: loc?.status ?? "unknown",

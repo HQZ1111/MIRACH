@@ -46,7 +46,8 @@ export interface WbGroup {
 export interface Worldbook {
   version?: number;
   injectMode?: string;
-  groups?: WbGroup[];
+  /** 分组列表（normalizeWorldbook 保证存在；写入端统一按此形状构造）。 */
+  groups: WbGroup[];
 }
 
 function normalizeWorldbook(d: unknown): Worldbook {
@@ -66,10 +67,10 @@ function normalizeWorldbook(d: unknown): Worldbook {
     }
     return { injectMode: "full", groups: [{ name: "导入条目", enabled: true, entries: d as WbEntry[] }] };
   }
-  const o = (d ?? {}) as Worldbook;
+  const o = (d ?? {}) as Worldbook & { entries?: WbEntry[] };
   let groups = Array.isArray(o.groups) ? o.groups : [];
-  if (!groups.length && Array.isArray((o as { entries?: WbEntry[] }).entries)) {
-    groups = [{ name: "导入条目", enabled: true, entries: (o as { entries: WbEntry[] }).entries }];
+  if (!groups.length && Array.isArray(o.entries)) {
+    groups = [{ name: "导入条目", enabled: true, entries: o.entries }];
   }
   return {
     injectMode: o.injectMode === "keyword" ? "keyword" : "full",
@@ -165,7 +166,7 @@ export function extractPersonaText(yaml: string): string {
   for (let i = 0; i < lines.length; i++) {
     const m = /^(\s*)text:\s*(\|-?|\|)?\s*$/.exec(lines[i] ?? "");
     if (m) {
-      const indent = m[1]!.length;
+      const indent = (m[1] ?? "").length;
       const out: string[] = [];
       for (let j = i + 1; j < lines.length; j++) {
         const line = lines[j] ?? "";
@@ -181,7 +182,7 @@ export function extractPersonaText(yaml: string): string {
       return out.join("\n").trim();
     }
     const inline = /^\s*text:\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(lines[i] ?? "");
-    if (inline) return inline[1]!.replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
+    if (inline) return (inline[1] ?? "").replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
   }
   return "";
 }
@@ -189,13 +190,13 @@ export function extractPersonaText(yaml: string): string {
 function yamlScalar(raw: string): string {
   const t = raw.trim();
   const q = /^"((?:[^"\\]|\\.)*)"$/.exec(t) ?? /^'([^']*)'$/.exec(t);
-  if (q) return q[1]!.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+  if (q) return (q[1] ?? "").replace(/\\n/g, "\n").replace(/\\"/g, '"');
   return t;
 }
 
 function presetYmlField(yaml: string, field: string): string {
   const m = new RegExp(`^${field}:\\s*(.+)$`, "m").exec(yaml);
-  return m ? yamlScalar(m[1]!) : "";
+  return m ? yamlScalar(m[1] ?? "") : "";
 }
 
 /** 列出酒馆全部预设（目录缺失/非 Tauri 环境返回空数组） */
@@ -285,8 +286,8 @@ export function parseCharacterCardPng(buf: ArrayBuffer): TavernCard | null {
   };
   let off = 8;
   while (off + 8 <= bytes.length) {
-    const len = ((bytes[off]! << 24) | (bytes[off + 1]! << 16) | (bytes[off + 2]! << 8) | bytes[off + 3]!) >>> 0;
-    const type = String.fromCharCode(bytes[off + 4]!, bytes[off + 5]!, bytes[off + 6]!, bytes[off + 7]!);
+    const len = (((bytes[off] ?? 0) << 24) | ((bytes[off + 1] ?? 0) << 16) | ((bytes[off + 2] ?? 0) << 8) | (bytes[off + 3] ?? 0)) >>> 0;
+    const type = String.fromCharCode(bytes[off + 4] ?? 0, bytes[off + 5] ?? 0, bytes[off + 6] ?? 0, bytes[off + 7] ?? 0);
     const dataStart = off + 8;
     if (dataStart + len + 4 > bytes.length) return null;
     if (type === "tEXt") {

@@ -22,7 +22,7 @@
  *   in : {"type":"mux_close","id"}（前端取消/载体回收）
  */
 
-import * as dshAuth from "../../shared/dsh-auth.mjs";
+import * as dshAuth from "./dsh-auth.mjs";
 import { coreBase } from "./rpc-http.js";
 import { log, logWarn, send } from "./protocol.js";
 
@@ -30,6 +30,20 @@ import { log, logWarn, send } from "./protocol.js";
 const sockets = new Map<string, WebSocket>();
 /** 当前页面世代：页面重载后新世代的首个 mux_open 回收上一代遗留的 WS。 */
 let currentPageId = "";
+
+/** 代发请求体上限（base64 字符数，≈192MB 原始字节；引擎聚合限制 200MB 之内）。
+ *  超过直接报错而不是无限缓冲——真正的流式分帧（官方 wire.ts 形状）见
+ *  docs/official-adoption.md #7b。 */
+const MAX_PROXY_BODY_CHARS = 256 * 1024 * 1024;
+/** 代发响应体上限（原始字节）。 */
+const MAX_PROXY_RESPONSE_BYTES = 64 * 1024 * 1024;
+/** 在途代发请求的取消句柄（前端 AbortSignal → http_proxy_cancel）。 */
+const proxyControllers = new Map<string, AbortController>();
+
+/** 取消一条在途代发（请求可能已完成，静默返回）。 */
+export function cancelHttpProxy(id: string): void {
+  proxyControllers.get(id)?.abort(new Error("kernel bridge: request canceled by client"));
+}
 
 function authHeaders(): { cookie: string; origin: string } | null {
   const secret = dshAuth.readSessionSecret();
@@ -50,55 +64,98 @@ interface ProxyRequest {
 export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
   const id = cmd.id;
   const path = typeof cmd.path === "string" ? cmd.path : "";
-  // 只代发引擎面（内核只会打 /api/*；/dsh-pocket 是社区插件的同源 RPC）
+  // 只代发引擎面（内核只会打 /api/*；/dsh-pocket 是社区插件的同源 RPC）。
+  // 先做字符串前缀检查（快速拒绝），再 URL 归一化复核（/api/../x 会绕过前者）。
   if (!path.startsWith("/api/") && !path.startsWith("/dsh-pocket/")) {
     send({ type: "error", id, message: `kernel bridge: refusing non-engine path ${path.slice(0, 80)}` });
     return;
   }
-  const auth = authHeaders();
-  if (auth === null) {
-    send({ type: "error", id, message: "kernel bridge: browser-session secret 未配置（引擎未初始化）" });
+  const base = coreBase();
+  let baseOrigin = "";
+  let target: URL;
+  try {
+    const baseUrl = new URL(base);
+    baseOrigin = baseUrl.origin;
+    target = new URL(path, baseUrl);
+  } catch {
+    send({ type: "error", id, message: `kernel bridge: invalid path ${path.slice(0, 80)}` });
     return;
   }
-  const base = coreBase();
-  const headers = new Headers();
-  for (const [name, value] of cmd.headers ?? []) {
-    // 宿主代发：逐跳头与浏览器伪造头一律丢弃，Host/Cookie/Origin 由本层重建
-    const lower = name.toLowerCase();
-    if (lower === "host" || lower === "cookie" || lower === "origin" || lower === "referer") continue;
-    try {
-      headers.append(name, value);
-    } catch {
-      /* 非法头名丢弃（Headers 会抛） */
-    }
+  if (target.origin !== baseOrigin || (!target.pathname.startsWith("/api/") && !target.pathname.startsWith("/dsh-pocket/"))) {
+    send({ type: "error", id, message: `kernel bridge: refusing non-engine path ${path.slice(0, 80)}` });
+    return;
   }
-  headers.set("cookie", auth.cookie);
-  headers.set("origin", auth.origin);
-  const body = cmd.bodyBase64 ? Buffer.from(cmd.bodyBase64, "base64") : undefined;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120_000);
+  const bodyBase64 = typeof cmd.bodyBase64 === "string" ? cmd.bodyBase64 : null;
+  if (bodyBase64 !== null && bodyBase64.length > MAX_PROXY_BODY_CHARS) {
+    send({ type: "error", id, message: "kernel bridge: request body too large" });
+    return;
+  }
   try {
-    const response = await fetch(`${base}${path}`, {
-      method: cmd.method ?? "GET",
-      headers,
-      ...(body === undefined ? {} : { body }),
-      signal: controller.signal,
-    });
-    const bytes = Buffer.from(await response.arrayBuffer());
-    send({
-      type: "result",
-      id,
-      data: {
-        status: response.status,
-        headers: [...response.headers.entries()],
-        bodyBase64: bytes.toString("base64"),
-      },
-    });
+    // authHeaders() 内含 readFileSync（凭据文件可能被占用）——必须在 try 内，
+    // 否则浮动 rejection 会直接杀死进程（无 unhandledRejection 兜底时）
+    const auth = authHeaders();
+    if (auth === null) {
+      send({ type: "error", id, message: "kernel bridge: browser-session secret 未配置（引擎未初始化）" });
+      return;
+    }
+    const headers = new Headers();
+    for (const [name, value] of cmd.headers ?? []) {
+      // 宿主代发：逐跳头与浏览器伪造头一律丢弃，Host/Cookie/Origin 由本层重建
+      const lower = name.toLowerCase();
+      if (
+        lower === "host" ||
+        lower === "cookie" ||
+        lower === "origin" ||
+        lower === "referer" ||
+        lower === "content-length" ||
+        lower === "transfer-encoding" ||
+        lower === "connection"
+      ) {
+        continue;
+      }
+      try {
+        headers.append(name, value);
+      } catch {
+        /* 非法头名丢弃（Headers 会抛） */
+      }
+    }
+    headers.set("cookie", auth.cookie);
+    headers.set("origin", auth.origin);
+    const body = bodyBase64 ? Buffer.from(bodyBase64, "base64") : undefined;
+    const controller = new AbortController();
+    proxyControllers.set(id, controller);
+    const timer = setTimeout(() => controller.abort(), 120_000);
+    try {
+      const response = await fetch(target, {
+        method: cmd.method ?? "GET",
+        headers,
+        ...(body === undefined ? {} : { body }),
+        signal: controller.signal,
+      });
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.byteLength > MAX_PROXY_RESPONSE_BYTES) {
+        send({ type: "error", id, message: "kernel bridge: response too large" });
+        return;
+      }
+      send({
+        type: "result",
+        id,
+        data: {
+          status: response.status,
+          headers: [...response.headers.entries()],
+          bodyBase64: bytes.toString("base64"),
+        },
+      });
+    } catch (err) {
+      logWarn("kernel bridge: http proxy %s failed: %s", path, err instanceof Error ? err.message : String(err));
+      send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      clearTimeout(timer);
+      proxyControllers.delete(id);
+    }
   } catch (err) {
-    logWarn("kernel bridge: http proxy %s failed: %s", path, err instanceof Error ? err.message : String(err));
+    logWarn("kernel bridge: http proxy setup failed: %s", err instanceof Error ? err.message : String(err));
     send({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
-  } finally {
-    clearTimeout(timer);
   }
 }
 

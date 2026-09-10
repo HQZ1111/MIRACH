@@ -300,7 +300,8 @@ export function MessagingOverlay() {
     telegram: true, email: true, api_server: true, webhook: true,
   });
 
-  const selected = PLATFORMS.find((p) => p.id === selectedId)!;
+  const selected = PLATFORMS.find((p) => p.id === selectedId) ?? PLATFORMS[0];
+  if (!selected) return null;
   const filtered = PLATFORMS.filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()));
   const isEnabled = enabled[selected.id] ?? false;
 

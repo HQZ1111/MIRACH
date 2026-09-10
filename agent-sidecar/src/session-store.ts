@@ -18,6 +18,7 @@ import { Context } from "@deepseek-ai/cordis";
 import JsonlSessionPersistence from "@deepseek-ai/dsh-session-persistence-jsonl";
 import { join } from "node:path";
 import { logDebug } from "./protocol.js";
+import { mirachHome } from "./runtime.js";
 
 /** 承载官方持久化服务的最小 cordis 上下文（进程级单例）。 */
 let ctx: Context | null = null;
@@ -43,8 +44,7 @@ function svc(): Promise<JsonlPersistenceInstance | null> {
         ctx = new Context();
         // root/compression 与引擎 profile patch（session-persistence-jsonl 行）一致：
         // 引擎落盘 = DSH_HOME/sessions + zstd。sidecar 读同一位置。
-        const root = process.env.DSH_SESSION_ROOT
-          ?? join(process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.cwd(), ".mirach"), "sessions");
+        const root = process.env.DSH_SESSION_ROOT ?? join(mirachHome(), "sessions");
         await ctx
           .plugin(JsonlSessionPersistence as unknown as Parameters<Context["plugin"]>[0], {
             root,

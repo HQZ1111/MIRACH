@@ -7,9 +7,7 @@
 import { useState, type ComponentProps, type ReactElement } from "react";
 import { Check, Copy } from "lucide-react";
 
-type PreProps = ComponentProps<"pre"> & {
-  children?: ReactElement<{ className?: string }>;
-};
+type PreProps = ComponentProps<"pre">;
 
 export function CodeBlock(props: PreProps) {
   const [copied, setCopied] = useState(false);

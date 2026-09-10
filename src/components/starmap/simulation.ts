@@ -90,7 +90,7 @@ const populatedStarts = (stamps: number[], u: Unit): number[] =>
 // abrupt; ~5+ evenly-paced rings give the smooth Spore-style build-up.
 function chooseUnit(stamps: number[], spanDays: number): Unit {
   const target = clamp(Math.round(4 + Math.log2(Math.max(1, spanDays / 60))), 5, 12)
-  let best = UNITS[0]!
+  let best: Unit = UNITS[0]
   let bestScore = Infinity
 
   for (const u of UNITS) {
@@ -218,7 +218,7 @@ function buildLayout(
   const buckets: StarmapNode[][] = starts.map(() => [])
 
   for (const n of graph.nodes) {
-    buckets[indexFor(n)]!.push(n)
+    buckets[indexFor(n)]?.push(n)
   }
 
   const tsOf = (n: StarmapNode): number => (Number.isFinite(Number(n.timestamp)) ? Number(n.timestamp) : Infinity)
@@ -227,8 +227,8 @@ function buildLayout(
   buckets.forEach((bucket, i) => {
     bucket.sort((a, b) => (tsOf(a) === tsOf(b) ? a.id.localeCompare(b.id) : tsOf(a) - tsOf(b)))
 
-    const hi = rings[i]!.ratio
-    const lo = i > 0 ? rings[i - 1]!.ratio : 0
+    const hi = rings[i]?.ratio ?? 0
+    const lo = i > 0 ? (rings[i - 1]?.ratio ?? 0) : 0
     const m = bucket.length
 
     // Ignite in CLUSTERS, not a 1-by-1 trickle: split the band's (time-ordered)

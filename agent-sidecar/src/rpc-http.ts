@@ -10,7 +10,7 @@
  *   POST http://127.0.0.1:<MIRACH_WEB_PORT>/api/<ns>/<method>
  *   body: { type:"client-request", rpcId, method:"<ns>/<method>",
  *          payload:{ args:{ <wire参数名>: 值 } } }
- * 鉴权：browser-session cookie 由 shared/dsh-auth.cjs 统一铸造（与 vite 代理
+ * 鉴权：browser-session cookie 由 dsh-auth.mjs 统一铸造（与 vite 代理
  * 同一实现；算法对照官方 browser-auth.ts，升级检查点见该文件头）。
  *
  * 实测确认的 wire 参数名：单对象参数 = `request`；无参 = `_request:{}`；
@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import * as dshAuth from "../../shared/dsh-auth.mjs";
+import * as dshAuth from "./dsh-auth.mjs";
 
 /** 引擎 web 面基址（与 dsh.ts 注入的 MIRACH_WEB_PORT 一致）。 */
 export function coreBase(): string {

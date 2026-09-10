@@ -14,7 +14,11 @@
  * 开关：VITE_KERNEL=1（main.tsx 判定；VITE_MOCK=0 真实模式默认开启）。
  */
 
-import "./module-loader-shim";
+import { buildBootGraph, CLIENT_MODULES_ID, PLATFORM_SEED } from "./module-loader-shim";
+// 引导模块必须紧跟门面注册（官方 PARSER_PRELOAD 语义）：它自己的工厂是
+// 模块系统的唯一 bootstrap 例外，create() 时从队列里直接实例化。
+import "@deepseek-ai/dsh-client-modules/client";
+import type { ClientModuleLoader } from "@deepseek-ai/dsh-client-modules/client";
 import TypertRegistry from "@deepseek-ai/dsh-typert-registry";
 import "@deepseek-ai/dsh-client-connection/client";
 import "@deepseek-ai/dsh-api-gateway/client";
@@ -111,7 +115,6 @@ import { recordUsage } from "@/store/usage";
 import { $activeSessionId } from "@/store/session";
 import { setKernelReady } from "@/store/kernel-ready";
 import { setKernelConnection, $kernelConnection } from "@/store/kernel-connection";
-import { bundleRequire } from "./module-loader-shim";
 import { installKernelTransport } from "./transport";
 import { createDshBridge, type KernelBridge } from "./dsh-bridge";
 import { registerMirachSections } from "./mirach-sections";
@@ -119,8 +122,47 @@ import { registerComposerExtras } from "./composer-extras";
 import { registerSidebarShell } from "./sidebar-shell";
 import { logInfo, logWarn } from "./kernel-log";
 
+/** 官方 client 模块系统（进程内单例：工厂已全部入队，失败重试复用同一实例）。 */
+let moduleSystem: ClientModuleLoader | null = null;
+/** 已实例化模块的同步快照（仅供必须同步的访问器读取）。 */
+const syncModuleCache = new Map<string, unknown>();
+
+/**
+ * 创建官方 ClientModuleSystem：从 __ModuleLoader__ 队列引导（引导模块例外），
+ * 图行覆盖全部 KERNEL_PLUGINS（工厂已静态注册 → 官方不触发任何脚本加载）。
+ */
+function ensureModuleSystem(): ClientModuleLoader {
+  if (moduleSystem !== null) return moduleSystem;
+  const target = (window as unknown as {
+    __ModuleLoader__: {
+      create: (options: { boot: unknown; staticModules: Record<string, unknown> }) => ClientModuleLoader;
+    };
+  }).__ModuleLoader__;
+  moduleSystem = target.create({
+    boot: buildBootGraph([CLIENT_MODULES_ID, ...KERNEL_PLUGINS]),
+    staticModules: PLATFORM_SEED,
+  });
+  return moduleSystem;
+}
+
+/** 实例化一个官方 bundle（解析语义全归官方模块表：strip /client、去重、环检测）。 */
+async function loadKernelModule<T>(id: string): Promise<T> {
+  // 官方 import 是 Node loader 同形契约（specifier/parentURL/attrs）；客户端图是扁平的
+  const exports = (await ensureModuleSystem().import(id, "", {})) as T;
+  syncModuleCache.set(id, exports);
+  return exports;
+}
+
+/** 同步读取已实例化模块（未实例化返回 undefined，调用方走回退分支）。 */
+function kernelModuleSync<T>(id: string): T | undefined {
+  return syncModuleCache.get(id) as T | undefined;
+}
+
 /** 鍐呮牳鎻掍欢婵€娲婚『搴忥紙modules 绯荤粺 bundle id 鈫?瀹炰緥鍖?鈫?cordis plugin锛夈€?*/
 const KERNEL_PLUGINS = [
+  // 模块系统自身的插件面：把官方 ClientModuleSystem 提供为 ctx.modules
+  // （官方 web-app 同款；任何 inject 'modules' 的官方插件因此可被满足）
+  "@deepseek-ai/dsh-client-modules/client",
   "@deepseek-ai/dsh-client-connection/client",
   "@deepseek-ai/dsh-api-gateway/client",
   "@deepseek-ai/dsh-api-remotes/client",
@@ -315,17 +357,20 @@ export function nativeSettingsSections(): {
   }[];
   const mapped = entries
     .filter((e) => typeof e.options?.id === "string")
-    .map((e) => ({
-      id: e.options!.id as string,
-      label:
-        typeof e.options!.label === "function"
-          ? (e.options!.label as () => string)()
-          : String(e.options!.label ?? e.options!.id),
-      component: e.component,
-      ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
-      ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
-      options: e.options ?? {},
-    }))
+    .map((e) => {
+      const opts = e.options ?? {};
+      return {
+        id: String(opts.id),
+        label:
+          typeof opts.label === "function"
+            ? (opts.label as () => string)()
+            : String(opts.label ?? opts.id),
+        component: e.component,
+        ...(typeof e.inject === "function" ? { inject: e.inject as (...args: never[]) => unknown } : {}),
+        ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
+        options: opts,
+      };
+    })
     .sort((a, b) => ((a.options.order as number) ?? 0) - ((b.options.order as number) ?? 0));
   const listOut = mapped.length === 0 ? (EMPTY_SECTIONS as ReturnType<typeof nativeSettingsSections>) : mapped;
   sectionsCache = { version, list: listOut };
@@ -426,14 +471,11 @@ export function nativeLocaleTranslate(ns: string): ((key: string, params?: Recor
 export function nativeModelSeat(): {
   ModelSelect: (props: Record<string, unknown>) => React.ReactElement | null;
 } | null {
-  try {
-    const mod = bundleRequire("@deepseek-ai/dsh-client-ui-model-selection/client") as {
-      ModelSelect?: (props: Record<string, unknown>) => React.ReactElement | null;
-    };
-    return mod?.ModelSelect ? { ModelSelect: mod.ModelSelect } : null;
-  } catch {
-    return null;
-  }
+  // 同步读已实例化模块（boot 期间预热；未就绪时回退 mirach 自有模型菜单）
+  const mod = kernelModuleSync<{ ModelSelect?: (props: Record<string, unknown>) => React.ReactElement | null }>(
+    "@deepseek-ai/dsh-client-ui-model-selection/client",
+  );
+  return mod?.ModelSelect ? { ModelSelect: mod.ModelSelect } : null;
 }
 
 // ---- 官方对话根树（dsh 风格原生融合：AppFrame/conversation/ChatView/Composer） ----
@@ -841,7 +883,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // missing — kernel inactive"），整个会话/UI 内核变成半活。
     new (TypertRegistry as unknown as { new (ctx: Context): unknown })(ctx);
     for (const id of KERNEL_PLUGINS) {
-      const mod = bundleRequire(id) as { inject?: string[]; apply: (c: Context) => unknown };
+      const mod = await loadKernelModule<{ inject?: string[]; apply: (c: Context) => unknown }>(id);
       if (mod?.apply === undefined) throw new Error(`plugin ${id} has no apply`);
       // 单插件失败只降级该插件（seat/词典缺失走回退 UI），不拖垮整个内核
       try {
@@ -858,7 +900,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
     const pendingInjects: string[] = [];
     for (const id of KERNEL_PLUGINS) {
       try {
-        const mod = bundleRequire(id) as { inject?: string[] };
+        const mod = await loadKernelModule<{ inject?: string[] }>(id);
         const missing = (mod.inject ?? []).filter((key) => (ctx as unknown as { get?: (k: string) => unknown }).get?.(key) === undefined);
         if (missing.length > 0) pendingInjects.push(`${id} ⇐ ${missing.join(",")}`);
       } catch {
@@ -880,7 +922,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // ── 酒馆原生面板：ctx.slots/ctx.locale 由上面官方 ui-renderer/locale 提供，
     // 不再需要 shim。直接调 apply(ctx) 注册 settings.section。
     try {
-      const tavern = bundleRequire("dsh-tavern") as { apply?: (c: Context) => void };
+      const tavern = await loadKernelModule<{ apply?: (c: Context) => void }>("dsh-tavern");
       tavern?.apply?.(ctx);
       logInfo("tavern native panel registered");
     } catch (err) {
@@ -888,7 +930,7 @@ async function bootKernelMirrorOnce(): Promise<void> {
     }
     // ── dsh-pocket 原生面板（"手机访问"分区；引擎侧代理经 profile bundles 加载）
     try {
-      const pocket = bundleRequire("dsh-pocket") as { apply?: (c: Context) => void };
+      const pocket = await loadKernelModule<{ apply?: (c: Context) => void }>("dsh-pocket");
       pocket?.apply?.(ctx);
       logInfo("dsh-pocket native panel registered");
     } catch (err) {
@@ -903,13 +945,20 @@ async function bootKernelMirrorOnce(): Promise<void> {
     // ── 侧栏窄态断点关闭：官方 AppFrame 的模块级开关，与插件循环共用
     //    bundleRequire 缓存（同一实例）——必须先于树渲染设置。降级仅告警。
     try {
-      const layoutBundle = bundleRequire("@deepseek-ai/dsh-client-ui-layout/client") as {
-        setSidebarAutoCollapseEnabled?: (enabled: boolean) => void;
-      };
+      const layoutBundle = await loadKernelModule<{ setSidebarAutoCollapseEnabled?: (enabled: boolean) => void }>(
+        "@deepseek-ai/dsh-client-ui-layout/client",
+      );
       layoutBundle?.setSidebarAutoCollapseEnabled?.(false);
       logInfo("sidebar narrow auto-collapse disabled (fixed-panel layout)");
     } catch (err) {
       logWarn("ui-layout narrow switch unavailable: %s", err instanceof Error ? err.message : String(err));
+    }
+    // 同步访问器预热：mirach 自有 Composer 经 nativeModelSeat() 同步取官方
+    // ModelSelect（模块表本身是异步实例化的，先预热进同步快照）
+    try {
+      await loadKernelModule("@deepseek-ai/dsh-client-ui-model-selection/client");
+    } catch (err) {
+      logWarn("model seat preload failed: %s", err instanceof Error ? err.message : String(err));
     }
     // ── mirach 侧栏外壳：接管官方 sidebar 槽（官方 ui-sidebar 已移除，
     //    本注册自带 5 个官方子槽声明 + inject：官方 WorkspaceBrowser/设置
@@ -985,7 +1034,7 @@ function firstSessionId(sessions: KernelSessions): string | null {
     list?: { getSnapshot?: () => { ids?: readonly string[] } };
   }).list;
   const ids = listState?.getSnapshot?.().ids;
-  return ids && ids.length > 0 ? ids[0]! : null;
+    return ids && ids.length > 0 ? (ids[0] ?? null) : null;
 }
 
 function countSessions(sessions: KernelSessions): number {
@@ -1007,6 +1056,14 @@ const mirrorState = new Map<
  * 璁㈤槄涓€涓細璇濈殑浜嬩欢绐楀彛骞舵妸浜嬩欢闀滃儚杩?mirach stores锛? *   - 鍏ㄩ噺鏉＄洰 鈫?pushRawEvents锛坰eq 鍘婚噸锛?rawEvents/$assembly 娑堣垂锛? *   - usage 浜嬩欢 鈫?recordUsage锛圕omposer 鐢ㄩ噺闈㈡澘锛? *   - 姘翠綅涔嬪悗鐨勬柊浜嬩欢 鈫?pi 妗?鈫?$chat
  * 棣栨鏆磋湰鏈熬浣滄按浣嶏紙鍘嗗彶宸辩 loadLiveHistory 涓婁睆锛屼笉閲嶆斁闃插弻姘旀场锛夈? * 涓?sidecar 鐨?raw_session_event 鍙岄瀹夊叏锛氬悓寮曟搸鍚?seq锛屽幓閲嶅嵆鍚堟祦銆? */
 export function mirrorSessionEvents(sessions: KernelSessions, sessionId: string): void {
+  // 只保留当前会话的镜像：旧会话订阅必须退订，否则切会话后旧事件继续写入
+  // $rawEvents（跨会话污染 + 同 seq 事件被去重丢弃）
+  for (const [id, st] of [...mirrorState]) {
+    if (id !== sessionId) {
+      st.unsubscribe();
+      mirrorState.delete(id);
+    }
+  }
   const st = mirrorState.get(sessionId);
   if (st !== undefined) {
     // 事件源被重建（重连/重新 open）则退订旧实例并重挂
@@ -1017,17 +1074,31 @@ export function mirrorSessionEvents(sessions: KernelSessions, sessionId: string)
   const binding = sessions.binding(sessionId);
   if (!binding) return;
   const source = binding.eventSource;
+  // raw 日志归属用前端会话 id（与 MainPanel 历史回放同一 id 空间）
+  const owner = $activeSessionId.get() ?? sessionId;
+
+  // 只推水位之后的新事件：原实现每次 ingest 整窗重推（O(n²)），
+  // 且 reset 后会把旧会话窗口重新灌回，跨会话污染
+  let maxPushed = -1;
+  const pushNew = (events: { seq: number; type: string; data: unknown; time?: number }[]): void => {
+    const fresh = events.filter((e) => e.seq > maxPushed);
+    if (fresh.length === 0) return;
+    pushRawEvents(owner, fresh);
+    maxPushed = fresh[fresh.length - 1].seq;
+  };
 
   // 首帧：水位置为快照最大 seq（历史已由 loadLiveHistory 上屏，不重放）
-  const firstMax = source.getSnapshot().entries.reduce((m, e) => Math.max(m, e.event.seq), -1);
-  pushRawEvents(source.getSnapshot().entries.map((e) => e.event));
+  const snapshot = source.getSnapshot().entries.map((e) => e.event);
+  const firstMax = snapshot.reduce((m, e) => Math.max(m, e.seq), -1);
+  pushNew(snapshot);
+  maxPushed = firstMax;
   const state = { watermark: firstMax, source, unsubscribe: () => {} };
   mirrorState.set(sessionId, state);
 
   const ingest = (): void => {
     const win = source.getSnapshot();
     const events = win.entries.map((e) => e.event);
-    if (events.length > 0) pushRawEvents(events);
+    pushNew(events);
     // $chat 桥接：只喂水位之后的新事件（历史不重放，usage 不倍增）
     const wm = state.watermark;
     let maxSeq = wm;
@@ -1045,6 +1116,20 @@ export function mirrorSessionEvents(sessions: KernelSessions, sessionId: string)
   ingest();
   const unsubscribe = source.subscribe(ingest);
   state.unsubscribe = unsubscribe;
+}
+
+/** 前端会话 id → dsh 会话 id（sidecar session-map；未映射返回 null）。 */
+async function mappedKernelSessionId(frontendId: string): Promise<string | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const raw = await invoke<{ dshId?: string | null }>("dsh_rpc", {
+      method: "session.map.get",
+      params: { sessionId: frontendId },
+    });
+    return raw?.dshId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function extractUsage(type: string, data: unknown): Record<string, number> | null {
@@ -1079,23 +1164,32 @@ export async function kernelSend(text: string): Promise<void> {
     throw new Error("kernel has no sessions (" + diag + ")");
   }
 
-  if (activeCoreSessionId === null) {
-    const first = firstSessionId(sessions);
-    if (first !== null) {
-      activeCoreSessionId = first;
-    } else if (typeof (sessions as unknown as { create?: () => Promise<string> }).create === "function") {
-      activeCoreSessionId = await (sessions as unknown as { create: () => Promise<string> }).create();
+  // 目标会话：优先用当前 mirach 会话映射到的 dsh 会话（原实现固定用"第一个
+  // 官方会话"，与用户当前会话无关——事件会被归到错误的会话）
+  const frontendId = $activeSessionId.get() ?? null;
+  let target: string | null = frontendId !== null ? await mappedKernelSessionId(frontendId) : null;
+  if (target === null) {
+    if (activeCoreSessionId !== null) {
+      target = activeCoreSessionId;
     } else {
-      throw new Error("kernel: no session to prompt");
+      const first = firstSessionId(sessions);
+      if (first !== null) {
+        target = first;
+      } else if (typeof (sessions as unknown as { create?: () => Promise<string> }).create === "function") {
+        target = await (sessions as unknown as { create: () => Promise<string> }).create();
+      } else {
+        throw new Error("kernel: no session to prompt");
+      }
     }
-    sessions.open(activeCoreSessionId);
   }
-  // 纭繚鍙戦€佷細璇濈殑浜嬩欢妗ュ凡璁㈤槄
-  mirrorSessionEvents(sessions, activeCoreSessionId);
+  activeCoreSessionId = target;
+  if (!sessions.binding(target)) sessions.open(target);
+  // 确保发送会话的事件桥已订阅
+  mirrorSessionEvents(sessions, target);
 
-  const binding = sessions.binding(activeCoreSessionId);
+  const binding = sessions.binding(target);
   if (!binding) throw new Error("kernel: binding missing");
-  bridge.setSendText(text, $activeSessionId.get() ?? undefined);
+  bridge.setSendText(text, frontendId ?? undefined);
   await binding.session.prompt(text, "queue");
 }
 

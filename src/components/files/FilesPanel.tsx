@@ -51,7 +51,7 @@ const CODE_EXT = new Set([
 
 function iconFor(name: string, isDir: boolean) {
   if (isDir) return null; // 用展开态图标
-  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  const ext = name.includes(".") ? (name.split(".").pop() ?? "").toLowerCase() : "";
   return CODE_EXT.has(ext) ? FileCode : FileText;
 }
 

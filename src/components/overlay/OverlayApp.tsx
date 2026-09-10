@@ -20,6 +20,7 @@ import { TabsPopup } from "./popups/TabsPopup";
 import { ZoomPopup } from "./popups/ZoomPopup";
 import { QuickOpenPopup } from "./popups/QuickOpenPopup";
 import { OVERLAY_PAD, type OverlayShowPayload } from "./events";
+import { createUnlistenCollector } from "@/lib/tauri-listen";
 
 export function OverlayApp() {
   const [popup, setPopup] = useState<OverlayShowPayload | null>(null);
@@ -38,12 +39,10 @@ export function OverlayApp() {
 
   // 监听主应用事件：show 渲染 / hide 清空
   useEffect(() => {
-    const unsubs: (() => void)[] = [];
-    void listen<OverlayShowPayload>("overlay:show", (e) => setPopup(e.payload)).then((u) =>
-      unsubs.push(u),
-    );
-    void listen("overlay:hide", () => setPopup(null)).then((u) => unsubs.push(u));
-    return () => unsubs.forEach((u) => u());
+    const subs = createUnlistenCollector();
+    void listen<OverlayShowPayload>("overlay:show", (e) => setPopup(e.payload)).then(subs.track);
+    void listen("overlay:hide", () => setPopup(null)).then(subs.track);
+    return () => subs.dispose();
   }, []);
 
   // Esc 关闭；失焦（点击浏览器 webview / 主应用 / 其他窗口）→ 弹窗自动关闭

@@ -22,12 +22,17 @@
         "decorations": false,
         "transparent": true,
         "backgroundColor": "#00000000",
-        "shadow": false,
-        "additionalBrowserArgs": "--remote-debugging-port=9222"
+        "shadow": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: asset: http://asset.localhost; media-src 'self' data: blob: https: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost https: wss:; frame-src https:; child-src https:; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https: asset: http://asset.localhost; media-src 'self' data: blob: https: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost https: wss: http://localhost:1420 ws://localhost:1420; frame-src https:; child-src https:; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0MEZBNkU0NDc1NDU1MDIKUldRQ1ZWUkg1S1lQMU9sM3VWODIyb1NzTkM2QkNJZ1YyLzE5Y1M1KzJSRWQ4YmtXV0ZXQlFxRHgK"
     }
   },
   "bundle": {

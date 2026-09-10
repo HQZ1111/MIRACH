@@ -10,7 +10,7 @@
  * （rehype 阶段构建 span 元素，不引入 raw HTML 渲染，安全）。
  */
 
-import { memo, type ReactElement, type ReactNode } from "react";
+import { memo, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -140,7 +140,8 @@ const components: Components = {
     if (lang === "terminal" || lang === "console-output") {
       return <TerminalOutput text={raw} />;
     }
-    return <CodeBlock {...(props as any)} />;
+    // react-markdown 的渲染 props 携带 node/extra 字段：收窄到原生元素 props
+    return <CodeBlock {...(props as ComponentProps<"pre">)} />;
   },
   code: ({ className, children }) => {
     // 行内代码（无 className）
@@ -154,7 +155,7 @@ const components: Components = {
     // 块代码（rehype-highlight 已注入 hljs 类）
     return <code className={className}>{children}</code>;
   },
-  img: (props) => <ZoomableImage {...(props as any)} />,
+  img: (props) => <ZoomableImage {...(props as ComponentProps<"img">)} />,
   table: ({ children }) => (
     <table className="my-2 border-collapse text-[13px]">{children}</table>
   ),

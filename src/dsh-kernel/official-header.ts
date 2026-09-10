@@ -56,6 +56,8 @@ export function useOfficialHeader(): OfficialHeader {
       };
       // kernelReady 变化时源才出现/重建：依赖它强制重建订阅
     },
+    // kernelReady 只在源重建时用作信号（订阅体不直接读取）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [kernelReady],
   );
   const snapshot = useSyncExternalStore(

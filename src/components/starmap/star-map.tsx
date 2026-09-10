@@ -345,7 +345,7 @@ export function StarMap({
 
     // Small headroom (a third of a band) so the igniting ring isn't jammed at the
     // frame edge during playback, without zooming the resting view out.
-    return rings[i]!.r + band * 0.35
+    return (rings[i]?.r ?? 0) + band * 0.35
   }, [])
 
   const applyFit = useCallback((radius: number) => {

@@ -56,16 +56,21 @@ function isBoundaryEvent(event: DshSessionEvent): boolean {
     || event.type === "step/start" || event.type === "step/end";
 }
 
+/** 已应用 seq 集合的容量上限（2× $rawEvents 环容量）：超出后按水位裁剪，内存有界。 */
+const APPLIED_WINDOW = 12_000;
+
 export class AssemblyEngine {
   private timeline = new ConversationLocationIndex();
   private stats: SessionStatsState = initSessionStats();
   private usage: TokenUsageState = initTokenUsage();
   private pressure: ContextPressureState = initContextPressure();
   private breakdown: ContextBreakdownState = initContextBreakdown();
-  /** 已应用事件的 seq（历史/实时重叠去重）。 */
+  /** 已应用事件的 seq（历史/实时重叠去重；按水位有界裁剪）。 */
   private applied = new Set<number>();
   /** 已应用的最高 seq（水位）。 */
   private lastSeq: number | null = null;
+  /** 当前装配的会话 id：跨会话摄入时自动整窗复位（store 层已保证同会话）。 */
+  private sessionId: string | null = null;
   /** 会话统计视图缓存（state 引用未变则返回同一视图，避免每事件无效 set）。 */
   private statsViewRef: SessionStatsState | null = null;
   private statsView: SessionStatsProjection | undefined;
@@ -107,8 +112,14 @@ export class AssemblyEngine {
   /**
    * 摄入一批按 seq 升序的事件（$rawEvents 列表即此形态）。
    * 空引擎 + 批量 → 整窗重建；否则增量应用，检出迟到回填时整窗重建。
+   * @param sessionId - 归属会话（变化即复位；省略表示沿用当前会话）
    */
-  ingest(events: readonly DshSessionEvent[]): void {
+  ingest(events: readonly DshSessionEvent[], sessionId?: string): void {
+    if (sessionId !== undefined && sessionId !== this.sessionId) {
+      // 跨会话摄入是硬错误（投影/时间线会串台）：直接复位，宁可重放也不混
+      this.reset();
+      this.sessionId = sessionId;
+    }
     if (events.length === 0) return;
     if (this.lastSeq === null && this.applied.size === 0) {
       this.rebuildAll(events);
@@ -127,6 +138,17 @@ export class AssemblyEngine {
       this.lastSeq = this.lastSeq === null ? event.seq : Math.max(this.lastSeq, event.seq);
     }
     if (resync) this.rebuildAll(events);
+    this.pruneApplied();
+  }
+
+  /** 水位以下的已应用记录定期丢弃（迟到回填会经 resync→rebuild 正确补上）。 */
+  private pruneApplied(): void {
+    if (this.applied.size <= APPLIED_WINDOW) return;
+    const cutoff = (this.lastSeq ?? 0) - APPLIED_WINDOW;
+    if (cutoff <= 0) return;
+    for (const seq of this.applied) {
+      if (seq < cutoff) this.applied.delete(seq);
+    }
   }
 
   /** 事件基本形态校验（缺 seq 的行不是会话事件）。 */

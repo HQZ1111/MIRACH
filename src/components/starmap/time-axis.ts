@@ -80,7 +80,8 @@ export function buildTimeAxis(graph: StarmapGraph, bucketCount = 48): TimeAxis {
   for (const node of graph.nodes) {
     const r = rec.get(node.id) ?? 0
     const idx = clamp(Math.floor(r * n), 0, n - 1)
-    const b = buckets[idx]!
+    const b = buckets[idx]
+    if (!b) continue
     b.total += 1
 
     if (node.kind === 'memory') {

@@ -119,15 +119,14 @@ export function StatusWindow({ className }: { className?: string }) {
   }, [count, autoExpand]);
 
   const toggleAutoExpand = () => {
-    setAutoExpand((v) => {
-      const next = !v;
-      try {
-        localStorage.setItem(AUTO_EXPAND_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+    // 副作用移出 state updater（updater 必须纯：StrictMode 下会被双调用）
+    const next = !autoExpand;
+    setAutoExpand(next);
+    try {
+      localStorage.setItem(AUTO_EXPAND_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
   };
 
   // 点击窗口外区域 → 收起

@@ -476,5 +476,7 @@ export function upsertTavernMember(input: TavernMemberInput): ConvItem {
     ];
   }
   saveAgentsOf(TAVERN_MEMBER_ENV, next);
-  return next.find((a) => a.id === id)!;
+  const saved = next.find((a) => a.id === id);
+  if (saved === undefined) throw new Error(`tavern member ${id} missing after upsert`);
+  return saved;
 }

@@ -15,6 +15,7 @@ import { notify } from "@/lib/notify";
 import { initWindowState, initQuitGuard } from "@/lib/windowState";
 import { $bgState, type BackgroundProcess } from "@/store/background-processes";
 import { openSessionWindow } from "@/lib/sessionWindow";
+import { createUnlistenCollector } from "@/lib/tauri-listen";
 import { ResizeHandles } from "@/components/window/ResizeHandles";
 // 插件注册（模块导入即注册到 registry）
 import "@/plugins/samples/hello";
@@ -106,12 +107,10 @@ function App() {
     void initWindowState();
     void initQuitGuard();
     // quick entry 提交事件
-    let unsubListen: (() => void) | undefined;
+    const subs = createUnlistenCollector();
     void listen<{ text: string }>("quick-entry:submit", (e) => {
       handleQuickSubmit(e.payload.text);
-    }).then((u) => {
-      unsubListen = u;
-    });
+    }).then(subs.track);
     // deep link（hermes:// 协议；Windows 需安装/注册 scheme，不可用时忽略）
     try {
       onOpenUrl((urls) => {
@@ -130,7 +129,7 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      unsubListen?.();
+      subs.dispose();
     };
   }, []);
 

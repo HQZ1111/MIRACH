@@ -247,20 +247,35 @@ export async function ensureEngineAlive(): Promise<boolean> {
 
 // Rust 侧 dsh_lost（sidecar 死亡）→ 触发重连（Rust 自愈会重 spawn +
 // auto prewarm，这里把前端状态拉回 connecting 并等 prewarm 重新点亮）
-if (!MOCK && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-  import("@tauri-apps/api/event")
-    .then(({ listen }) => listen("dsh_lost", () => {
-      $gatewayState.set("error");
-      $gatewayError.set("sidecar 已退出 — 正在自动恢复");
-      scheduleReconnect("sidecar 退出");
-    }))
-    .catch(() => {});
-}
+// + 已连接时每 15s 真 RPC 往返探活（网关状态点不能是假按钮）。
+// 模块级单例：HMR 重新执行本模块时先注销旧监听/定时器，避免叠加。
+let gatewayWatchdogUnlisten: (() => void) | null = null;
+let gatewayWatchdogTimer: number | null = null;
 
-// 自动感知（网关状态点不能是假按钮）：已连接时每 15s 真 RPC 往返探活，
-// 引擎僵死/退出即自动进入退避重连并更新状态点；未连接时由启动门/重连流程驱动。
 if (!MOCK && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-  window.setInterval(() => {
+  void import("@tauri-apps/api/event")
+    .then(({ listen }) =>
+      listen("dsh_lost", () => {
+        $gatewayState.set("error");
+        $gatewayError.set("sidecar 已退出 — 正在自动恢复");
+        scheduleReconnect("sidecar 退出");
+      }),
+    )
+    .then((unlisten) => {
+      gatewayWatchdogUnlisten = unlisten;
+    })
+    .catch(() => {});
+  gatewayWatchdogTimer = window.setInterval(() => {
     if ($gatewayState.get() === "open") void ensureEngineAlive();
   }, 15_000);
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      gatewayWatchdogUnlisten?.();
+      gatewayWatchdogUnlisten = null;
+      if (gatewayWatchdogTimer !== null) {
+        window.clearInterval(gatewayWatchdogTimer);
+        gatewayWatchdogTimer = null;
+      }
+    });
+  }
 }

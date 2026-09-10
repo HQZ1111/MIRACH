@@ -39,7 +39,9 @@ export function useStreamingReply(): (sessionId: string, text: string) => Promis
         // 原始 SessionEvent 透传 → 事件日志 store（装配层/定位器底座）；
         // raw 底座按活跃会话装载，后台事件不喂（切回时历史重放补齐）
         if (e.type === "raw_session_event") {
-          if (active) pushRawEvent(e.event.seq ?? e.seq, e.event.type, e.event.data, e.event.time ?? 0);
+          // 归属 = 发起会话（前端 id）：与 MainPanel 历史回放同一 id 空间，
+          // 跨会话事件被 store 拒绝（引擎 seq 每会话单调，只按 seq 去重会串台）
+          if (active) pushRawEvent(sidAtSend ?? sessionId, e.event.seq ?? e.seq, e.event.type, e.event.data, e.event.time ?? 0);
           return;
         }
         handleMirachEvent(e, {

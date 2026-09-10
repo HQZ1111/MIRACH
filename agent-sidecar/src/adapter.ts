@@ -53,6 +53,8 @@ export function createDshAdapter(opts: DshAdapterOptions) {
   let firstContentSeen = false;
   /** 当前回合引擎 assistant 消息 id（feedback.put 需要引擎消息 id 作 target） */
   let lastEngineMessageId: string | null = null;
+  /** 已记录过的未映射事件类型（每种只记一次，便于随引擎升级补映射） */
+  const loggedUnknownTypes = new Set<string>();
 
   const pi = (event: unknown) => opts.emit(event);
 
@@ -386,7 +388,23 @@ export function createDshAdapter(opts: DshAdapterOptions) {
           // 日志型快照；provider/model 以运行时配置为准，忽略
           return true;
         }
+        case "llm/retry":
+        case "llm/retry-started": {
+          // 上游重试对用户可见（否则长时间无输出像是卡死）
+          pi({ type: "status.update", status: "⚠️ 模型请求失败，正在重试…" });
+          return true;
+        }
+        case "approval/asked":
+        case "approval/requested": {
+          pi({ type: "status.update", status: "⏳ 等待授权确认…" });
+          return true;
+        }
         default:
+          // 未映射事件不静默：每种类型只记一次（避免日志刷屏），便于随引擎升级补映射
+          if (!loggedUnknownTypes.has(event.type)) {
+            loggedUnknownTypes.add(event.type);
+            logDebug("adapter: unmapped session event type=%s", event.type);
+          }
           return false;
       }
     },

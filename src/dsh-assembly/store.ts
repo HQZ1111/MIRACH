@@ -46,11 +46,11 @@ function shallowEqual(a: unknown, b: unknown): boolean {
 
 /**
  * 摄入一批事件（实时单条与历史批量共用；调用方保证同会话内 seq 单调）。
- * 会话切换后由 resetAssembly() 复位，首次摄入自动走整窗重建。
+ * @param sessionId - 归属会话（变化即整窗复位，防跨会话串台）
  */
-export function ingestAssemblyEvents(events: readonly DshSessionEvent[]): void {
+export function ingestAssemblyEvents(events: readonly DshSessionEvent[], sessionId?: string): void {
   if (events.length === 0) return;
-  engine.ingest(events);
+  engine.ingest(events, sessionId);
   publish();
 }
 
