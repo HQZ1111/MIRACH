@@ -29,6 +29,9 @@ const PAGE_ID = crypto.randomUUID();
 /** 允许代发的路径前缀（引擎 web 面；/dsh-pocket 是社区插件同源 RPC）。 */
 const PROXY_PREFIXES = ["/api/", "/dsh-pocket/"];
 
+/** 请求体分块阈值：超过则按块经 dsh_http_proxy_chunk 送（峰值内存 = 单块）。 */
+const BODY_CHUNK_BYTES = 4 * 1024 * 1024;
+
 /** 合成 Response 时不能原样带回的逐跳头。 */
 const DROP_RESPONSE_HEADERS = new Set([
   "connection",
@@ -139,13 +142,26 @@ export async function hostFetch(input: RequestInfo | URL, init?: RequestInit): P
   init?.signal?.addEventListener("abort", onAbort, { once: true });
   let result: ProxyResponse;
   try {
-    result = await invoke<ProxyResponse>("dsh_http_proxy", {
+    // 大请求体分块送：Rust/sidecar 侧不出现单条数百 MB 的 JSON 行（峰值内存 = 单块大小）
+    const chunked = bytes !== null && bytes.byteLength > BODY_CHUNK_BYTES;
+    const chunks: string[] = [];
+    if (chunked && bytes !== null) {
+      for (let offset = 0; offset < bytes.byteLength; offset += BODY_CHUNK_BYTES) {
+        chunks.push(base64FromBytes(bytes.subarray(offset, offset + BODY_CHUNK_BYTES)));
+      }
+    }
+    const start = invoke<ProxyResponse>("dsh_http_proxy", {
       path: url.pathname + url.search,
       method: init?.method ?? "GET",
       headers,
-      bodyBase64: bytes === null ? null : base64FromBytes(bytes),
+      bodyBase64: chunked || bytes === null ? null : base64FromBytes(bytes),
       requestId,
+      ...(chunked ? { bodyChunks: chunks.length } : {}),
     });
+    for (let i = 0; i < chunks.length; i++) {
+      await invoke("dsh_http_proxy_chunk", { streamId: requestId, index: i, data: chunks[i] });
+    }
+    result = await start;
   } finally {
     init?.signal?.removeEventListener("abort", onAbort);
   }

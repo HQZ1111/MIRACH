@@ -34,7 +34,7 @@ import { join } from "node:path";
 import { MessageQueue, type QueuedMessage } from "./queue.js";
 import { resolveRuntimePaths } from "./runtime.js";
 import { remoteCall, type RemoteCallResult } from "./rpc-http.js";
-import { cancelHttpProxy, handleHttpProxy, handleMuxClose, handleMuxOpen, shutdownKernelBridge } from "./kernel-bridge.js";
+import { cancelHttpProxy, handleHttpProxy, handleMuxClose, handleMuxOpen, pushHttpProxyChunk, shutdownKernelBridge } from "./kernel-bridge.js";
 import { listPlugins, installPlugin, uninstallPlugin, checkEngineUpdate, updateEngine, profileEntryRows } from "./plugins.js";
 import { subagentBackendsStatus, subagentSetEnabled } from "./subagent-backends.js";
 import { withTurnLease, LEASE_BOOT_ID } from "./turn-lease.js";
@@ -367,6 +367,11 @@ interface InboundCommand {
   method?: string;
   headers?: [string, string][];
   bodyBase64?: string | null;
+  /** http_proxy：分块请求体的块数（大附件走分块，避免单条巨型 JSON 行） */
+  bodyChunks?: number | null;
+  /** http_proxy_chunk：块序号与 base64 数据 */
+  index?: number;
+  data?: string;
   /** mux_open：Remote 逻辑流的 endpoint 与 payload */
   endpoint?: string;
   payload?: unknown;
@@ -862,9 +867,19 @@ async function handleCommand(cmd: InboundCommand): Promise<void> {
     case "http_proxy": {
       // 内核（官方客户端栈）unary RPC 代发：Node 侧带 cookie 访问引擎 /api。
       // 不 await——readline 命令循环不能被单次 HTTP 往返卡住（其余命令照常排队）。
-      void handleHttpProxy({ id, path: cmd.path, method: cmd.method, headers: cmd.headers, bodyBase64: cmd.bodyBase64 }).catch(
-        (err) => logWarn("http_proxy failed: %s", err instanceof Error ? err.message : String(err)),
-      );
+      void handleHttpProxy({
+        id,
+        path: cmd.path,
+        method: cmd.method,
+        headers: cmd.headers,
+        bodyBase64: cmd.bodyBase64,
+        bodyChunks: cmd.bodyChunks,
+      }).catch((err) => logWarn("http_proxy failed: %s", err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    case "http_proxy_chunk": {
+      // 大请求体分块（配合 bodyChunks）：逐块累积，齐了才发请求
+      pushHttpProxyChunk(id, typeof cmd.index === "number" ? cmd.index : -1, typeof cmd.data === "string" ? cmd.data : "");
       return;
     }
     case "http_proxy_cancel": {

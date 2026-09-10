@@ -1541,6 +1541,7 @@ pub fn run() {
             dsh_relay::dsh_set_env,
             dsh_relay::dsh_rpc,
             dsh_relay::dsh_http_proxy,
+            dsh_relay::dsh_http_proxy_chunk,
             dsh_relay::dsh_http_proxy_cancel,
             dsh_relay::ssh_test,
             dsh_relay::dsh_restart_sidecar,
@@ -1582,6 +1583,50 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{canonical_lenient, ensure_path_allowed, load_config};
+
+    /// 发布产物签名自检：`target/release/bundle/nsis/Mirach_*.exe` + `.sig` 必须能用
+    /// tauri.conf.json 里的公钥验签（与 tauri-plugin-updater 同一条校验链路）。
+    /// 未构建发布产物时跳过——它守护的是"签名与内置公钥一致"，不是常规单测。
+    #[test]
+    fn release_artifact_signature_matches_embedded_pubkey() {
+        use base64::Engine as _;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let nsis = root.join("target").join("release").join("bundle").join("nsis");
+        let Some(exe) = std::fs::read_dir(&nsis).ok().and_then(|dir| {
+            dir.flatten()
+                .map(|e| e.path())
+                .find(|p| {
+                    p.extension().map(|e| e == "exe").unwrap_or(false)
+                        && p.file_name()
+                            .map(|n| n.to_string_lossy().starts_with("Mirach_"))
+                            .unwrap_or(false)
+                })
+        }) else {
+            return;
+        };
+        let Ok(sig_b64) = std::fs::read_to_string(exe.with_extension("exe.sig")) else {
+            return;
+        };
+        let conf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("tauri.conf.json")).expect("tauri.conf.json readable"),
+        )
+        .expect("tauri.conf.json is valid JSON");
+        let pubkey_b64 = conf["plugins"]["updater"]["pubkey"]
+            .as_str()
+            .expect("updater pubkey present")
+            .trim()
+            .to_string();
+
+        let engine = base64::engine::general_purpose::STANDARD;
+        let pubkey_text = String::from_utf8(engine.decode(pubkey_b64).expect("pubkey base64")).expect("pubkey utf8");
+        let sig_text = String::from_utf8(engine.decode(sig_b64.trim()).expect("signature base64")).expect("signature utf8");
+        let public_key = minisign_verify::PublicKey::decode(&pubkey_text).expect("minisign public key");
+        let signature = minisign_verify::Signature::decode(&sig_text).expect("minisign signature");
+        let data = std::fs::read(&exe).expect("installer bytes");
+        public_key
+            .verify(&data, &signature, true)
+            .expect("发布产物签名必须与内置公钥匹配");
+    }
 
     #[test]
     fn path_allowlist_blocks_outside_roots() {

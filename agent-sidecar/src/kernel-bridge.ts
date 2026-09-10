@@ -58,6 +58,46 @@ interface ProxyRequest {
   method?: string;
   headers?: [string, string][];
   bodyBase64?: string | null;
+  /** 分块上传：请求体切成的块数（配合 http_proxy_chunk 逐块到达）。
+   *  大附件走这条路径，避免 Rust/sidecar 侧出现单条数百 MB 的 JSON 行。 */
+  bodyChunks?: number | null;
+}
+
+/** 分块请求体的收集状态（id → 累积块）。 */
+interface BodyCollector {
+  total: number;
+  parts: Buffer[];
+  resolve: (body: Buffer) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+const bodyCollectors = new Map<string, BodyCollector>();
+/** 分块收集超时（块之间不设限，整体上限）。 */
+const BODY_CHUNK_TIMEOUT_MS = 10 * 60_000;
+
+/** 收到一块请求体（http_proxy_chunk 命令）；最后一块到达即唤醒等待方。 */
+export function pushHttpProxyChunk(id: string, index: number, data: string): void {
+  const collector = bodyCollectors.get(id);
+  if (collector === undefined) return; // 请求已结束/被取消：静默丢弃
+  collector.parts[index] = Buffer.from(data, "base64");
+  const received = collector.parts.filter((p) => p !== undefined).length;
+  if (received >= collector.total) {
+    clearTimeout(collector.timer);
+    bodyCollectors.delete(id);
+    collector.resolve(Buffer.concat(collector.parts.filter((p) => p !== undefined)));
+  }
+}
+
+/** 登记一次分块收集并等待块到齐（handleHttpProxy 用；同时供单测直接驱动）。 */
+export function beginChunkedBody(id: string, total: number): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      bodyCollectors.delete(id);
+      reject(new Error(`kernel bridge: chunked body timeout (${total} chunks expected)`));
+    }, BODY_CHUNK_TIMEOUT_MS);
+    bodyCollectors.set(id, { total, parts: [], resolve, reject, timer });
+  });
 }
 
 /** 一次 unary RPC 代发：结果信封带 status/headers/bodyBase64（前端合成 Response）。 */
@@ -90,6 +130,7 @@ export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
     send({ type: "error", id, message: "kernel bridge: request body too large" });
     return;
   }
+  const bodyChunks = typeof cmd.bodyChunks === "number" && cmd.bodyChunks > 0 ? cmd.bodyChunks : 0;
   try {
     // authHeaders() 内含 readFileSync（凭据文件可能被占用）——必须在 try 内，
     // 否则浮动 rejection 会直接杀死进程（无 unhandledRejection 兜底时）
@@ -121,7 +162,13 @@ export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
     }
     headers.set("cookie", auth.cookie);
     headers.set("origin", auth.origin);
-    const body = bodyBase64 ? Buffer.from(bodyBase64, "base64") : undefined;
+    // 大请求体走分块路径（bodyChunks）：等块到齐再发，避免单条巨型 JSON 行
+    const body = bodyChunks > 0
+      ? Buffer.concat([await beginChunkedBody(id, bodyChunks)])
+      : bodyBase64
+        ? Buffer.from(bodyBase64, "base64")
+        : undefined;
+    const bodyInit = body === undefined ? {} : { body: body as unknown as BodyInit };
     const controller = new AbortController();
     proxyControllers.set(id, controller);
     const timer = setTimeout(() => controller.abort(), 120_000);
@@ -129,7 +176,7 @@ export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
       const response = await fetch(target, {
         method: cmd.method ?? "GET",
         headers,
-        ...(body === undefined ? {} : { body }),
+        ...bodyInit,
         signal: controller.signal,
       });
       const bytes = Buffer.from(await response.arrayBuffer());

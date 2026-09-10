@@ -798,6 +798,7 @@ pub async fn dsh_rpc(method: String, params: Option<Value>, s: State<'_, DshAppS
 /// 在 Node 侧带 browser-session cookie 打引擎 /api（跨源栅栏对浏览器无解，
 /// 官方桌面壳同样由宿主进程代发）。返回 {status, headers, bodyBase64}。
 /// request_id 由前端生成（AbortSignal 取消时用同一 id 调 dsh_http_proxy_cancel）。
+/// body_chunks > 0 时请求体走 dsh_http_proxy_chunk 分块送入（大附件不产生巨型 JSON 行）。
 #[tauri::command]
 pub async fn dsh_http_proxy(
     path: String,
@@ -805,6 +806,7 @@ pub async fn dsh_http_proxy(
     headers: Vec<(String, String)>,
     body_base64: Option<String>,
     request_id: Option<String>,
+    body_chunks: Option<u32>,
     s: State<'_, DshAppState>,
 ) -> Result<Value, String> {
     if !s.sidecar.ready.load(Ordering::Acquire) {
@@ -828,10 +830,23 @@ pub async fn dsh_http_proxy(
             "method": method,
             "headers": headers,
             "bodyBase64": body_base64,
+            "bodyChunks": body_chunks.unwrap_or(0),
         }),
-        std::time::Duration::from_secs(130),
+        std::time::Duration::from_secs(600),
     )
     .await
+}
+
+/// 一包分块请求体（即发即忘；请求体由 sidecar 侧累积，齐了才发 HTTP）。
+#[tauri::command]
+pub async fn dsh_http_proxy_chunk(stream_id: String, index: u32, data: String, s: State<'_, DshAppState>) -> Result<(), String> {
+    if stream_id.is_empty() || stream_id.len() > 128 || stream_id.chars().any(|c| c.is_control()) {
+        return Err("invalid stream_id".into());
+    }
+    scmd_sync(
+        &s,
+        &serde_json::json!({"type":"http_proxy_chunk","id":stream_id,"index":index,"data":data}),
+    )
 }
 
 /// 取消一条在途的 unary 代发（前端 AbortSignal → sidecar AbortController）。

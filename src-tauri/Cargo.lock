@@ -2207,7 +2207,9 @@ dependencies = [
 name = "mirach"
 version = "0.1.1"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
+ "minisign-verify",
  "portable-pty",
  "rusqlite",
  "serde",

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { MessageQueue } from "../src/queue.js";
 import { createDshAdapter } from "../src/adapter.js";
 import { installPlugin, uninstallPlugin, verifyInstalledPlugin } from "../src/plugins.js";
+import { beginChunkedBody, pushHttpProxyChunk } from "../src/kernel-bridge.js";
 
 let failures = 0;
 let total = 0;
@@ -135,6 +136,27 @@ await rejects("uninstallPlugin 拒绝空名", () => uninstallPlugin("   "));
     assert.throws(() => verifyInstalledPlugin(wrongName, "wrong-name"), /不一致/);
   });
   rmSync(root, { recursive: true, force: true });
+}
+
+// ── 分块请求体（大附件）：乱序到达也能按序号拼回 ────────────────────────────
+
+{
+  const b64 = (s: string): string => Buffer.from(s, "utf8").toString("base64");
+  const pending = beginChunkedBody("chunk-test-1", 3);
+  // 乱序：先 2、再 0、最后 1
+  pushHttpProxyChunk("chunk-test-1", 2, b64("cc"));
+  pushHttpProxyChunk("chunk-test-1", 0, b64("aa"));
+  check("分块未齐时不 resolve", () => {
+    /* 仅确认不抛错；下面的 await 会验证最终结果 */
+  });
+  pushHttpProxyChunk("chunk-test-1", 1, b64("bb"));
+  const body = await pending;
+  check("分块按序号拼回", () => {
+    assert.equal(body.toString("utf8"), "aabbcc");
+  });
+  check("未知 id 的块被静默丢弃", () => {
+    pushHttpProxyChunk("nobody", 0, b64("x"));
+  });
 }
 
 console.log(`\n${total - failures}/${total} passed`);

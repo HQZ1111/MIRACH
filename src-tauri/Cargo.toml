@@ -50,3 +50,8 @@ ureq = { version = "2", features = ["json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = "0.4"
 
+[dev-dependencies]
+# 发布产物签名自检（与 tauri-plugin-updater 同一校验链路）
+base64 = "0.22"
+minisign-verify = "0.2"
+
