@@ -23,11 +23,12 @@
  */
 
 import { DeepSeekHarness, type HarnessSession } from "@deepseek-ai/dsh-sdk-client";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log, logDebug, logError, logWarn } from "./protocol.js";
+import { markBundlesLastGood, rollbackBundlesIfChanged } from "./plugins.js";
 import { resolveRuntimePaths, mirachHome, type RuntimePaths } from "./runtime.js";
 import { subagentEnvForEngine } from "./subagent-backends.js";
 
@@ -404,10 +405,24 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
     try {
       await harness.start();
       log("runtime ready, model=%s/%s route=%s env=%s", model.provider, model.id, model.route, ws.envId);
+      // 这一份 bundles 起得来 → 记成 last-good：插件把引擎装死时（dsh 升级后 API 漂移，
+      // 见 docs/plugin-compat.md）下次启动能自动回滚到这份能起的装配
+      markBundlesLastGood(engineVersionOf(dshBin));
     } catch (err) {
-      logError("dsh runtime start failed: %s", err instanceof Error ? err.message : String(err));
+      const reason = err instanceof Error ? err.message : String(err);
+      logError("dsh runtime start failed: %s", reason);
       await harness.close().catch(() => {});
       runtime = null;
+      // 启动失败兜底：bundles 与 last-good 不一致就回滚（并报出被摘掉的插件），
+      // 让下一次启动能起来；错误里带上回滚结果，前端/日志能看到是哪个插件干的
+      const rollback = rollbackBundlesIfChanged();
+      if (rollback !== null) {
+        throw new Error(
+          `${reason}｜已回滚插件装配：移除 ${rollback.removed.join(", ") || "-"}` +
+            `${rollback.restored.length > 0 ? `，恢复 ${rollback.restored.join(", ")}` : ""}` +
+            "（重启应用生效）",
+        );
+      }
       throw err;
     }
     return h;
@@ -418,6 +433,17 @@ export async function ensureRuntime(model: ActiveModel): Promise<DshRuntimeHandl
   } finally {
     // 只有自己仍是当前 promise 时才清空：并发调用者后写入的 promise 不被误清
     if (startPromise === start) startPromise = null;
+  }
+}
+
+/** 取引擎版本（记进 last-good 快照，便于事后对账是哪版引擎装配过）。 */
+function engineVersionOf(dshBin: string | undefined): string | undefined {
+  if (!dshBin) return undefined;
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(dshBin), "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version;
+  } catch {
+    return undefined;
   }
 }
 

@@ -64,10 +64,14 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // Once the HUD has a transcript, a resize must buy readable scrollback.
       // The old glance-band ceiling froze this at 152px and turned every extra
       // pixel of native window height into empty transparent chrome.
+      // 视口高度取**对话区**的高度而不是 window.innerHeight：HUD 顶上还有一条
+      // 自己隐形顶栏（会话名/退出），按整窗算会把带子多算一条顶栏的高度，
+      // 顶到对话区外被 overflow 裁掉。
+      const chatArea = root.querySelector<HTMLElement>('.dsh-native-area')
       const visible = hudTranscriptHeight({
         barHeight: root.querySelector<HTMLElement>('[data-slot="composer-dock"]')?.getBoundingClientRect().height ?? 0,
         contentHeight: contentSpan,
-        viewportHeight: window.innerHeight
+        viewportHeight: chatArea?.getBoundingClientRect().height ?? window.innerHeight
       })
 
       root.style.setProperty('--hud-band-height', `${visible}px`)
@@ -85,7 +89,7 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
         root.style.setProperty('--hud-bar-height', `${Math.round(barHeight)}px`)
       }
 
-      setFilled(barHeight + visible >= window.innerHeight - 1)
+      setFilled(barHeight + visible >= (chatArea?.getBoundingClientRect().height ?? window.innerHeight) - 1)
     }
 
     measure()

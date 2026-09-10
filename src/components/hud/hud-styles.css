@@ -9,6 +9,55 @@
   --hud-band-inset: 0.5rem;
 }
 
+/* ── HUD = 对话 + 输入条，别的都不要 ─────────────────────────────────────────
+   官方 AppFrame 是三列 grid（`sidebar | 主列 | 右栏`），列宽写在 **inline style**
+   里；hermes 的 HUD 只挂 chatRoutes 所以天生没有侧栏，mirach 挂的是整棵 root 树 ——
+   不处理这两列，HUD 里就是"半截左侧栏"（用户原话）而不是 Spotlight 条。
+   标记由 shell-columns.ts 打（按官方 data-slot 认列，绝不按第几个孩子认）。
+
+   ⚠️ 这里**不用"归零 grid 列宽"那套**（试过，踩了两个坑）：官方三列靠 grid 自动排布，
+   而 mirach 里侧栏列被某处注入样式设成了 `position: absolute`（不参与 grid 流），
+   结果主列被自动放进第 1 列（0px）→ 对话区宽 0、整个 HUD 压成一条；连给主列写
+   inline `grid-column: 2` 都不生效（实测 computed 仍是 1）。
+   改成**把 frame 变 flex**：两翼 display:none，主列 flex:1 占满 —— 与官方 grid
+   无关、与谁把列设成 absolute 也无关。 */
+[data-hud-shell] [data-hud-frame] {
+  display: flex !important;
+  grid-template-columns: none !important;
+  grid-template-rows: none !important;
+}
+
+[data-hud-shell] [data-hud-main-col] {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+[data-hud-shell] [data-hud-hide-col] {
+  display: none !important;
+}
+
+/* 主列自己撑满：官方列在 flex/grid 里靠 grid 列宽，两翼归零后主列必须占满高度，
+   否则官方树会在小窗里被压成一条。 */
+[data-hud-shell] [data-hud-frame] {
+  height: 100%;
+  min-height: 0;
+}
+
+/* HUD 自己的顶栏（会话名 + 退出悬浮）：hermes 的退出钮挂在 composer 控制行上，
+   所以它的静止态只有一条 bar。mirach 的顶栏保留（唯一的退出入口），但**静止时隐形**、
+   鼠标进入或输入聚焦时才显现 —— 不在那两条轴线上跟 Spotlight 条抢注意力。 */
+[data-hud-shell] [data-hud-topbar] {
+  opacity: 0;
+  transition: opacity var(--hud-fade) var(--hud-ease-exit);
+}
+
+[data-hud-shell]:hover [data-hud-topbar],
+[data-hud-shell]:focus-within [data-hud-topbar] {
+  opacity: 1;
+  transition: opacity var(--hud-reveal) var(--hud-ease-enter);
+}
+
 /* Chat surface carries nothing in HUD mode — the visual is the BAND below. */
 [data-hud-shell] [data-chat-surface] {
   background: transparent !important;

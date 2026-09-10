@@ -25,8 +25,10 @@ import { NativeChatArea } from '@/components/chat/NativeChatArea'
 
 import { useHudClickThrough } from './click-through'
 import { useHudComposerDrag } from './composer-drag'
+import { useHudEdge } from './hud-edge'
 import { useHudGlass } from './glass'
 import { useHudResizeHandle } from './resize-handle'
+import { watchHudShellColumns } from './shell-columns'
 import { useHudThreadFocus } from './thread-focus'
 import { useHudTranscriptBand } from './transcript-band'
 
@@ -174,6 +176,8 @@ function useHudHeld(): boolean {
 export function HudShell() {
   const [recent, holdBand] = useRecentActivity()
   const held = useHudHeld()
+  // 停靠边（hermes 由主进程广播；这里按窗口在显示器工作区的位置算）
+  const edge = useHudEdge()
 
   // Clicking away to another APP is the most common way the HUD is let go of,
   // and it fires no focusout: the composer stays document.activeElement while
@@ -195,6 +199,18 @@ export function HudShell() {
   // （hermes 的 edge 感知翻转：HUD_THREAD_ALWAYS_BELOW=true 恒 'top'，保留常量）
 
   const rootRef = useRef<HTMLDivElement | null>(null)
+
+  // HUD 只要对话 + 输入条：官方整棵 root 树里的侧栏列/右栏列在 HUD 里必须消失
+  // （hermes 的 HUD 只挂 chatRoutes，天生没有它们——见 shell-columns.ts）
+  useEffect(() => {
+    const root = rootRef.current
+
+    if (!root) {
+      return
+    }
+
+    return watchHudShellColumns(root)
+  }, [])
 
   // Whether bar + band actually cover the window（mirach 无原生 frost，恒 false
   // 语义即可——glass 已空实现）。
@@ -226,7 +242,7 @@ export function HudShell() {
   return (
     <div
       className="relative flex h-screen w-screen flex-col overflow-hidden"
-      data-hud-edge="top"
+      data-hud-edge={edge}
       data-hud-held={held ? '' : undefined}
       data-hud-input="click-through"
       data-hud-recent={recent || held ? '' : undefined}

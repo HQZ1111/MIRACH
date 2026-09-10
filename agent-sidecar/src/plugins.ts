@@ -17,6 +17,7 @@
 import { exec, execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 // 官方 profile 清单读写 + 装配组合（apps/desktop project-manager 同源）：
 // bundles 读改写与"引擎实际装配行"都由官方实现产出，不再手搓 JSON/regex
@@ -236,6 +237,104 @@ export function verifyInstalledPlugin(packageDir: string, expectedName: string):
 }
 
 /**
+ * 激活前试跑：把插件入口**真的 import 一次**，验证它在引擎依赖树里连得上。
+ *
+ * 为什么需要（2026-09-10 实测，见 docs/plugin-compat.md）：插件升级 dsh 后最常见的
+ * 死法是**裸导入的引擎 API 被删/改名**，ESM 在链接期就抛
+ * （`The requested module '@deepseek-ai/dsh-settings' does not provide an export named
+ * 'settingsNamespace'`），cordis 的 include 条目 apply 失败 → 上下文失活 →
+ * 引擎 initialize 只回一句 `cannot create effect on inactive context`，
+ * 而"装进 bundles"这一步本身是成功的 —— 应用重启后直接打不开。
+ *
+ * import() 的解析基准是**被导入模块自己的位置**，与探针文件放哪无关，所以这一枪
+ * 与引擎 boot 时的解析路径一致（pnpm 给每个插件铺的 node_modules）。
+ * 副作用只是模块求值：插件入口只定义 cordis 插件对象，不碰运行中的引擎。
+ *
+ * 注意它拦不住"apply 期"才暴露的问题（缺服务、运行时守卫）；那类由
+ * `markBundlesLastGood` / `rollbackBundlesIfChanged` 的启动兜底接住。
+ */
+export async function probePluginImport(packageDir: string, expectedName: string): Promise<void> {
+  const manifest = readPkg(packageDir) as { main?: string; exports?: Record<string, unknown> | string };
+  const entryRel = pickEntry(manifest);
+  if (entryRel === null) {
+    throw new Error(`${expectedName} 没有可用的入口（main/exports 都缺失）`);
+  }
+  const entry = resolve(packageDir, entryRel);
+  if (!entry.startsWith(packageDir + sep) || !existsSync(entry)) {
+    throw new Error(`${expectedName} 的入口文件不存在：${entryRel}`);
+  }
+  try {
+    await import(pathToFileURL(entry).href);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`${expectedName} 在引擎依赖树里加载失败：${msg}`);
+  }
+}
+
+/** package.json → 入口相对路径（exports['.'] 优先，其次 main）。 */
+function pickEntry(manifest: { main?: string; exports?: Record<string, unknown> | string }): string | null {
+  const exp = manifest.exports;
+  if (typeof exp === "string") return exp;
+  if (exp && typeof exp === "object") {
+    const dot = (exp as Record<string, unknown>)["."];
+    if (typeof dot === "string") return dot;
+    if (dot && typeof dot === "object") {
+      const d = dot as Record<string, unknown>;
+      for (const key of ["default", "import", "node", "require"]) {
+        if (typeof d[key] === "string") return d[key] as string;
+      }
+    }
+  }
+  return typeof manifest.main === "string" ? manifest.main : null;
+}
+
+// ── bundles "last-good" 快照：引擎起不来时自动回滚（A 线：dsh 升级后插件对不上） ──
+
+const LAST_GOOD_FILE = (): string => join(PROFILE_DIR(), "bundles.last-good.json");
+
+/** 引擎 initialize 成功后记一次"这份 bundles 是能起的"。 */
+export function markBundlesLastGood(engineVersion?: string): void {
+  try {
+    const record = { bundles: profileBundles(), engineVersion: engineVersion ?? null, at: new Date().toISOString() };
+    writeFileSync(LAST_GOOD_FILE(), JSON.stringify(record, null, 2) + "\n", "utf8");
+  } catch (err) {
+    logWarn("bundles last-good snapshot failed: %s", err instanceof Error ? err.message : String(err));
+  }
+}
+
+export interface BundlesRollbackReport {
+  /** 本次被摘掉的插件（当前 bundles 有、last-good 没有） */
+  removed: string[];
+  /** 当前 bundles 缺的（last-good 有）—— 一并补回，回到能起的装配 */
+  restored: string[];
+  from: string[];
+  to: string[];
+}
+
+/**
+ * 引擎起不来时的兜底：当前 bundles 与 last-good 不一致就回滚，并报出被摘掉的插件。
+ * 返回 null = 没有可回滚的差异（例如失败与插件无关，或从没成功起过）。
+ */
+export function rollbackBundlesIfChanged(): BundlesRollbackReport | null {
+  let record: { bundles?: unknown };
+  try {
+    record = JSON.parse(readFileSync(LAST_GOOD_FILE(), "utf8")) as { bundles?: unknown };
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(record.bundles) || record.bundles.some((b) => typeof b !== "string")) return null;
+  const lastGood = record.bundles as string[];
+  const current = profileBundles();
+  const same = current.length === lastGood.length && current.every((b, i) => b === lastGood[i]);
+  if (same) return null;
+  const removed = current.filter((b) => !lastGood.includes(b));
+  const restored = lastGood.filter((b) => !current.includes(b));
+  writeProfileBundles(lastGood);
+  logWarn("bundles rolled back to last-good (removed: %s)", removed.join(", ") || "-");
+  return { removed, restored, from: current, to: lastGood };
+}
+
+/**
  * 安装插件（事务语义）：快照 profile 清单 → 官方 CLI add → 校验安装结果 →
  * 追加 bundles；任一步失败则恢复清单并尽力移除已装入的包。
  */
@@ -250,6 +349,16 @@ export async function installPlugin(spec: string): Promise<string[]> {
     const realName = resolveRealName(pkg);
     const verified = verifyInstalledPlugin(join(PROFILE_NM(), realName), realName);
     lines.push(`已安装 ${realName}@${verified.version}（bundle patch 校验通过）`);
+    // 激活前试跑：连引擎依赖树都 import 不进来的插件，绝不能写进 bundles
+    // （写进去 = 下次启动引擎装配失败、应用打不开，见 docs/plugin-compat.md）
+    try {
+      await probePluginImport(join(PROFILE_NM(), realName), realName);
+      lines.push("入口试跑通过（能进引擎依赖树）");
+    } catch (probeErr) {
+      const msg = probeErr instanceof Error ? probeErr.message : String(probeErr);
+      lines.push(`入口试跑失败：${msg}`);
+      throw new Error(`插件与当前引擎不兼容（已阻止激活）：${msg}`);
+    }
     const bundles = profileBundles();
     if (!bundles.includes(realName)) {
       writeProfileBundles([...bundles, realName]);

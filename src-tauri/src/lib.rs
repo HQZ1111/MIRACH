@@ -1848,6 +1848,27 @@ const HUD_LABEL: &str = "hud";
 /// hermes spawnHudWindow 同款最小尺寸（与 resize-handle 的钳制值一致）
 const HUD_MIN_WIDTH: f64 = 380.0;
 const HUD_MIN_HEIGHT: f64 = 160.0;
+/// hermes 的 HUD 默认几何（`electron/hud-geometry.ts`：HUD_WIDTH / HUD_HEIGHT /
+/// HUD_BOTTOM_MARGIN）—— 620×320 底部居中、离工作区下沿 72px。
+/// 形状一致性很要紧：这个窗口是 Spotlight 条（composer 贴下沿 + 上方渐隐 transcript），
+/// 不是一个小号主窗。
+const HUD_WIDTH: f64 = 620.0;
+const HUD_HEIGHT: f64 = 320.0;
+const HUD_BOTTOM_MARGIN: f64 = 72.0;
+
+/// HUD 的默认落点（hermes `defaultHudBounds`）：水平居中于显示器工作区，
+/// 垂直贴下沿留 72px。拿不到显示器信息时返回 None（用系统默认位置）。
+fn hud_default_position(app: &tauri::AppHandle) -> Option<(f64, f64)> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    // Monitor 的位置/尺寸是**物理像素**，窗口定位走逻辑像素：必须过一遍缩放比
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let (wx, wy) = (area.position.x as f64 / scale, area.position.y as f64 / scale);
+    let (ww, wh) = (area.size.width as f64 / scale, area.size.height as f64 / scale);
+    let x = wx + (ww - HUD_WIDTH) / 2.0;
+    let y = (wy + wh - HUD_HEIGHT - HUD_BOTTOM_MARGIN).max(wy);
+    Some((x, y))
+}
 
 /// 主窗的 WebView2 启动参数（`additionalBrowserArgs`），运行期新建 webview 时必须继承。
 ///
@@ -2000,7 +2021,7 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
     //（hermes 也有 did-finish-load 兜底定时器，防就绪事件丢失）。
     let builder = tauri::WebviewWindowBuilder::new(&app, &label, url)
         .title("Mirach HUD")
-        .inner_size(520.0, 420.0)
+        .inner_size(HUD_WIDTH, HUD_HEIGHT)
         .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
         .decorations(false)
         .transparent(true)
@@ -2015,6 +2036,11 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
                 let _ = win.set_always_on_top(true);
             }
         });
+    // hermes 同款落点：底部居中、离下沿 72px（拿不到显示器就用系统默认位置）
+    let builder = match hud_default_position(&app) {
+        Some((x, y)) => builder.position(x, y),
+        None => builder,
+    };
     // 关键：继承主窗 WebView2 启动参数（选项不一致 = 0x8007139F，webview 建不出来）
     let hud = inherit_browser_args(&app, builder)
         .build()
