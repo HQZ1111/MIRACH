@@ -1,5 +1,6 @@
-# _prep_fresh_install_test.ps1 - 干净的首装测试环境：
-#   卸载旧版 → 清掉运行时与本地状态 → 隐藏仓库 sidecar（逼出首装门）→ 静默安装新版
+# _prep_fresh_install_test.ps1 - clean first-run environment:
+#   uninstall the old app -> clear the runtime + test state -> hide the repo sidecar
+#   (so the first-run gate triggers) -> silently install the new setup exe.
 $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $PSScriptRoot
 $setup = Join-Path $repo "src-tauri\target\release\bundle\nsis\Mirach_0.1.2_x64-setup.exe"
@@ -28,3 +29,4 @@ Start-Sleep -Seconds 6
 "installed: " + (Test-Path (Join-Path $appDir "Mirach.exe"))
 "exe-adjacent runtime (must be False): " + (Test-Path (Join-Path $appDir "runtime"))
 "resources: " + (Test-Path (Join-Path $appDir "_up_\scripts\mirach-install.ps1"))
+"bundled runtime: " + (Test-Path (Join-Path $appDir "resources\mirach-runtime.7z"))

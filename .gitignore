@@ -37,4 +37,10 @@ vendor/
 scripts/t*.txt
 scripts/_cred.txt 
 scripts/_gitee_pat.txt 
-dist-portable/ 
+dist-portable/
+# 打包进安装包的运行时（由 scripts/_pack_runtime.ps1 生成，40MB+，不入库）
+src-tauri/resources/mirach-runtime.7z
+src-tauri/resources/mirach-runtime.7z.sha256
+src-tauri/resources/7z.exe
+src-tauri/resources/7z.dll
+src-tauri/resources/7z-license.txt

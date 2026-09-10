@@ -21,10 +21,57 @@
 import { randomUUID } from "node:crypto";
 import * as dshAuth from "./dsh-auth.mjs";
 
-/** 引擎 web 面基址（与 dsh.ts 注入的 MIRACH_WEB_PORT 一致）。 */
+/** 引擎 web 面基址。
+ *
+ * - 本地（默认）：`http://127.0.0.1:<MIRACH_WEB_PORT>`（sidecar 自己拉起的引擎）
+ * - 网关模式（remote/cloud 连接）：`MIRACH_GATEWAY_URL`（远端已跑着的 dsh web 面），
+ *   sidecar 不再本地拉引擎，只当桥接 → 本机零安装。
+ */
 export function coreBase(): string {
+  const gateway = process.env.MIRACH_GATEWAY_URL;
+  if (gateway && gateway.trim()) {
+    return gateway.trim().replace(/\/+$/, "");
+  }
   const port = process.env.MIRACH_WEB_PORT ?? "3212";
   return `http://127.0.0.1:${port}`;
+}
+
+/** 网关模式？（远端引擎 + 令牌鉴权；本地 cookie 铸不出来） */
+export function isGatewayMode(): boolean {
+  const gateway = process.env.MIRACH_GATEWAY_URL;
+  return Boolean(gateway && gateway.trim());
+}
+
+/**
+ * 鉴权头：
+ * - 网关模式：`Authorization: Bearer <MIRACH_GATEWAY_TOKEN>`（远端 web 面/反代自行校验；
+ *   也可直接填远端 `~/.dsh/.credentials.yaml` 里的 web secret，由 dsh-auth 在本地铸同样的 cookie）
+ * - 本地：browser-session cookie（dsh-auth.mjs 铸造）
+ */
+export function authHeaders(base: string): Record<string, string> {
+  if (isGatewayMode()) {
+    return gatewayAuthHeaders();
+  }
+  const secret = dshAuth.readSessionSecret();
+  if (secret === undefined) {
+    return {};
+  }
+  const authority = new URL(base).host;
+  return { Cookie: dshAuth.mintCookie(authority, secret) };
+}
+
+/**
+ * 网关模式的鉴权头：`MIRACH_GATEWAY_TOKEN` 直接当 Bearer；
+ * 若填的是 <name>=<value>（远端 web secret，或整段 cookie）则当 Cookie 发。
+ * 为空则不加头（内网/反代自行控制的部署）。
+ */
+export function gatewayAuthHeaders(): Record<string, string> {
+  const token = process.env.MIRACH_GATEWAY_TOKEN?.trim();
+  if (!token) return {};
+  if (/^[A-Za-z0-9_.-]+=[^;\s]*$/.test(token) || token.includes(";")) {
+    return { Cookie: token };
+  }
+  return { Authorization: `Bearer ${token}` };
 }
 
 export interface RemoteCallResult<T = unknown> {
@@ -44,13 +91,11 @@ export async function remoteCall<T = unknown>(
   args: Record<string, unknown>,
   timeoutMs = 60_000,
 ): Promise<RemoteCallResult<T>> {
-  const secret = dshAuth.readSessionSecret();
-  if (secret === undefined) {
+  const base = coreBase();
+  const auth = authHeaders(base);
+  if (Object.keys(auth).length === 0) {
     return { ok: false, error: { code: "auth/unavailable", message: "browser-session secret 未配置（引擎未初始化）", details: {} } };
   }
-  const base = coreBase();
-  const authority = new URL(base).host;
-  const cookie = dshAuth.mintCookie(authority, secret);
   const rpcId = randomUUID();
   const message = { type: "client-request", rpcId, method: endpoint, payload: { args } };
   const controller = new AbortController();
@@ -59,7 +104,7 @@ export async function remoteCall<T = unknown>(
     const response = await fetch(`${base}/api/${endpoint}`, {
       method: "POST",
       headers: {
-        Cookie: cookie,
+        ...auth,
         Origin: base,
         "Content-Type": "application/json",
       },

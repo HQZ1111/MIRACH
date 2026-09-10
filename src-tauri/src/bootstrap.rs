@@ -139,6 +139,17 @@ async fn run_script(
         SDK_VERSION.to_string(),
         "-AppVersion".to_string(),
         APP_VERSION.to_string(),
+        // 随安装包分发的运行时（dsh + Node + 桥接）：首装直接解压，不联网跑 npm
+        "-Bundle".to_string(),
+        resource_file(app, "mirach-runtime.7z")
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+        "-SevenZip".to_string(),
+        resource_file(app, "7z.exe")
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
     ]);
 
     let sink_for = |stream: LogStream| {
@@ -194,6 +205,21 @@ fn strip_extended_prefix(p: PathBuf) -> PathBuf {
         return PathBuf::from(rest);
     }
     p
+}
+
+/// 资源目录里的一个文件（NSIS 装完在 <安装目录>\resources\，带 ../ 的会落到 _up_\）。
+fn resource_file(app: &tauri::AppHandle, name: &str) -> Option<PathBuf> {
+    let dir = app.path().resource_dir().ok()?;
+    for candidate in [
+        dir.join("resources").join(name),
+        dir.join(name),
+        dir.join("_up_").join("resources").join(name),
+    ] {
+        if candidate.is_file() {
+            return Some(strip_extended_prefix(candidate));
+        }
+    }
+    None
 }
 
 /// 应用自带的 agent-sidecar 目录（dist + config + package.json）。

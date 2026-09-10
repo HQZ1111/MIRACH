@@ -32,11 +32,23 @@ if not exist "%~dp0..\agent-sidecar\dist\index.js" (
   echo [release] agent-sidecar\dist\index.js missing after build
   exit /b 1
 )
-rem The installer payload must stay pure ASCII: PowerShell 5.1 reads BOM-less
-rem files as ANSI, so any non-ASCII byte can break parsing on a zh-CN machine
-rem (seen once: a Chinese comment made the manifest stage die with a parse error).
-powershell -NoProfile -Command "$b=[System.IO.File]::ReadAllBytes('%~dp0..\scripts\mirach-install.ps1'); if ($b | Where-Object { $_ -gt 127 }) { Write-Host '[release] mirach-install.ps1 contains non-ASCII bytes'; exit 1 }"
+rem Install-path scripts must stay pure ASCII: PowerShell 5.1 reads BOM-less files as
+rem ANSI, so any non-ASCII byte can break parsing on a zh-CN machine (seen twice: a
+rem Chinese comment made the manifest stage die with a parse error).
+powershell -NoProfile -Command "$files=@('mirach-install.ps1','_pack_runtime.ps1','_prep_fresh_install_test.ps1','_cleanup_install_test.ps1','_test_bundle_extract.ps1'); $bad=@(); foreach ($f in $files) { $p=Join-Path '%~dp0' $f; if ((Test-Path $p) -and ([System.IO.File]::ReadAllBytes($p) | Where-Object { $_ -gt 127 })) { $bad += $f } }; if ($bad.Count) { Write-Host ('[release] non-ASCII install-path script(s): ' + ($bad -join ', ')); exit 1 }"
 if errorlevel 1 exit /b 1
+rem The runtime that ships inside the installer (dsh + Node + sidecar) is packed from a
+rem verified in-app install (%LOCALAPPDATA%\MirachRuntime). Release machines must have
+rem one - run the app once (first-run install) or skip packing to ship a shell-only build.
+if exist "%~dp0..\src-tauri\resources\mirach-runtime.7z" (
+  echo [release] reusing existing src-tauri\resources\mirach-runtime.7z
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0_pack_runtime.ps1"
+  if errorlevel 1 (
+    echo [release] runtime packing failed - run the app first, or delete resources\mirach-runtime.7z expectations
+    exit /b 1
+  )
+)
 call npx tauri build --bundles nsis
 echo [release] exit=%errorlevel%
 endlocal

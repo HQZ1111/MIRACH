@@ -45,7 +45,12 @@
       "../scripts/mirach-install.ps1",
       "../agent-sidecar/dist",
       "../agent-sidecar/config",
-      "../agent-sidecar/package.json"
+      "../agent-sidecar/package.json",
+      "resources/mirach-runtime.7z",
+      "resources/mirach-runtime.7z.sha256",
+      "resources/7z.exe",
+      "resources/7z.dll",
+      "resources/7z-license.txt"
     ],
     "icon": [
       "icons/32x32.png",

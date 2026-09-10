@@ -165,7 +165,7 @@ function ChoiceScreen() {
           icon={<HardDriveDownload className="h-4 w-4" />}
           title="本地安装"
           badge="推荐"
-          desc="在这台电脑上下载运行环境（Node + 引擎 + 桥接程序，约 200–300MB）。安装过程有进度，完成后直接使用。"
+          desc="运行环境（Node + dsh 引擎 + 桥接程序）已随安装包附带，安装就是解压，约 1 分钟，不需要联网。"
           onClick={() => void install()}
         />
         <Card

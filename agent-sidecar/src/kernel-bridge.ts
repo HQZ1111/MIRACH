@@ -23,7 +23,7 @@
  */
 
 import * as dshAuth from "./dsh-auth.mjs";
-import { coreBase } from "./rpc-http.js";
+import { coreBase, isGatewayMode, gatewayAuthHeaders } from "./rpc-http.js";
 import { log, logWarn, send } from "./protocol.js";
 
 /** 逻辑流 id → 物理 WS（一次 openStream = 一条 WS；mux 协议只有 open/cancel）。 */
@@ -45,10 +45,16 @@ export function cancelHttpProxy(id: string): void {
   proxyControllers.get(id)?.abort(new Error("kernel bridge: request canceled by client"));
 }
 
-function authHeaders(): { cookie: string; origin: string } | null {
+/** 鉴权：网关模式用令牌；本地用 browser-session cookie（与 rpc-http 同一套判定）。 */
+function authHeaders(): { cookie: string; origin: string } | { auth: Record<string, string>; origin: string } | null {
+  const base = coreBase();
+  if (isGatewayMode()) {
+    const auth = gatewayAuthHeaders();
+    // 远端没给令牌也允许（有的部署在内网/反代后不加鉴权）
+    return { auth, origin: base };
+  }
   const secret = dshAuth.readSessionSecret();
   if (secret === undefined) return null;
-  const base = coreBase();
   return { cookie: dshAuth.mintCookie(new URL(base).host, secret), origin: base };
 }
 
@@ -160,7 +166,8 @@ export async function handleHttpProxy(cmd: ProxyRequest): Promise<void> {
         /* 非法头名丢弃（Headers 会抛） */
       }
     }
-    headers.set("cookie", auth.cookie);
+    if ("cookie" in auth) headers.set("cookie", auth.cookie);
+    for (const [k, v] of Object.entries("auth" in auth ? auth.auth : {})) headers.set(k.toLowerCase(), v);
     headers.set("origin", auth.origin);
     // 大请求体走分块路径（bodyChunks）：等块到齐再发，避免单条巨型 JSON 行
     const body = bodyChunks > 0
@@ -258,7 +265,7 @@ export function handleMuxOpen(cmd: MuxOpenRequest): void {
       target: string,
       options: { headers: Record<string, string> },
     ) => WebSocket;
-    ws = new WsWithHeaders(url, { headers: { cookie: auth.cookie } });
+      ws = new WsWithHeaders(url, { headers: "cookie" in auth ? { cookie: auth.cookie } : { ...auth.auth } });
   } catch (err) {
     send({ type: "error", id, message: `kernel bridge: mux connect failed: ${err instanceof Error ? err.message : String(err)}` });
     return;

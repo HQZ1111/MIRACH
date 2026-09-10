@@ -20,6 +20,8 @@ param(
   [string]$SdkVersion = "0.1.5-alpha.1",
   [string]$AppVersion = "",
   [string]$SidecarSrc = "",
+  [string]$Bundle = "",
+  [string]$SevenZip = "",
   [switch]$Check
 )
 $ErrorActionPreference = "Stop"
@@ -65,12 +67,49 @@ $NodeMajor = 22
 # needs_user_input mirrors hermes' manifest protocol: her Rust `Manifest` struct
 # requires the field, and a manifest without it fails to parse (the first-run UI
 # then sits on "reading the manifest"). mirach has no interactive stages -> false.
+#
+# Stage order: `runtime` first (unpack the runtime that ships inside the installer);
+# node/deps exist as the network fallback and skip themselves when the bundle ran.
 $Stages = @(
+  @{ name = "runtime"; title = "Installing bundled runtime"; category = "runtime"; needs_user_input = $false },
   @{ name = "node"; title = "Installing Node.js runtime"; category = "runtime"; needs_user_input = $false },
   @{ name = "deps"; title = "Installing engine packages"; category = "packages"; needs_user_input = $false },
   @{ name = "sidecar"; title = "Installing agent-sidecar"; category = "app"; needs_user_input = $false },
   @{ name = "marker"; title = "Finalizing installation"; category = "app"; needs_user_input = $false }
 )
+
+function Test-RuntimeComplete() {
+  return (Test-Path $NodeExe) -and
+    (Test-Path (Join-Path $SidecarDir "dist\index.js")) -and
+    (Test-Path (Join-Path $SidecarDir "node_modules\@deepseek-ai\dsh\lib\bin.js"))
+}
+
+# Stage 1: the runtime that ships inside the installer (dsh + Node + sidecar).
+# This is the normal path: no npm, no network. node/deps below stay as the fallback
+# for installs where the bundle is missing (dev checkouts, broken download).
+function Stage-Runtime() {
+  if (Test-RuntimeComplete) {
+    return @{ ok = $true; skipped = $true; reason = "runtime already present" }
+  }
+  if (-not $Bundle -or -not (Test-Path $Bundle)) {
+    return @{ ok = $true; skipped = $true; reason = "no bundled runtime - falling back to the download stages" }
+  }
+  if (-not $SevenZip -or -not (Test-Path $SevenZip)) {
+    return @{ ok = $true; skipped = $true; reason = "no 7z extractor next to the bundle - falling back to the download stages" }
+  }
+  New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+  $sizeMb = [math]::Round((Get-Item $Bundle).Length / 1MB, 1)
+  Say "extracting bundled runtime ($sizeMb MB) to $InstallRoot"
+  # 7z prints a percentage progress line with -bsp1; Say-flushing keeps the UI alive
+  & $SevenZip x $Bundle "-o$InstallRoot" -y -bsp1 -bso1 -bse1 | ForEach-Object { if ($_ -match '\d+%') { Say $_ } }
+  if ($LASTEXITCODE -ne 0) { throw "7z extract failed with exit code $LASTEXITCODE" }
+  if (-not (Test-RuntimeComplete)) { throw "runtime incomplete after extraction" }
+  [System.IO.File]::WriteAllText(
+    (Join-Path $InstallRoot ".mirach-runtime-from-bundle"),
+    $AppVersion,
+    (New-Object System.Text.UTF8Encoding $false))
+  return @{ ok = $true; skipped = $false; reason = "extracted bundled runtime" }
+}
 
 function Find-ExistingNode() {
   # reuse a usable node from PATH when it satisfies the major version.
@@ -98,6 +137,9 @@ function Test-NodeInstallDir([string]$dir) {
 
 function Stage-Node() {
   New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+  if (Test-Path (Join-Path $InstallRoot ".mirach-runtime-from-bundle")) {
+    return @{ ok = $true; skipped = $true; reason = "node came from the bundled runtime" }
+  }
   if (Test-Path $NodeExe) {
     $v = (& $NodeExe --version) -replace '^v', ''
     if ([int]($v.Split('.')[0]) -ge $NodeMajor) { return @{ ok = $true; skipped = $true; reason = "node v$v present" } }
@@ -154,6 +196,9 @@ function Resolve-Npm() {
 
 function Stage-Deps() {
   New-Item -ItemType Directory -Path $SidecarDir -Force | Out-Null
+  if (Test-Path (Join-Path $InstallRoot ".mirach-runtime-from-bundle")) {
+    return @{ ok = $true; skipped = $true; reason = "engine packages came from the bundled runtime" }
+  }
   $manifest = Join-Path $SidecarDir "package.json"
   if (-not (Test-Path $manifest)) {
     '{ "name": "mirach-sidecar", "private": true, "version": "0.0.0" }' | Set-Content -Path $manifest -Encoding ASCII
@@ -227,6 +272,7 @@ function Invoke-Stage([string]$Name) {
   $result = $null
   try {
     switch ($Name) {
+      "runtime" { $result = Stage-Runtime }
       "node" { $result = Stage-Node }
       "deps" { $result = Stage-Deps }
       "sidecar" { $result = Stage-Sidecar }

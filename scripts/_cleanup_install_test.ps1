@@ -1,4 +1,5 @@
-# _cleanup_install_test.ps1 - 测试收尾：卸载测试安装、保留运行时、恢复仓库 sidecar、清测试脚本残留
+# _cleanup_install_test.ps1 - test teardown: uninstall the test install, keep the runtime,
+# restore the repo sidecar, remove the scratch dir, clear the dev-only NODE_22_BIN override.
 $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $PSScriptRoot
 Get-Process mirach -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -18,6 +19,5 @@ if (Test-Path (Join-Path $appDir "uninstall.exe")) {
 "runtime kept: " + (Test-Path (Join-Path $env:LOCALAPPDATA "MirachRuntime\.mirach-bootstrap-complete"))
 Remove-Item "G:\_setup-test" -Recurse -Force -ErrorAction SilentlyContinue
 "test dir removed: " + (-not (Test-Path "G:\_setup-test"))
-# 系统环境里遗留的开发用 node 覆盖（会让"干净机器"验证失真）
 [Environment]::SetEnvironmentVariable("NODE_22_BIN", $null, "User")
 "user NODE_22_BIN cleared"
