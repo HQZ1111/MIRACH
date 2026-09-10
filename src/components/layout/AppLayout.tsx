@@ -1187,7 +1187,13 @@ export function AppLayout() {
         <Suspense fallback={null}>
         {overlayView === "messaging" && (
           <OverlayShell title={t("messaging.title")} onClose={() => setOverlayView(null)}>
-            <MessagingOverlay />
+            {/* 通讯 = 引擎侧社区 dsh-im（真插件状态），不再是本地假清单 */}
+            <MessagingOverlay
+              onOpenPlugins={(pkg) => {
+                setOverlayView(null);
+                handleOpenPluginPanel(pkg ?? "dsh-im");
+              }}
+            />
           </OverlayShell>
         )}
         {overlayView === "commands" && (

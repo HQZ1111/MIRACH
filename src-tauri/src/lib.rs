@@ -1541,6 +1541,24 @@ pub fn run() {
                         "[hud-selftest] hud alive after open = {}",
                         hud_window(&handle).is_some()
                     );
+                    // child webview（内置浏览器 / 覆盖层）同样验一遍：build() 的 Ok 不算数，
+                    // 必须有一次运行时往返（navigate 是 getter，拿不到窗口就会 Err）
+                    let r = browser_open(
+                        handle.clone(),
+                        "https://example.org/".to_string(),
+                        140.0,
+                        140.0,
+                        900.0,
+                        620.0,
+                    )
+                    .await;
+                    eprintln!("[hud-selftest] browser_open => {:?}", r.map_err(|e| e));
+                    match browser_navigate(handle.clone(), "https://example.org/".to_string()).await {
+                        Ok(()) => eprintln!("[hud-selftest] browser child webview alive = true"),
+                        Err(e) => eprintln!("[hud-selftest] browser child webview alive = false ({e})"),
+                    }
+                    let r = overlay_show(handle.clone(), 200.0, 200.0, 420.0, 300.0).await;
+                    eprintln!("[hud-selftest] overlay_show => {:?}", r.map_err(|e| e));
                 });
             }
             // 简约对话引擎 sidecar（dsh 中继）——异步 spawn，不阻塞启动

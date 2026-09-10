@@ -1,450 +1,200 @@
 /**
- * MessagingOverlay — 消息平台面板（按原型 Messaging 精确复刻）
+ * MessagingOverlay — 通讯（IM 渠道）
  *
- * 平台列表（Telegram/Discord/Slack/Mattermost/Matrix/WhatsApp/Signal/…30 个）
- * + 凭据详情（Required/Recommended/Advanced 三组字段，字段与原型一致）
- * + 状态类型（connected/connecting/retrying/disabled/fatal/startup_failed/
- *   not_configured/pending_restart/gateway_stopped）
+ * 旧版是**假清单**：30 个平台写死、状态写死（Telegram 显示 connected）、密钥字段写死 ——
+ * 用户明确要求"通讯图标用社区的 im 插件，现在是假的"。现在改为真实面：
+ *
+ *   引擎侧 `dsh-im`（统一 IM 桥核心：会话映射 / 命令 / 通知总线 / 审批流）
+ *   + 渠道适配器插件（dsh-im-feishu / dsh-im-telegram / dsh-im-wecom / dsh-im-weixin）
+ *
+ * 本面板只做三件事，全部取自引擎真状态（plugins.list / config.pluginEntries）：
+ *   1. 装没装（一键安装，走 sidecar 事务安装：装完写 dsh.profile.bundles）
+ *   2. 激没激活（bundles 里有没有 → 未激活要重启应用才生效）
+ *   3. 引导到插件自己的设置分区（渠道凭据由插件自己管，mirach 不代管密钥）
+ *
+ * 旧版存档：MessagingOverlay.tsx.old-fake（假数据仅供对照，不要再改它）。
  */
 
-import { useState } from "react";
-import { cn } from "@/lib/utils";
-import { useI18n } from "@/lib/i18n";
-import { ExternalLink, Save, Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, CheckCircle2, Download, MessageSquare, RefreshCw } from "lucide-react";
+import { getApi } from "@/lib/api";
+import type { InstalledPluginInfo } from "@/lib/api/client";
 
-type PlatformStatus =
-  | "connected" | "connecting" | "retrying" | "disabled" | "fatal"
-  | "startup_failed" | "not_configured" | "pending_restart" | "gateway_stopped";
-
-interface Cred {
-  group: "required" | "recommended" | "advanced";
-  key: string;
-  label: string;
-  isPassword?: boolean;
-  isSet?: boolean;
-  hint?: string;
-}
-
-interface Platform {
-  id: string;
-  name: string;
-  initials: string;
-  color: string;
-  desc: string;
-  status: PlatformStatus;
-  creds: Cred[];
-}
-
-const STATUS_META: Record<PlatformStatus, { label: string; dot: string; pill: string }> = {
-  connected: { label: "Connected", dot: "bg-[#10B981]", pill: "bg-emerald-50 text-[#059669]" },
-  connecting: { label: "Connecting", dot: "bg-[#F59E0B]", pill: "bg-amber-50 text-[#D97706]" },
-  retrying: { label: "Retrying", dot: "bg-[#F59E0B]", pill: "bg-amber-50 text-[#D97706]" },
-  disabled: { label: "Disabled", dot: "bg-[#9CA3AF]", pill: "bg-muted text-[#6B7280]" },
-  fatal: { label: "Error", dot: "bg-[#EF4444]", pill: "bg-red-50 text-[#EF4444]" },
-  startup_failed: { label: "Startup failed", dot: "bg-[#EF4444]", pill: "bg-red-50 text-[#EF4444]" },
-  not_configured: { label: "Needs setup", dot: "bg-[#F59E0B]", pill: "bg-amber-50 text-[#D97706]" },
-  pending_restart: { label: "Restart needed", dot: "bg-[#F59E0B]", pill: "bg-amber-50 text-[#D97706]" },
-  gateway_stopped: { label: "Messaging gateway stopped", dot: "bg-[#F59E0B]", pill: "bg-amber-50 text-[#D97706]" },
-};
-
-// 分组标签走 i18n：messaging.required / recommended / advanced
-
-const PLATFORMS: Platform[] = [
-  {
-    id: "telegram", name: "Telegram", initials: "T", color: "#26A5E4",
-    desc: "Run Mirach from Telegram DMs, groups, and topics.", status: "connected",
-    creds: [
-      { group: "required", key: "TELEGRAM_BOT_TOKEN", label: "Bot token", isPassword: true, isSet: true },
-      { group: "recommended", key: "TELEGRAM_ALLOWED_USERS", label: "Allowed Telegram user IDs" },
-      { group: "advanced", key: "TELEGRAM_PROXY", label: "Proxy URL" },
-    ],
-  },
-  {
-    id: "discord", name: "Discord", initials: "D", color: "#5865F2",
-    desc: "Connect Mirach to Discord DMs, channels, and threads.", status: "disabled",
-    creds: [
-      { group: "required", key: "DISCORD_BOT_TOKEN", label: "Bot token", isPassword: true },
-      { group: "recommended", key: "DISCORD_ALLOWED_USERS", label: "Allowed Discord user IDs" },
-    ],
-  },
-  {
-    id: "slack", name: "Slack", initials: "S", color: "#4A154B",
-    desc: "Use Mirach from Slack via Socket Mode for bots and apps.", status: "not_configured",
-    creds: [
-      { group: "required", key: "SLACK_BOT_TOKEN", label: "Slack bot token", isPassword: true },
-      { group: "required", key: "SLACK_APP_TOKEN", label: "Slack app token", isPassword: true },
-      { group: "recommended", key: "SLACK_ALLOWED_USERS", label: "Allowed Slack user IDs" },
-    ],
-  },
-  {
-    id: "mattermost", name: "Mattermost", initials: "M", color: "#0058CC",
-    desc: "Connect Mirach to Mattermost channels and direct messages.", status: "disabled",
-    creds: [
-      { group: "required", key: "MATTERMOST_URL", label: "Server URL" },
-      { group: "required", key: "MATTERMOST_TOKEN", label: "Bot token", isPassword: true },
-      { group: "recommended", key: "MATTERMOST_ALLOWED_USERS", label: "Allowed user IDs" },
-      { group: "recommended", key: "MATTERMOST_REQUIRE_MENTION", label: "Require @mention in channels" },
-      { group: "recommended", key: "MATTERMOST_FREE_RESPONSE_CHANNELS", label: "Free-response channel IDs (comma-separated)" },
-    ],
-  },
-  {
-    id: "matrix", name: "Matrix", initials: "Mx", color: "#000000",
-    desc: "Use Mirach in Matrix rooms and direct messages.", status: "disabled",
-    creds: [
-      { group: "required", key: "MATRIX_HOMESERVER", label: "Homeserver URL" },
-      { group: "required", key: "MATRIX_ACCESS_TOKEN", label: "Access token", isPassword: true },
-      { group: "required", key: "MATRIX_USER_ID", label: "Bot user ID" },
-      { group: "recommended", key: "MATRIX_ALLOWED_USERS", label: "Allowed Matrix user IDs" },
-      { group: "advanced", key: "MATRIX_REQUIRE_MENTION", label: "Require @mention" },
-      { group: "advanced", key: "MATRIX_AUTO_THREAD", label: "Auto-thread" },
-      { group: "advanced", key: "MATRIX_DEVICE_ID", label: "Device ID" },
-      { group: "advanced", key: "MATRIX_RECOVERY_KEY", label: "Recovery key", isPassword: true },
-    ],
-  },
-  {
-    id: "whatsapp", name: "WhatsApp", initials: "W", color: "#25D366",
-    desc: "Use Mirach through the bundled WhatsApp bridge with QR-based auth.", status: "not_configured",
-    creds: [
-      { group: "recommended", key: "WHATSAPP_ALLOWED_USERS", label: "Allowed WhatsApp users" },
-      { group: "advanced", key: "WHATSAPP_ENABLED", label: "Enable WhatsApp bridge" },
-      { group: "advanced", key: "WHATSAPP_MODE", label: "Bridge mode" },
-      { group: "advanced", key: "WHATSAPP_DM_POLICY", label: "DM policy" },
-    ],
-  },
-  {
-    id: "signal", name: "Signal", initials: "Sg", color: "#3A76F0",
-    desc: "Connect through a signal-cli REST bridge.", status: "disabled",
-    creds: [
-      { group: "required", key: "SIGNAL_HTTP_URL", label: "Signal bridge URL" },
-      { group: "required", key: "SIGNAL_ACCOUNT", label: "Phone number" },
-      { group: "recommended", key: "SIGNAL_ALLOWED_USERS", label: "Allowed Signal users" },
-    ],
-  },
-  {
-    id: "bluebubbles", name: "BlueBubbles (iMessage)", initials: "B", color: "#0BD318",
-    desc: "Use Mirach through iMessage via a BlueBubbles server.", status: "disabled",
-    creds: [
-      { group: "required", key: "BLUEBUBBLES_SERVER_URL", label: "Server URL" },
-      { group: "required", key: "BLUEBUBBLES_PASSWORD", label: "Password", isPassword: true },
-      { group: "recommended", key: "BLUEBUBBLES_ALLOWED_USERS", label: "Allowed iMessage addresses" },
-      { group: "advanced", key: "BLUEBUBBLES_ALLOW_ALL_USERS", label: "Allow all iMessage users" },
-    ],
-  },
-  {
-    id: "homeassistant", name: "Home Assistant", initials: "H", color: "#18BCF2",
-    desc: "Control your smart home from Mirach via Home Assistant.", status: "disabled",
-    creds: [
-      { group: "required", key: "HASS_URL", label: "Home Assistant URL" },
-      { group: "required", key: "HASS_TOKEN", label: "Home Assistant access token", isPassword: true },
-    ],
-  },
-  {
-    id: "email", name: "Email", initials: "E", color: "#EA4335",
-    desc: "Talk to Mirach through an IMAP/SMTP mailbox.", status: "connected",
-    creds: [
-      { group: "required", key: "EMAIL_ADDRESS", label: "Email address", isSet: true },
-      { group: "required", key: "EMAIL_PASSWORD", label: "Password", isPassword: true, isSet: true },
-      { group: "required", key: "EMAIL_IMAP_HOST", label: "IMAP host", isSet: true },
-      { group: "required", key: "EMAIL_SMTP_HOST", label: "SMTP host", isSet: true },
-    ],
-  },
-  {
-    id: "sms", name: "SMS (Twilio)", initials: "SMS", color: "#F43F5E",
-    desc: "Send and receive text messages via Twilio.", status: "disabled",
-    creds: [
-      { group: "required", key: "TWILIO_ACCOUNT_SID", label: "Account SID" },
-      { group: "required", key: "TWILIO_AUTH_TOKEN", label: "Auth token", isPassword: true },
-    ],
-  },
-  {
-    id: "dingtalk", name: "DingTalk", initials: "D", color: "#4A90D9",
-    desc: "Connect Mirach to DingTalk groups (钉钉).", status: "disabled",
-    creds: [
-      { group: "required", key: "DINGTALK_CLIENT_ID", label: "Client ID" },
-      { group: "required", key: "DINGTALK_CLIENT_SECRET", label: "Client secret", isPassword: true },
-    ],
-  },
-  {
-    id: "feishu", name: "Feishu / Lark", initials: "F", color: "#3370FF",
-    desc: "Use Mirach inside Feishu / Lark.", status: "disabled",
-    creds: [
-      { group: "required", key: "FEISHU_APP_ID", label: "App ID" },
-      { group: "required", key: "FEISHU_APP_SECRET", label: "App secret", isPassword: true },
-      { group: "recommended", key: "FEISHU_ENCRYPT_KEY", label: "Encrypt key" },
-      { group: "recommended", key: "FEISHU_VERIFICATION_TOKEN", label: "Verification token" },
-    ],
-  },
-  {
-    id: "google_chat", name: "Google Chat", initials: "G", color: "#00897B",
-    desc: "Connect Mirach to Google Chat via Cloud Pub/Sub.", status: "disabled",
-    creds: [
-      { group: "required", key: "GOOGLE_CHAT_SERVICE_ACCOUNT", label: "Service account JSON" },
-      { group: "required", key: "GOOGLE_CHAT_SPACE_ID", label: "Space ID" },
-    ],
-  },
-  {
-    id: "wecom", name: "WeCom (group bot)", initials: "企", color: "#0082EF",
-    desc: "Send-only WeCom group bot via webhook.", status: "disabled",
-    creds: [
-      { group: "required", key: "WECOM_BOT_ID", label: "WeCom Bot ID" },
-      { group: "recommended", key: "WECOM_SECRET", label: "WeCom Secret", isPassword: true },
-    ],
-  },
-  {
-    id: "wecom_callback", name: "WeCom (app)", initials: "企", color: "#0082EF",
-    desc: "Two-way WeCom integration via callback app.", status: "disabled",
-    creds: [
-      { group: "required", key: "WECOM_CALLBACK_CORP_ID", label: "Corp ID" },
-      { group: "required", key: "WECOM_CALLBACK_CORP_SECRET", label: "Corp secret", isPassword: true },
-      { group: "required", key: "WECOM_CALLBACK_AGENT_ID", label: "Agent ID" },
-      { group: "recommended", key: "WECOM_CALLBACK_TOKEN", label: "Callback token" },
-      { group: "recommended", key: "WECOM_CALLBACK_ENCODING_AES_KEY", label: "Encoding AES key", isPassword: true },
-    ],
-  },
-  {
-    id: "weixin", name: "Weixin / WeChat (Personal)", initials: "微", color: "#07C160",
-    desc: "Connect a personal WeChat account through Tencent's iLink Bot API.", status: "not_configured",
-    creds: [
-      { group: "required", key: "WEIXIN_ACCOUNT_ID", label: "iLink Bot account ID" },
-      { group: "required", key: "WEIXIN_TOKEN", label: "Token", isPassword: true },
-      { group: "recommended", key: "WEIXIN_BASE_URL", label: "iLink API base URL" },
-    ],
-  },
-  {
-    id: "qqbot", name: "QQ Bot", initials: "Q", color: "#EB1923",
-    desc: "Connect Mirach to a QQ Bot from the QQ Open Platform.", status: "disabled",
-    creds: [
-      { group: "required", key: "QQ_APP_ID", label: "QQ App ID" },
-      { group: "required", key: "QQ_CLIENT_SECRET", label: "QQ Client Secret", isPassword: true },
-      { group: "recommended", key: "QQ_ALLOWED_USERS", label: "Allowed QQ users" },
-      { group: "advanced", key: "QQ_ALLOW_ALL_USERS", label: "Allow all QQ users" },
-    ],
-  },
-  {
-    id: "yuanbao", name: "Yuanbao (元宝)", initials: "元", color: "#FB7299",
-    desc: "Connect Mirach to Tencent Yuanbao.", status: "disabled",
-    creds: [
-      { group: "required", key: "YUANBAO_APP_ID", label: "App ID" },
-      { group: "required", key: "YUANBAO_APP_SECRET", label: "App secret", isPassword: true },
-    ],
-  },
-  {
-    id: "api_server", name: "API server", initials: "API", color: "#64748B",
-    desc: "Expose Mirach as an OpenAI-compatible HTTP API for other tools.", status: "connected",
-    creds: [
-      { group: "advanced", key: "API_SERVER_ENABLED", label: "Enabled", isSet: true },
-      { group: "advanced", key: "API_SERVER_KEY", label: "API key", isPassword: true, isSet: true },
-      { group: "advanced", key: "API_SERVER_PORT", label: "Port", isSet: true },
-      { group: "advanced", key: "API_SERVER_HOST", label: "Host" },
-      { group: "advanced", key: "API_SERVER_MODEL_NAME", label: "Model name" },
-    ],
-  },
-  {
-    id: "webhook", name: "Webhooks", initials: "WH", color: "#71717A",
-    desc: "Receive events from GitHub, GitLab, and other webhook sources.", status: "connected",
-    creds: [
-      { group: "recommended", key: "WEBHOOK_ENABLED", label: "Enabled", isSet: true },
-      { group: "recommended", key: "WEBHOOK_PORT", label: "Port", isSet: true },
-      { group: "recommended", key: "WEBHOOK_SECRET", label: "Secret", isPassword: true, isSet: true },
-    ],
-  },
-  {
-    id: "teams", name: "Microsoft Teams", initials: "T", color: "#6264A7",
-    desc: "Connect Mirach to Microsoft Teams.", status: "disabled",
-    creds: [
-      { group: "required", key: "TEAMS_CLIENT_ID", label: "Client ID" },
-      { group: "required", key: "TEAMS_CLIENT_SECRET", label: "Client secret", isPassword: true },
-      { group: "required", key: "TEAMS_TENANT_ID", label: "Tenant ID" },
-    ],
-  },
-  {
-    id: "ntfy", name: "ntfy", initials: "N", color: "#16A34A",
-    desc: "Send notifications to ntfy topics.", status: "disabled",
-    creds: [
-      { group: "required", key: "NTFY_TOPIC", label: "Topic" },
-    ],
-  },
-  {
-    id: "line", name: "LINE", initials: "L", color: "#06C755",
-    desc: "Connect Mirach to LINE.", status: "disabled",
-    creds: [
-      { group: "required", key: "LINE_CHANNEL_ACCESS_TOKEN", label: "Channel access token", isPassword: true },
-      { group: "required", key: "LINE_CHANNEL_SECRET", label: "Channel secret", isPassword: true },
-    ],
-  },
-  {
-    id: "simplex", name: "SimpleX Chat", initials: "S", color: "#6B7280",
-    desc: "Connect Mirach to SimpleX Chat.", status: "disabled",
-    creds: [
-      { group: "required", key: "SIMPLEX_WS_URL", label: "WebSocket URL" },
-    ],
-  },
-  {
-    id: "irc", name: "IRC", initials: "I", color: "#6B7280",
-    desc: "Connect Mirach to IRC channels.", status: "disabled",
-    creds: [
-      { group: "required", key: "IRC_SERVER", label: "IRC server" },
-      { group: "required", key: "IRC_CHANNEL", label: "IRC channel" },
-      { group: "required", key: "IRC_NICKNAME", label: "IRC nickname" },
-      { group: "recommended", key: "IRC_ALLOWED_USERS", label: "Allowed users" },
-      { group: "advanced", key: "IRC_SERVER_PASSWORD", label: "Server password", isPassword: true },
-    ],
-  },
+/** IM 桥核心 + 官方渠道适配器（dsh-im 插件家族） */
+const IM_CORE = "dsh-im";
+const IM_CHANNELS: { pkg: string; label: string; hint: string }[] = [
+  { pkg: "dsh-im-weixin", label: "微信", hint: "腾讯 iLink 个人微信机器人（扫码绑定）" },
+  { pkg: "dsh-im-wecom", label: "企业微信", hint: "企业微信自建应用渠道" },
+  { pkg: "dsh-im-feishu", label: "飞书", hint: "飞书长连接（需自建应用凭据）" },
+  { pkg: "dsh-im-telegram", label: "Telegram", hint: "Bot API 轮询，免公网" },
 ];
 
-export function MessagingOverlay() {
-  const { t } = useI18n();
-  const [selectedId, setSelectedId] = useState(PLATFORMS[0].id);
-  const [search, setSearch] = useState("");
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({
-    telegram: true, email: true, api_server: true, webhook: true,
-  });
+type Row = {
+  pkg: string;
+  label?: string;
+  hint?: string;
+  installed: boolean;
+  active: boolean;
+  version?: string;
+};
 
-  const selected = PLATFORMS.find((p) => p.id === selectedId) ?? PLATFORMS[0];
-  if (!selected) return null;
-  const filtered = PLATFORMS.filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()));
-  const isEnabled = enabled[selected.id] ?? false;
+export function MessagingOverlay({ onOpenPlugins }: { onOpenPlugins?: (pkg?: string) => void }) {
+  const [installed, setInstalled] = useState<InstalledPluginInfo[] | null>(null);
+  const [active, setActive] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([]);
+
+  const refresh = useCallback(() => {
+    void getApi()
+      .listCommunityPlugins()
+      .then((list) => setInstalled(list ?? []))
+      .catch(() => setInstalled([]));
+    void getApi()
+      .listEnginePlugins()
+      .then((list) => {
+        const names = new Set<string>();
+        for (const e of list ?? []) {
+          names.add(e.id);
+          names.add(e.name);
+        }
+        setActive(names);
+      })
+      .catch(() => setActive(new Set()));
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const rowFor = (pkg: string, label?: string, hint?: string): Row => {
+    const hit = installed?.find((p) => p.name === pkg);
+    return {
+      pkg,
+      label,
+      hint,
+      installed: !!hit,
+      active: [...active].some((a) => a === pkg || a.includes(pkg)),
+      version: hit?.version,
+    };
+  };
+
+  const doInstall = async (pkg: string) => {
+    setBusy(pkg);
+    setLogs([`安装 ${pkg} …`]);
+    try {
+      const lines = await getApi().installCommunityPlugin(pkg);
+      setLogs(lines);
+      refresh();
+    } catch (e) {
+      setLogs((l) => [...l, "失败：" + String(e)]);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rows =
+    installed === null
+      ? null
+      : [rowFor(IM_CORE, "IM 桥核心"), ...IM_CHANNELS.map((c) => rowFor(c.pkg, c.label, c.hint))];
+  const coreActive = rows?.[0]?.active ?? false;
+  const channelCount = rows ? rows.slice(1).filter((r) => r.installed).length : 0;
 
   return (
-    <div className="flex h-full">
-      {/* 左栏：平台列表 */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-border">
-        <div className="p-3 pb-2">
-          <div className="relative">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("messaging.search")}
-              className="w-full rounded-md border border-border bg-white py-1.5 pl-7 pr-2 text-body-sm text-[#303030] placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#303030]/10"
-            />
-            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          </div>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* 状态头：桥核心是否激活 —— 全真值，没有假 connected */}
+      <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+        <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={2} />
+        <div className="min-w-0 flex-1 text-[12px] leading-snug text-[#303030]">
+          {rows === null ? (
+            "正在读取引擎插件状态…"
+          ) : coreActive ? (
+            <>
+              <b>IM 桥已激活</b>：渠道消息按会话映射进引擎，审批/通知走同一条总线
+              {channelCount > 0 ? `（已装 ${channelCount} 个渠道）` : "（还没有渠道，先装一个）"}
+            </>
+          ) : (
+            <>
+              <b>IM 桥未激活</b>：装好 {IM_CORE} 后需<b>重启应用</b>，引擎装配才会带上它
+            </>
+          )}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {filtered.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setSelectedId(p.id)}
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors",
-                selectedId === p.id ? "bg-muted" : "hover:bg-muted/60",
-              )}
-            >
-              <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold text-white"
-                style={{ backgroundColor: p.color }}
-              >
-                {p.initials}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-body-sm font-medium text-[#303030]">{p.name}</span>
-              <span className={cn("h-2 w-2 shrink-0 rounded-full", STATUS_META[p.status].dot)} />
-            </button>
-          ))}
-        </div>
+        <button
+          onClick={refresh}
+          title="重新读取"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+        {onOpenPlugins && (
+          <button
+            onClick={() => onOpenPlugins(IM_CORE)}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#303030] transition-colors hover:bg-muted"
+          >
+            插件管理器
+          </button>
+        )}
       </div>
 
-      {/* 右栏：详情 */}
-      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex items-center justify-between border-b border-border px-5 py-3">
-          <div className="flex items-center gap-3">
-            <span
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-xs font-bold text-white"
-              style={{ backgroundColor: selected.color }}
-            >
-              {selected.initials}
-            </span>
-            <div>
-              <h3 className="text-member font-bold text-[#303030]">{selected.name}</h3>
-              <div className="mt-0.5 flex items-center gap-1.5">
-                <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_META[selected.status].pill)}>
-                  {STATUS_META[selected.status].label}
-                </span>
-                {selected.status === "pending_restart" && (
-                  <span className="text-[11px] text-muted-foreground">{t("messaging.restartHint")}</span>
+      {/* 桥核心 + 渠道适配器 */}
+      <div className="space-y-1.5">
+        {rows === null ? (
+          <p className="px-3 py-6 text-center text-body-sm text-muted-foreground">正在读取…</p>
+        ) : (
+          rows.map((r) => (
+            <div key={r.pkg} className="flex items-center gap-3 rounded-md border border-border/60 px-3 py-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-[#464646]">
+                {r.installed ? (
+                  <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
+                ) : (
+                  <AlertCircle className="h-4 w-4" strokeWidth={2} />
                 )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 text-xs text-[#464646]">
-              {t("messaging.enable")}
-              <SwitchButton on={isEnabled} onChange={(v) => setEnabled((e) => ({ ...e, [selected.id]: v }))} />
-            </label>
-            <button className="flex items-center gap-1 rounded-md bg-[#303030] px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-[#464646]">
-              <Save className="h-3 w-3" strokeWidth={2} />
-              {t("messaging.saveChanges")}
-            </button>
-          </div>
-        </div>
-
-        <div className="px-5 py-4">
-          <p className="text-body-sm leading-relaxed text-muted-foreground">{selected.desc}</p>
-
-          {/* 凭据区块 */}
-          <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3">
-            <div className="flex items-center justify-between">
-              <p className="text-body-sm font-medium text-[#303030]">{t("messaging.getCredentials")}</p>
-              <button className="flex items-center gap-1 text-xs text-[#6366F1] transition-colors hover:underline">
-                {t("messaging.openSetupGuide")}
-                <ExternalLink className="h-3 w-3" strokeWidth={2} />
-              </button>
-            </div>
-          </div>
-
-          {/* 凭据分组 */}
-          {(["required", "recommended", "advanced"] as const).map((group) => {
-            const creds = selected.creds.filter((c) => c.group === group);
-            if (creds.length === 0) return null;
-            return (
-              <div key={group} className="mt-4">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {t(`messaging.${group}`)}
-                  {group === "advanced" && ` (${creds.length})`}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-body-sm font-medium text-[#303030]">
+                  {r.label ? `${r.label}（${r.pkg}）` : r.pkg}
+                  {r.version && (
+                    <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">
+                      {r.version}
+                    </span>
+                  )}
                 </p>
-                <div className="mt-1.5 space-y-1.5">
-                  {creds.map((c) => (
-                    <div key={c.key} className="flex items-center justify-between gap-4 rounded-md border border-border/60 px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-body-sm text-[#303030]">{c.label}</p>
-                        <p className="truncate font-mono text-[10px] text-muted-foreground">{c.key}</p>
-                      </div>
-                      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
-                        <input
-                          type={c.isPassword ? "password" : "text"}
-                          defaultValue={c.isSet ? (c.isPassword ? "••••••••" : "saved value") : ""}
-                          placeholder={c.isSet ? t("messaging.replaceCurrent") : "Not set"}
-                          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-white px-2 text-body-sm text-[#303030] placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#303030]/10"
-                        />
-                        {c.isSet && (
-                          <button title="Clear" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-[#EF4444]">
-                            <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {r.hint ? `${r.hint} · ` : ""}
+                  {!r.installed ? "未安装" : r.active ? "已激活" : "已安装但未激活（重启应用生效）"}
+                </p>
               </div>
-            );
-          })}
-        </div>
+              {!r.installed ? (
+                <button
+                  onClick={() => void doInstall(r.pkg)}
+                  disabled={busy !== null}
+                  className="flex shrink-0 items-center gap-1 rounded-md bg-[#303030] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  <Download className="h-3 w-3" strokeWidth={2} />
+                  {busy === r.pkg ? "安装中…" : "安装"}
+                </button>
+              ) : (
+                <button
+                  onClick={() => onOpenPlugins?.(r.pkg)}
+                  className="shrink-0 rounded-md border border-border px-2.5 py-1 text-[11px] text-[#303030] transition-colors hover:bg-muted"
+                >
+                  设置
+                </button>
+              )}
+            </div>
+          ))
+        )}
       </div>
-    </div>
-  );
-}
 
-function SwitchButton({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      onClick={() => onChange(!on)}
-      className={cn(
-        "flex h-[18px] w-8 items-center rounded-full px-[2px] transition-colors",
-        on ? "justify-end bg-[#303030]" : "justify-start bg-[#D1D5DB]",
+      {logs.length > 0 && (
+        <pre className="max-h-40 shrink-0 overflow-auto rounded-md bg-[#303030] p-2 text-[11px] leading-relaxed text-white/90">
+          {logs.join("\n")}
+        </pre>
       )}
-    >
-      <span className="h-[14px] w-[14px] rounded-full bg-white shadow-sm" />
-    </button>
+
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        渠道凭据（bot token / 应用密钥 / 扫码绑定）由<b>插件自己的设置分区</b>接管，mirach 不代管密钥。
+        安装与激活都走 sidecar 的官方装配路径写入 <span className="font-mono">dsh.profile.bundles</span>，
+        重启应用生效；装配失败会自动回滚清单。
+      </p>
+    </div>
   );
 }
