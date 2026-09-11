@@ -1101,3 +1101,13 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
   min-width: 0 !important;
   margin-inline: 0 !important;
 }
+
+/* band 里那两层的底色抹掉：官方给线程列/行容器铺了自己的 surface 底色
+   （打包态实测：band 一露出来就是一块灰板）。HUD 的契约是"文字浮在别人的窗口上"
+   —— 底色归 [data-hud-glass] 那条暗色 scrim（只在聚焦时出现）负责。
+   只抹最上面两层，下面真正的卡片（代码块/审批卡/工具卡）保留自己的底。 */
+[data-hud-shell] [data-hud-slot~='aui_thread-content'],
+[data-hud-shell] [data-hud-slot~='aui_thread-content'] > *,
+[data-hud-shell] [data-hud-slot~='composer-bounds'] > * {
+  background: transparent !important;
+}
