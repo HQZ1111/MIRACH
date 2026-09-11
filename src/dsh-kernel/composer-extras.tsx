@@ -27,9 +27,12 @@ import { $autoSpeak } from "@/store/chat";
 import { $wakeWord, toggleWakeWord } from "@/plugins/plugin-wake-word";
 import { logInfo, logWarn } from "./kernel-log";
 
-/** 官方工具行 ghost 按钮的 mirach 视觉（对齐 mirach Composer GHOST_ICON_BTN） */
+/** 官方工具行 ghost 按钮的 mirach 视觉（对齐 mirach Composer GHOST_ICON_BTN）。
+ *  末位是**稳定标记类**：HUD 模式要按它把 mirach 注入的这几个按钮（终端/听写/朗读/唤醒词）
+ *  藏起来（hermes 的 HUD 同样只留 composer 本体，micro-action pills 不进悬浮条），
+ *  也让 CSS 不必去猜 title（title 会随状态变：开启/关闭朗读、听写/停止听写…）。 */
 const EXTRA_BTN =
-  "flex h-8 w-8 items-center justify-center rounded-lg text-[#464646] transition-colors hover:bg-black/5";
+  "mirach-composer-extra flex h-8 w-8 items-center justify-center rounded-lg text-[#464646] transition-colors hover:bg-black/5";
 
 // ── 听写引擎（模块级单例：工具行按钮与"空输入点发送=语音"共用一条链） ────────
 

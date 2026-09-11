@@ -1057,7 +1057,7 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
 }
 
 [data-hud-shell] [data-hud-slot~='composer-dock'] {
-  position: absolute !important;
+  position: fixed !important;
   top: 0 !important;
   right: 0 !important;
   left: 0 !important;
@@ -1068,7 +1068,7 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
 }
 
 [data-hud-shell] [data-hud-slot~='composer-bounds'] {
-  position: absolute !important;
+  position: fixed !important;
   top: var(--hud-bar-offset, var(--hud-bar-height, 3rem)) !important;
   bottom: auto !important;
   left: var(--hud-band-inset) !important;
@@ -1093,13 +1093,45 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
   display: none !important;
 }
 
-/* 官方 composer 的卡片是**内容自适应**（空输入时只有 ~56px 宽的一个小胶囊），
-   而 hermes 的 HUD 契约是"整条 Spotlight bar 占满窗口宽"。这里把卡片按 bar 宽度铺满
-   （高度仍由官方内容决定），配上面那层的 --dt-card 底/描边/圆角，就是那条 bar。 */
+/* 输入条：整宽 + 输入区吃满 + 控制行给足自己的跨度。
+   为什么必须显式给控制行宽度（实测）：官方 composer 的控制行里，按钮是按**行的左边缘**
+   绝对定位排开的，而 `.pa_row` 自身只有 16px 宽 —— 卡片一拉满，行被推到最右边，按钮就
+   伸到窗口外（实测 x 到 719 > 620，右侧图标被切掉）。给行一个按实测跨度（≈104px）的固定
+   宽度，它就会从右边缘往左让出空间，按钮落在行内；输入区 flex:1 吃满剩下的宽度。 */
 [data-hud-shell] [data-hud-slot~='composer-surface'] {
   width: 100% !important;
   min-width: 0 !important;
   margin-inline: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+[data-hud-shell] [data-hud-slot~='composer-surface'] [class*='_pa_scroll'] {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+[data-hud-shell] [data-hud-slot~='composer-surface'] [class*='_pa_row'] {
+  flex: 0 0 104px !important;
+}
+
+/* mirach 自注入的工具行按钮（终端/听写/朗读/唤醒词，composer-extras 打的
+   `mirach-composer-extra` 标记）：HUD 里不出现 —— hermes 的 HUD 同样只留 composer 本体，
+   micro-action pills 归停靠窗口。不藏的话这一行会**溢出窗口右边缘**
+   （实测按钮排到 x=719 > 620，右侧图标被切掉）。语音条（P6）以后由 HUD 自己的条提供。 */
+[data-hud-shell] .mirach-composer-extra {
+  display: none !important;
+}
+
+/* 对话区里只放**对话**：插件旁白（time-context / model-selection 这类"上下文注入"
+   通知）是环境信息，不是对话 —— hermes 的 HUD 同样把 tool rows / background notices
+   留给停靠窗口（"The band is three lines of conversation, not a transcript"）。
+   错误行（turnErrorRow）故意**不**藏：那是要人处理的信号。
+   官方行没有可用的稳定属性（只有 data-slot=conversation.chat.node + display:contents），
+   所以按内层 CSS-module 前缀认（本仓库 index.css 已有同样做法）。 */
+[data-hud-shell] [data-hud-slot~='aui_thread-content'] [class*='_root_luwio'],
+[data-hud-shell] [data-hud-slot~='aui_thread-content'] [class*='IY8HTG_root'] {
+  display: none !important;
 }
 
 /* band 里那两层的底色抹掉：官方给线程列/行容器铺了自己的 surface 底色
@@ -1111,3 +1143,7 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
 [data-hud-shell] [data-hud-slot~='composer-bounds'] > * {
   background: transparent !important;
 }
+
+/* bar 与 band 都相对**窗口视口**定位（position: fixed）：官方那条列里，bar 的盒子会跟着
+   某个滚动祖先位移（实测卡片被推到 y=-306，条子等于看不见）。HUD 的契约本来就是
+   "bar 钉在窗口顶、transcript 挂在它下面"，与列内滚动无关。 */
