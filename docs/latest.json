@@ -1,11 +1,11 @@
 {
-    "version":  "0.1.4",
-    "notes":  "Mirach 0.1.4：修复“装完没有依赖安装页、就是个空前端”——首启就绪判据以前只看运行时目录存不存在，一次中断的安装会留下半装目录 → 应用自认已就绪 → 安装页不弹、安装包里那份内置运行时也不会被解开。现在改为逐个查文件（node.exe / sidecar dist / 引擎 sdk），不齐就回到安装页（自带运行时归档时是本地解压，不需要联网）。另加：命令面板新增“重新安装运行时（依赖）”手动入口。",
-    "pub_date":  "2026-09-11T06:09:57Z",
+    "version":  "0.1.5",
+    "notes":  "Mirach 0.1.5：安装包内置的运行时归档是完整的了。修复 0.1.4 及以前的问题——resources\\mirach-runtime.7z 是旧的一份、缺 node\\node.exe（87MB），而发布脚本每次都复用既有归档，所以装完只有 agent-sidecar、没有 Node 运行时，引擎起不来、界面是空的。现已重新打包（294MB 解压 / 62.4MB 安装包，含 Node 22 + 引擎 + 桥接），并叠加 0.1.4 的首启就绪判据修复（查文件齐全，不再只看目录）。",
+    "pub_date":  "2026-09-11T06:29:40Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbGhpQnM5eThBOGdCdWRMeEVDcW9vbkc4cmxZTnZuYmdGRmhSbmFGWTN6VXV4bWFpL1ZWQkoyTmNIZEwxTEV0SnQwRlNtVGNmUXBMYTlqb01VN2dtSEFFV1dyME1mRHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTA2NzczCWZpbGU6TWlyYWNoXzAuMS40X3g2NC1zZXR1cC5leGUKTnNVeW1ON01KbldtM091aVhGdXJJOTVkbjJPVmZJcVF4NnQwUEtJeXF2cGRUcktSQkxyZThKd1Ywdkxrd2VENjJHZk9NOXFmVzdKR3JJWFpPeXVlRFE9PQo=",
-                                             "url":  "https://gitee.com/HANQINGZHOU/mirach/releases/download/v0.1.4/Mirach_0.1.4_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbGhpQnM5eThBOGdlb0Z0SHh6NytKbkh0citMK0lsVm5qYkVuOHE3R0Rkb3RsUFZwcEI3VkpsTndCU1h2dDdvK0VJaWI5ZktEa3o0aml3MnJrd1d5cHpaRzNVUS9QWkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTA4MTIzCWZpbGU6TWlyYWNoXzAuMS41X3g2NC1zZXR1cC5leGUKWTVXT2dHSnpMdEREc2dwdWJ4VHliRU9wUjVEVnB1c3o5N0FlU0NiaC9uQ1NjQzJMcVBoQkF3djI4NlNMRUkwR0dxL1NTandtcFB3QitHcUxzdkRiQkE9PQo=",
+                                             "url":  "https://gitee.com/HANQINGZHOU/mirach/releases/download/v0.1.5/Mirach_0.1.5_x64-setup.exe"
                                          }
                   }
 }
