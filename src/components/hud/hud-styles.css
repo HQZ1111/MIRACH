@@ -98,16 +98,48 @@
   min-height: 0;
 }
 
-/* HUD 自己的顶栏（会话名 + 退出悬浮）：hermes 的退出钮挂在 composer 控制行上，
-   所以它的静止态只有一条 bar。mirach 的顶栏保留（唯一的退出入口），但**静止时隐形**、
-   鼠标进入或输入聚焦时才显现 —— 不在那两条轴线上跟 Spotlight 条抢注意力。 */
-[data-hud-shell] [data-hud-topbar] {
+/* HUD **没有标题栏**（hermes 同款）。退出与"输入条上/下"切换收成一小簇悬浮控件，
+   钉在条子的**另一端**：edge='top'（条在上）时在窗口右下，edge='bottom' 时在右上。
+   静止隐形，鼠标进入或聚焦才现身 —— 不占条子的空间（官方控制行已排满），也不像标题栏
+   那样横占一整条。 */
+[data-hud-shell] [data-hud-controls] {
+  position: fixed;
+  right: 10px;
+  z-index: 40;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9999px;
+  background: rgb(12 14 18 / 0.55);
   opacity: 0;
   transition: opacity var(--hud-fade) var(--hud-ease-exit);
 }
 
-[data-hud-shell]:hover [data-hud-topbar],
-[data-hud-shell]:focus-within [data-hud-topbar] {
+[data-hud-shell][data-hud-edge='top'] [data-hud-controls] {
+  bottom: 10px;
+}
+
+[data-hud-shell][data-hud-edge='bottom'] [data-hud-controls] {
+  top: 10px;
+}
+
+[data-hud-shell] [data-hud-controls] button {
+  display: flex;
+  height: 22px;
+  width: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  color: rgb(255 255 255 / 0.9);
+  transition: background-color 120ms ease;
+}
+
+[data-hud-shell] [data-hud-controls] button:hover {
+  background: rgb(255 255 255 / 0.16);
+}
+
+[data-hud-shell]:hover [data-hud-controls],
+[data-hud-shell]:focus-within [data-hud-controls] {
   opacity: 1;
   transition: opacity var(--hud-reveal) var(--hud-ease-enter);
 }
@@ -1056,27 +1088,66 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
   display: block !important;
 }
 
-[data-hud-shell] [data-hud-slot~='composer-dock'] {
+/* bar 与 band 都可以停在窗口的任一边（用户可切），两套朝向共用一套变量：
+   --hud-bar-offset = bar 占掉的那一段（含官方列自带留白），
+   --hud-band-height = transcript 可用高度，都由 transcript-band.ts 按当前朝向实测。
+
+   ⚠️ 定位必须挂在 **composer-root**（真实盒子）上，不能挂 composer-dock —— 后者是官方
+   `display: contents` 的 slot，fixed/top 这类盒属性对它无效（实测切到 'bottom' 时条子
+   纹丝不动）。而且 root 的官方高度只有 28px，卡片是 44px：不给高度就会**顶部被裁掉 13px**
+   （用户"输入框显示不完全"）。所以这里给它 44px 高 + 垂直居中，卡片就完整落在窗口里。 */
+[data-hud-shell] [data-hud-slot~='composer-root'] {
   position: fixed !important;
-  top: 0 !important;
-  right: 0 !important;
   left: 0 !important;
-  bottom: auto !important;
+  right: 0 !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  display: flex !important;
+  align-items: center !important;
   width: 100% !important;
   max-width: none !important;
   z-index: 10 !important;
 }
 
+[data-hud-shell] [data-hud-slot~='composer-dock'] {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  z-index: 10 !important;
+}
+
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='composer-root'] {
+  top: 0 !important;
+  bottom: auto !important;
+}
+
+[data-hud-shell][data-hud-edge='bottom'] [data-hud-slot~='composer-root'] {
+  bottom: 0 !important;
+  top: auto !important;
+}
+
 [data-hud-shell] [data-hud-slot~='composer-bounds'] {
   position: fixed !important;
-  top: var(--hud-bar-offset, var(--hud-bar-height, 3rem)) !important;
-  bottom: auto !important;
   left: var(--hud-band-inset) !important;
   right: var(--hud-band-inset) !important;
   height: var(--hud-band-height, 0px) !important;
   width: auto !important;
   max-width: none !important;
   overflow-y: auto !important;
+}
+
+[data-hud-shell][data-hud-edge='top'] [data-hud-slot~='composer-bounds'] {
+  top: var(--hud-bar-offset, var(--hud-bar-height, 3rem)) !important;
+  bottom: auto !important;
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+[data-hud-shell][data-hud-edge='bottom'] [data-hud-slot~='composer-bounds'] {
+  bottom: var(--hud-bar-offset, var(--hud-bar-height, 3rem)) !important;
+  top: auto !important;
+  border-radius: 0.75rem 0.75rem 0 0;
 }
 
 /* hermes 那条"dock 里只留 composer-root，其余全藏"（它自己的 micro-actions/status-stack
@@ -1104,6 +1175,11 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
   margin-inline: 0 !important;
   display: flex !important;
   align-items: center !important;
+  /* 官方把卡片相对 root 偏移了 -5px（对齐它自己那套 28px 座位）——在 HUD 的 44px
+     条子里那 5px 会顶出窗口上沿（实测 card y=-5，输入框上边被切）。钉回条内。 */
+  top: 0 !important;
+  bottom: 0 !important;
+  margin-block: 0 !important;
 }
 
 [data-hud-shell] [data-hud-slot~='composer-surface'] [class*='_pa_scroll'] {

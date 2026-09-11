@@ -63,10 +63,9 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // The old glance-band ceiling froze this at 152px and turned every extra
       // pixel of native window height into empty transparent chrome.
       //
-      // mirach：输入条在**对话区顶部**（hermes HUD_THREAD_ALWAYS_BELOW=true），
-      // band 从 bar 下沿铺到对话区底部 —— 所以高度是"对话区剩余"，
-      // 偏移是"对话区顶 → bar 下沿"，两个都从实测矩形来（官方列在 bar 上下自带留白，
-      // 按 barHeight 硬算会压住对话或留缝）。
+      // mirach：输入条可停在窗口**任一边**（用户可切，见 HudShell 的 edge）；
+      // band 从 bar 的内侧边铺到对话区的另一端 —— 高度与偏移都按当前朝向实测，
+      // 官方列在 bar 上下自带留白，按 barHeight 硬算会压住对话或留缝。
       const chatArea = root.querySelector<HTMLElement>('.dsh-native-area')
       // 量 **composer-root**（bar 的真实盒子）：composer-dock 在官方结构里是
       // `display: contents` 的 slot（0x0），拿它当 bar 会让 band 高度算成整窗。
@@ -74,21 +73,26 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       const barRect = bar?.getBoundingClientRect()
       const areaRect = chatArea?.getBoundingClientRect()
       const barHeight = barRect?.height ?? 0
-      const available =
-        barRect && areaRect ? Math.max(0, areaRect.bottom - barRect.bottom) : Math.max(0, (areaRect?.height ?? window.innerHeight) - barHeight)
-      const visible = contentSpan < 1 ? 0 : Math.round(available)
+      const edgeTop = root.getAttribute('data-hud-edge') !== 'bottom'
+      // 偏移 = 从**所在那一边**算起，bar 占掉的整段（含留白）
+      const offset = barRect && areaRect
+        ? edgeTop
+          ? barRect.bottom - areaRect.top
+          : areaRect.bottom - barRect.top
+        : barHeight
+      const available = barRect && areaRect
+        ? edgeTop
+          ? areaRect.bottom - barRect.bottom
+          : barRect.top - areaRect.top
+        : Math.max(0, (areaRect?.height ?? window.innerHeight) - barHeight)
+      const visible = contentSpan < 1 ? 0 : Math.round(Math.max(0, available))
 
       root.style.setProperty('--hud-band-height', `${visible}px`)
 
       if (bar && barRect) {
         ro.observe(bar)
         root.style.setProperty('--hud-bar-height', `${Math.round(barHeight)}px`)
-        if (areaRect) {
-          root.style.setProperty(
-            '--hud-bar-offset',
-            `${Math.round(Math.max(0, barRect.bottom - areaRect.top))}px`,
-          )
-        }
+        root.style.setProperty('--hud-bar-offset', `${Math.round(Math.max(0, offset))}px`)
       }
 
       setFilled(barHeight + visible >= (areaRect?.height ?? window.innerHeight) - 1)

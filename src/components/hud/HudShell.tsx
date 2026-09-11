@@ -16,6 +16,7 @@
  */
 import { useStore } from '@nanostores/react'
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowUpDown, Minus } from 'lucide-react'
 
 import { $liveMessages, $aiStreaming } from '@/store/chat'
 import { $activeSessionId } from '@/store/session'
@@ -60,6 +61,12 @@ const HUD_COLLAPSE_MS = Math.round(HUD_FADE_MS * 0.66)
  *  （hermes 恒 top；edge 感知翻转的 CSS 两套朝向仍随 hud-styles.css 转移） */
 const HUD_THREAD_ALWAYS_BELOW = true
 void HUD_THREAD_ALWAYS_BELOW
+
+/** 输入条停靠边（'top' = 条在上、transcript 在下；'bottom' = 反过来）。
+ *  用户可在 HUD 上按按钮切换，选择存在 localStorage（hermes 是常量 HUD_THREAD_ALWAYS_BELOW，
+ *  两套朝向的 CSS 都在 hud-styles.css 里，这里把它做成可切换的）。 */
+export type HudEdge = 'top' | 'bottom'
+const HUD_EDGE_KEY = 'mirach.hud.edge'
 
 const composerHasFocus = () =>
   document.activeElement?.closest('[data-composer-card] [contenteditable]') != null
@@ -177,11 +184,23 @@ function useHudHeld(): boolean {
 export function HudShell() {
   const [recent, holdBand] = useRecentActivity()
   const held = useHudHeld()
-  // 恒为 'top'：hermes 的 HUD_THREAD_ALWAYS_BELOW=true 把 edge 钉死成 'top' ——
-  // **输入条在上、transcript 永远挂在它下面**（Spotlight 形状），窗口停在哪一边都一样
-  // （hermes `measure()` 里那句 `setEdge('top'); return`）。另一套 edge 感知翻转的 CSS
-  // 仍在 hud-styles.css 里（[data-hud-edge='bottom'] 那半边），随时可切回去。
-  const edge = 'top' as const
+  // 输入条停靠边：'top' = 条在上、transcript 挂在下面（hermes 的默认，
+  // HUD_THREAD_ALWAYS_BELOW）；'bottom' = 反过来。用户要求"内容显示上下方向给个调整按钮"，
+  // 所以两套朝向都可用，选择记在 localStorage（重启后保持）。
+  const [edge, setEdge] = useState<HudEdge>(() => {
+    try {
+      return window.localStorage.getItem(HUD_EDGE_KEY) === 'bottom' ? 'bottom' : 'top'
+    } catch {
+      return 'top'
+    }
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HUD_EDGE_KEY, edge)
+    } catch {
+      /* 隐私模式下写不了就算了 */
+    }
+  }, [edge])
 
   // Clicking away to another APP is the most common way the HUD is let go of,
   // and it fires no focusout: the composer stays document.activeElement while
@@ -289,15 +308,19 @@ export function HudShell() {
           it paints behind the transcript. */}
       <div aria-hidden data-hud-glass />
 
-      {/* 会话头部（极简）：会话名 + 退出 HUD。hermes 的退出 chip 同位。 */}
-      <div data-hud-topbar>
-        <span className="truncate text-[11px] font-medium text-white/85">{activeSession}</span>
+      {/* 没有标题栏（hermes 同款）：退出/方向切换做成一小簇悬浮控件，钉在**条子的另一端**
+          （edge='top' 时在窗口右下、edge='bottom' 时在右上），静止隐形、鼠标进入或聚焦才出。
+          这样既不占输入条的空间（官方控制行已经排满），也不像标题栏那样占一整条。 */}
+      <div data-hud-controls>
         <button
           type="button"
-          className="rounded-md px-2 py-0.5 text-[11px] text-white/85 transition-colors hover:bg-white/10"
-          onClick={() => closeHud()}
+          title={edge === 'top' ? '把输入条放到底部' : '把输入条放到顶部'}
+          onClick={() => setEdge(next => (next === 'top' ? 'bottom' : 'top'))}
         >
-          退出悬浮
+          <ArrowUpDown className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+        <button type="button" title="退出悬浮窗" onClick={() => closeHud()}>
+          <Minus className="h-3.5 w-3.5" strokeWidth={2} />
         </button>
       </div>
 
