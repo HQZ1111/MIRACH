@@ -244,9 +244,16 @@ fn sidecar_src(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// 便携包 / 开发仓库已有运行时 → 直接视为就绪（不弹首次安装）。
 /// `stale` = 标记里的应用版本与当前版本不一致（应用升级过 → 需要重跑一遍
 /// 轻量阶段把 sidecar 代码刷新到新版；node/deps 阶段自会跳过）。
+///
+/// ⚠️ 就绪判据是**文件齐全**，不是"运行时目录存在"：
+/// `sidecar_available()` 只看 `install_root()/agent-sidecar` 目录在不在 —— 用它当就绪判据时，
+/// 一次中断的安装/被杀掉的安装器会留下一个半装目录 → 应用自认"已就绪"→ **首启安装页不弹、
+/// 安装包里那份内置运行时也不会被解开**，用户看到的就是"空前端、连不上引擎"
+/// （2026-09-11 用户实测反馈）。所以先照下面 `missing` 的口径逐个查文件，
+/// 齐全才算就绪；不齐就走首次安装（自带 runtime 归档时是本地解压，不下载）。
 #[tauri::command]
 pub fn bootstrap_status() -> Value {
-    let root = install_root();
+    let root = crate::dsh_relay::resolved_runtime_root().unwrap_or_else(install_root);
     let marker = std::fs::read_to_string(marker_path())
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok());
@@ -256,16 +263,6 @@ pub fn bootstrap_status() -> Value {
         .and_then(Value::as_str)
         .unwrap_or("");
     let stale = !installed_app.is_empty() && installed_app != APP_VERSION;
-    if crate::dsh_relay::sidecar_available() {
-        return json!({
-            "ready": true,
-            "installRoot": root.to_string_lossy(),
-            "missing": [],
-            "marker": marker,
-            "appVersion": APP_VERSION,
-            "stale": stale,
-        });
-    }
     let mut missing: Vec<&str> = Vec::new();
     if !root.join("node").join("node.exe").is_file() {
         missing.push("node");
@@ -283,8 +280,15 @@ pub fn bootstrap_status() -> Value {
     if !root.join("agent-sidecar").join("dist").join("index.js").is_file() {
         missing.push("sidecar");
     }
+    // 开发仓库（调试构建且仓库里有 sidecar dist）不需要装：那种布局下 node/deps 走仓库自身。
+    let dev_ok = cfg!(debug_assertions)
+        && std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|p| p.join("agent-sidecar").join("dist").join("index.js").is_file())
+            .unwrap_or(false);
+    let ready = missing.is_empty() || dev_ok;
     json!({
-        "ready": missing.is_empty(),
+        "ready": ready,
         "installRoot": root.to_string_lossy(),
         "missing": missing,
         "marker": marker,

@@ -91,7 +91,9 @@ fn installed_runtime_root() -> Option<std::path::PathBuf> {
 /// 运行时根目录（便携 → 应用内安装 → 都没有则 None，开发期走仓库相对路径回退）。
 /// 调试构建始终不认"应用内安装"：否则首次安装过运行时的开发机会一直跑
 /// %LOCALAPPDATA% 里的旧副本，本地改动不生效（便携目录仍然优先，供便携调试）。
-fn runtime_root() -> Option<std::path::PathBuf> {
+/// 运行时根（便携 / 应用内安装）——**不做就绪判断**，只回答"运行时应该在哪"。
+/// 就绪判断在 `bootstrap::bootstrap_status`（逐个查文件是否齐全）。
+pub fn resolved_runtime_root() -> Option<std::path::PathBuf> {
     if let Some(p) = portable_runtime_root() {
         return Some(p);
     }
@@ -101,16 +103,8 @@ fn runtime_root() -> Option<std::path::PathBuf> {
     installed_runtime_root()
 }
 
-/// 运行时是否可用（便携布局 / 应用内安装 / 开发仓库三选一）。
-/// 安装门用它判断"要不要走首次安装流程"。
-pub fn sidecar_available() -> bool {
-    if runtime_root().is_some() {
-        return true;
-    }
-    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(|p| p.join("agent-sidecar").join("dist").join("index.js"));
-    dev.map(|p| p.is_file()).unwrap_or(false)
+fn runtime_root() -> Option<std::path::PathBuf> {
+    resolved_runtime_root()
 }
 
 /// 便携包运行判定（exe 同级有 runtime/ 或 MIRACH_RUNTIME_DIR 指向它）。

@@ -63,6 +63,7 @@ import { recordTavernBinding } from "@/lib/tavern";
 import { SESSION_ID, appendSystemMessage, newTaskSession } from "@/store/chat";
 import { openPrompt } from "@/store/prompt-dialog";
 import { getPluginViewPages } from "@/plugins/registry";
+import { $setupOpen, refreshStatus } from "@/store/bootstrap";
 
 // 功能弹窗按需加载（减少主包体积，打开时才拉取）
 // 设置页已移交官方（settings-surface 浮出），不再走 SettingsOverlay 浮层
@@ -958,6 +959,15 @@ export function AppLayout() {
     add("jump.agents", "代理", "跳转", () => setOverlayView("agents"), { keywords: "agents subagent 委派" });
     add("jump.webhooks", "Webhook 订阅", "跳转", () => setOverlayView("webhooks"), { keywords: "webhooks 推送 订阅" });
     add("jump.plugins", "插件", "跳转", () => setOverlayView("plugins"), { keywords: "plugins 扩展 目录" });
+    // 手动入口：随时重跑依赖安装（本地解压自带运行时 / 或走下载）。
+    // 为什么必须有：运行时被弄坏（半装、被杀掉的安装器、手动删过）时，界面会是"空前端"，
+    // 而启动门的就绪判据一旦判错，用户就再也回不到安装页 —— 给一个显式入口兜底。
+    add("system.reinstall-runtime", "重新安装运行时（依赖）", "系统", () => {
+      void (async () => {
+        await refreshStatus();
+        $setupOpen.set(true);
+      })();
+    }, { keywords: "install runtime 依赖 安装 修复 重装 引擎 dsh bootstrap repair" });
     // 启动流程预览（mock 下演示：连接动画 → provider 引导）
     if (MOCK) {
       add("demo.startup", "预览启动流程", "演示", () => setPreviewStartup("connecting"), {
