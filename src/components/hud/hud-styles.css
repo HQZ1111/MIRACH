@@ -1,5 +1,20 @@
 [data-hud-shell] {
   background: transparent;
+  /* ── token 桥：hermes 的主题 token → 官方 alias ──────────────────────────────
+     下面 741 行是从 hermes 逐字搬来的，里面写的是 hermes 自己的主题 token
+     （--dt-card / --dt-primary / --ui-stroke-secondary / --ui-text-*）。
+     mirach 没有这套名字（它用的是官方 DSW alias，见 lib/dsw-tokens.ts 的
+     DSW_ALIAS_VARS，挂在官方树容器上）—— 不复桥的话每个 `background: var(--dt-card)`
+     都解析成空值 = **输入条整条透明**，用户看到的就是"打开悬浮窗一片空白"。
+     变量是惰性求值的：这里只做名字映射，取值仍在官方树那一层（那里才有 --dsw-alias-*）。 */
+  --dt-card: var(--dsw-alias-bg-layer-1, #ffffff);
+  --dt-primary: var(--dsw-alias-brand-primary, #4d6bfe);
+  --ui-stroke-secondary: var(--dsw-alias-border-l2, rgb(0 0 0 / 0.12));
+  --ui-text-primary: var(--dsw-alias-label-primary, #1a1a1a);
+  --ui-text-tertiary: var(--dsw-alias-label-tertiary, rgb(0 0 0 / 0.45));
+  /* hermes 在 AppFrame 里量过 composer 高度；mirach 的 bar 实测 28px（官方 composer），
+     这里给一个同量级的兜底值，供 --hud-bar-height 还没量出来之前的规则用。 */
+  --composer-fallback-height: 3rem;
   /* Arrive decisively and settle; leave gently and get out of the way. Linear
      both directions is what made this feel mechanical. */
   --hud-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
@@ -1019,4 +1034,70 @@ html:has([data-hud-shell]) [data-hud-slot~='popover-content'] {
    （同权重、index.css 后加载 → 必须更高一级） */
 [data-hud-shell] .dsh-native-area [data-hud-composer-seat] {
   background: transparent !important;
+}
+
+/* ── mirach 结构适配（最终裁决；放文件末尾，确保压过上面 hermes 那 741 行）───────
+   官方对话面的结构与 hermes 不同，hermes 的绝对定位规则在官方 DOM 上落不下来：
+   hermes 的 composer 在 AppFrame 里本来就是 `absolute bottom-0`（见上面那条注释
+   "The dock is absolute bottom-0 …"），而官方把 thread 与 composer 放在**同一个滚动
+   列**里、两者都是 static。所以这里显式给出官方结构下的几何，语义仍按 hermes 契约：
+
+     · 输入条钉在对话区**顶部** —— hermes `HUD_THREAD_ALWAYS_BELOW = true` 把 edge 钉死
+       成 'top'（"输入在上、transcript 永远挂在下面"），窗口停在哪边都一样；
+     · transcript（= 官方那个线程区）从输入条下沿铺到对话区底部，空闲时淡出折叠
+       （opacity 0 / translate 由上面 hermes 的规则负责，这里只给盒子几何）；
+     · 偏移用 transcript-band.ts 量出来的 --hud-bar-offset（含官方列自带留白），
+       不按 barHeight 硬算 —— 否则条子会压住对话或留一条缝。 */
+[data-hud-shell] [data-hud-conv-root],
+[data-hud-shell] [data-hud-body],
+[data-hud-shell] [data-hud-scroll-body] {
+  position: relative !important;
+  overflow: hidden !important;
+  display: block !important;
+}
+
+[data-hud-shell] [data-hud-slot~='composer-dock'] {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  left: 0 !important;
+  bottom: auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  z-index: 10 !important;
+}
+
+[data-hud-shell] [data-hud-slot~='composer-bounds'] {
+  position: absolute !important;
+  top: var(--hud-bar-offset, var(--hud-bar-height, 3rem)) !important;
+  bottom: auto !important;
+  left: var(--hud-band-inset) !important;
+  right: var(--hud-band-inset) !important;
+  height: var(--hud-band-height, 0px) !important;
+  width: auto !important;
+  max-width: none !important;
+  overflow-y: auto !important;
+}
+
+/* hermes 那条"dock 里只留 composer-root，其余全藏"（它自己的 micro-actions/status-stack
+   都挂在 dock 上）在 mirach 会把输入条整条 `display:none` 掉 —— 官方的 bar 是 dock 的
+   **兄弟 slot**（`conversation.composer.bar`），而 dock 与 root 在本映射里落到同一个元素，
+   于是 `> *:not([data-hud-slot~='composer-root'])` 把 bar 藏了（实测 .pa_card 量出来 0x0，
+   窗口一片空白）。这里把 bar 放回来，只藏真正的环境 chrome（官方 composer 的附属按钮行）。 */
+[data-hud-shell] [data-hud-slot~='composer-dock'] > [data-slot='conversation.composer.bar'],
+[data-hud-shell] [data-hud-slot~='composer-dock'] > [data-slot='conversation.input.dock'] {
+  display: block !important;
+}
+
+[data-hud-shell] [data-slot='conversation.composer.dock'] {
+  display: none !important;
+}
+
+/* 官方 composer 的卡片是**内容自适应**（空输入时只有 ~56px 宽的一个小胶囊），
+   而 hermes 的 HUD 契约是"整条 Spotlight bar 占满窗口宽"。这里把卡片按 bar 宽度铺满
+   （高度仍由官方内容决定），配上面那层的 --dt-card 底/描边/圆角，就是那条 bar。 */
+[data-hud-shell] [data-hud-slot~='composer-surface'] {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin-inline: 0 !important;
 }

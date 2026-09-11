@@ -4,12 +4,53 @@
 const [, , method, argsJson] = process.argv;
 const PORT = 9222;
 const list = (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === "page");
-const target = list.find((t) => !(t.url || "").includes("win=")) ?? list[0];
+
+// 挑一个**真的带 Tauri IPC 且页面已就绪**的 target：dev 冷启动时模块图要拉几分钟，
+// 期间 #root 还没挂、`__TAURI_INTERNALS__` 也未必可用（早期版本盲选第一个 page 就踩过）。
+const openWs = async (url) => {
+  const ws = new WebSocket(url);
+  await new Promise((res, rej) => {
+    ws.addEventListener("open", res, { once: true });
+    ws.addEventListener("error", rej, { once: true });
+  });
+  return ws;
+};
+let target = null;
+for (const t of list) {
+  const ws = await openWs(t.webSocketDebuggerUrl);
+  let ok = false;
+  try {
+    const r = await new Promise((resolve) => {
+      ws.addEventListener("message", (ev) => {
+        const m = JSON.parse(typeof ev.data === "string" ? ev.data : "");
+        if (m.id === 1) resolve(m.result);
+      });
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "Runtime.evaluate",
+          params: {
+            expression: `typeof window.__TAURI_INTERNALS__ === 'object' && !!document.getElementById('root') && document.getElementById('root').children.length > 0`,
+            returnByValue: true,
+          },
+        }),
+      );
+    });
+    ok = r?.result?.value === true;
+  } catch {
+    ok = false;
+  }
+  if (ok && !target) {
+    target = { t, ws };
+  } else {
+    ws.close();
+  }
+}
 if (!target) {
-  console.error("no page target");
+  console.error("没有就绪的 Tauri 窗口（dev 冷启动模块图可能还在拉）: " + JSON.stringify(list.map((t) => t.url)));
   process.exit(1);
 }
-const ws = new WebSocket(target.webSocketDebuggerUrl);
+const ws = target.ws;
 let seq = 0;
 const pending = new Map();
 ws.addEventListener("message", (ev) => {

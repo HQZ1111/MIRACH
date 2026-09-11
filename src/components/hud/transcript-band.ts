@@ -1,7 +1,5 @@
 import { type RefObject, useEffect, useState } from 'react'
 
-import { hudTranscriptHeight } from './layout'
-
 /** Breathing room the sheet keeps above the first row, so the fade has
  *  somewhere to land. Folded into the measured height rather than added in CSS,
  *  so an empty transcript measures a true zero instead of a 12px strip. */
@@ -64,43 +62,36 @@ export function useHudTranscriptBand(rootRef: RefObject<HTMLDivElement | null>):
       // Once the HUD has a transcript, a resize must buy readable scrollback.
       // The old glance-band ceiling froze this at 152px and turned every extra
       // pixel of native window height into empty transparent chrome.
-      // 视口高度取**对话区**的高度而不是 window.innerHeight：HUD 顶上还有一条
-      // 自己隐形顶栏（会话名/退出），按整窗算会把带子多算一条顶栏的高度，
-      // 顶到对话区外被 overflow 裁掉。
+      //
+      // mirach：输入条在**对话区顶部**（hermes HUD_THREAD_ALWAYS_BELOW=true），
+      // band 从 bar 下沿铺到对话区底部 —— 所以高度是"对话区剩余"，
+      // 偏移是"对话区顶 → bar 下沿"，两个都从实测矩形来（官方列在 bar 上下自带留白，
+      // 按 barHeight 硬算会压住对话或留缝）。
       const chatArea = root.querySelector<HTMLElement>('.dsh-native-area')
-      const visible = hudTranscriptHeight({
-        barHeight: root.querySelector<HTMLElement>('[data-hud-slot~="composer-dock"]')?.getBoundingClientRect().height ?? 0,
-        contentHeight: contentSpan,
-        viewportHeight: chatArea?.getBoundingClientRect().height ?? window.innerHeight
-      })
+      // 量 **composer-root**（bar 的真实盒子）：composer-dock 在官方结构里是
+      // `display: contents` 的 slot（0x0），拿它当 bar 会让 band 高度算成整窗。
+      const bar = root.querySelector<HTMLElement>('[data-hud-slot~="composer-root"]')
+      const barRect = bar?.getBoundingClientRect()
+      const areaRect = chatArea?.getBoundingClientRect()
+      const barHeight = barRect?.height ?? 0
+      const available =
+        barRect && areaRect ? Math.max(0, areaRect.bottom - barRect.bottom) : Math.max(0, (areaRect?.height ?? window.innerHeight) - barHeight)
+      const visible = contentSpan < 1 ? 0 : Math.round(available)
 
       root.style.setProperty('--hud-band-height', `${visible}px`)
 
-      // …and the bar's real height, which is what the thread has to clear.
-      // --composer-measured-height would be the obvious source, but it is a
-      // surface var that never lands here, so the clearance silently fell back
-      // to the root estimate and reserved ~20px more than the bar occupies —
-      // a visible hole under the last message.
-      const bar = root.querySelector<HTMLElement>('[data-hud-slot~="composer-dock"]')
-      const barHeight = bar?.getBoundingClientRect().height ?? 0
-
-      if (bar) {
+      if (bar && barRect) {
         ro.observe(bar)
         root.style.setProperty('--hud-bar-height', `${Math.round(barHeight)}px`)
-
-        // band 的锚点：从**它的包含块底**到 bar 顶的整段距离（含官方结构自带的
-        // 底部留白）。基准取 band.offsetParent 而不是对话区：band 是绝对定位，
-        // 它的 bottom 就是相对包含块算的，两者必须同一个基准（否则带子会飘）。
-        const bandEl = root.querySelector<HTMLElement>('[data-hud-slot~="composer-bounds"]')
-        const anchor = bandEl?.offsetParent
-        if (anchor instanceof HTMLElement) {
-          ro.observe(anchor)
-          const offset = anchor.getBoundingClientRect().bottom - bar.getBoundingClientRect().top
-          root.style.setProperty('--hud-bar-offset', `${Math.round(Math.max(0, offset))}px`)
+        if (areaRect) {
+          root.style.setProperty(
+            '--hud-bar-offset',
+            `${Math.round(Math.max(0, barRect.bottom - areaRect.top))}px`,
+          )
         }
       }
 
-      setFilled(barHeight + visible >= (chatArea?.getBoundingClientRect().height ?? window.innerHeight) - 1)
+      setFilled(barHeight + visible >= (areaRect?.height ?? window.innerHeight) - 1)
     }
 
     measure()

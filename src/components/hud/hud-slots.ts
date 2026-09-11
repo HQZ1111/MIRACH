@@ -112,17 +112,15 @@ export function tagHudSlots(root: HTMLElement): void {
 
   // ── composer：hermes 的 dock / root / surface / rich-input ──
   const barSlot = conv.querySelector<HTMLElement>('[data-slot="conversation.composer.bar"]');
-  const extrasSlot = conv.querySelector<HTMLElement>('[data-slot="conversation.composer.dock"]');
-  // dock = 同时装着 bar 与 extras 的那层（= bar 的最外层有盒子的祖先）
   const barBox = firstBox(barSlot, (el) => hasBox(el));
-  let dock: HTMLElement | null = null;
-  for (let el: HTMLElement | null = barBox; el !== null && el !== root; el = el.parentElement) {
-    if (extrasSlot !== null && el.contains(extrasSlot)) {
-      dock = el;
-      break;
-    }
-  }
-  tag(dock ?? barBox, 'composer-dock');
+  // dock = bar 的**父层**，root = bar 自己。
+  // 为什么不能更"聪明"：官方把附属按钮行（`conversation.composer.dock`）放在
+  // **bar 内部**，所以"找同时装着 bar 与 extras 的祖先"会一路找到 bar 自己 →
+  // dock 与 root 落成同一元素 → hermes 那条"dock 里只留 composer-root，其余全藏"
+  // 会把输入卡片一起 `display:none`（实测 .pa_card 0x0、窗口整块空白）。
+  // 官方 bar 的父层是 `display: contents` 的 slot，正合 dock 语义（bar 是它的孩子）。
+  const dockEl = barBox?.parentElement ?? barBox;
+  tag(dockEl, 'composer-dock');
   tag(barBox, 'composer-root');
 
   // surface = bar 里那块真正画背景的卡片（contenteditable 最近的"有底色"祖先）

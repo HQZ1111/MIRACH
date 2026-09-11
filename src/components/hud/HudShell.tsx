@@ -26,7 +26,6 @@ import { NativeChatArea } from '@/components/chat/NativeChatArea'
 
 import { useHudClickThrough } from './click-through'
 import { useHudComposerDrag } from './composer-drag'
-import { useHudEdge } from './hud-edge'
 import { useHudGlass } from './glass'
 import { useHudResizeHandle } from './resize-handle'
 import { watchHudShellColumns } from './shell-columns'
@@ -178,8 +177,11 @@ function useHudHeld(): boolean {
 export function HudShell() {
   const [recent, holdBand] = useRecentActivity()
   const held = useHudHeld()
-  // 停靠边（hermes 由主进程广播；这里按窗口在显示器工作区的位置算）
-  const edge = useHudEdge()
+  // 恒为 'top'：hermes 的 HUD_THREAD_ALWAYS_BELOW=true 把 edge 钉死成 'top' ——
+  // **输入条在上、transcript 永远挂在它下面**（Spotlight 形状），窗口停在哪一边都一样
+  // （hermes `measure()` 里那句 `setEdge('top'); return`）。另一套 edge 感知翻转的 CSS
+  // 仍在 hud-styles.css 里（[data-hud-edge='bottom'] 那半边），随时可切回去。
+  const edge = 'top' as const
 
   // Clicking away to another APP is the most common way the HUD is let go of,
   // and it fires no focusout: the composer stays document.activeElement while

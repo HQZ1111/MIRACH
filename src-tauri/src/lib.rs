@@ -1514,6 +1514,8 @@ pub fn run() {
                 }
             }
             let _ = app.global_shortcut().register("Alt+Space");
+            // 主窗句柄缓存（HUD 让位/还原都走它，不依赖注册表查找 —— 见 MAIN_WINDOW 注释）
+            cache_main_window(app.handle());
             // HUD 建窗自检（MIRACH_HUD_SELFTEST=1）：不依赖 CDP，结果直接进日志
             if std::env::var("MIRACH_HUD_SELFTEST").is_ok() {
                 for kind in [
@@ -2006,6 +2008,76 @@ fn pick_hud_label(app: &tauri::AppHandle) -> String {
     format!("{HUD_LABEL}-{}", std::process::id())
 }
 
+/// 主窗是否「因 HUD 让位」而被收起来（hermes `hudRestoreMainWindow`）。
+///
+/// hermes 的 HUD 语义是**替代**而不是并列：`openHudWindow` 先记下主窗当时可不可见，
+/// HUD 真正露出来时（`wireWindowReveal.onRevealed`）把主窗 `hide()` ——
+/// 注释原文 "Step the app aside: the HUD IS the surface now."；关 HUD 时
+/// `restoreMainWindowFromHud()` 再 `show()`。主窗本来就不在屏幕上（隐藏/托盘态）时不动它。
+///
+/// ⚠️ 这个标志**只在还原时清**（hermes 同款）：早先版本在"让位"时就用 `swap(false)`
+/// 清掉了，于是关 HUD 时还原判据已经为假 —— 主窗再也回不来（实测：HUD 自关后主窗
+/// 仍是隐藏态）。"只让位一次"由下面独立的 STEPPED_ASIDE 负责。
+static HUD_RESTORE_MAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 已经执行过让位（就绪事件与 1.5s 兜底都会走到让位，去重用）
+static HUD_STEPPED_ASIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 主窗句柄缓存（setup 时抓一次）。
+///
+/// 为什么不用 `get_webview_window("main")` 现查：实测在"HUD 让位把主窗 hide 掉"
+/// 之后，关 HUD 时的还原路径里 `get_webview_window("main")` 会返回 None
+/// （诊断输出 `[hud] restore_main_from_hud: owed=true main_found=false`），
+/// 于是主窗再也 show 不回来 —— 用户视角就是"点了悬浮窗，软件没了"。
+/// 句柄在 setup（config 窗口刚建好）时抓，之后 hide/show 都走它，不依赖注册表状态。
+static MAIN_WINDOW: std::sync::Mutex<Option<tauri::WebviewWindow>> = std::sync::Mutex::new(None);
+
+fn cache_main_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        if let Ok(mut slot) = MAIN_WINDOW.lock() {
+            *slot = Some(main);
+        }
+    }
+}
+
+fn main_window_handle(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Ok(guard) = MAIN_WINDOW.lock() {
+        if let Some(win) = guard.as_ref() {
+            return Some(win.clone());
+        }
+    }
+    app.get_webview_window("main")
+}
+
+/// HUD 露出来 → 显/聚焦/置顶，并且**把主窗收起来**（hermes 同款让位；只做一次）
+fn hud_reveal_and_step_aside(win: &tauri::WebviewWindow) {
+    let _ = win.show();
+    let _ = win.set_focus();
+    let _ = win.set_always_on_top(true);
+    let owed = HUD_RESTORE_MAIN.load(std::sync::atomic::Ordering::SeqCst);
+    if owed && !HUD_STEPPED_ASIDE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if let Some(main) = main_window_handle(win.app_handle()) {
+            let _ = main.hide();
+            eprintln!("[hud] main window stepped aside (hidden) — HUD is the surface");
+        }
+    }
+}
+
+/// 关 HUD → 把让位时收起来的主窗放回来（hermes `restoreMainWindowFromHud`）
+fn restore_main_from_hud(app: &tauri::AppHandle) {
+    let owed = HUD_RESTORE_MAIN.swap(false, std::sync::atomic::Ordering::SeqCst);
+    if !owed {
+        return;
+    }
+    HUD_STEPPED_ASIDE.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(main) = main_window_handle(app) {
+        let _ = main.show();
+        let _ = main.set_focus();
+        eprintln!("[hud] main window restored");
+    } else {
+        eprintln!("[hud] restore failed: main window handle unavailable");
+    }
+}
+
 #[tauri::command]
 async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = hud_window(&app) {
@@ -2013,6 +2085,12 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         let _ = win.set_focus();
         return Ok(());
     }
+    // hermes：进 HUD 前记下主窗可见性，HUD 露出来之后据此把主窗收起来
+    let main_visible = app
+        .get_webview_window("main")
+        .and_then(|m| m.is_visible().ok())
+        .unwrap_or(false);
+    HUD_RESTORE_MAIN.store(main_visible, std::sync::atomic::Ordering::SeqCst);
     let label = pick_hud_label(&app);
     let url = tauri::WebviewUrl::App("index.html?win=hud".into());
     // hermes 的做法（Electron main.ts createHudWindow + wireWindowReveal）：
@@ -2025,15 +2103,18 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         .min_inner_size(HUD_MIN_WIDTH, HUD_MIN_HEIGHT)
         .decorations(false)
         .transparent(true)
+        // 与主窗 config 的 `backgroundColor: "#00000000"` 等价：**建窗时就**把 webview
+        // 背景设成透明。只在 build() 之后再 set_background_color 不够 —— 实测 HUD 会整块
+        // 渲染成不透明的浅灰板（页面元素全是透明的，板子是 webview 自己的底色），
+        // 用户看到的就是"打开悬浮窗一片空白"。
+        .background_color(tauri::webview::Color(0, 0, 0, 0))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false) // hermes 同款：程序化 setBounds，防系统缩放热区
         .visible(false)
         .on_page_load(|win, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                let _ = win.show();
-                let _ = win.set_focus();
-                let _ = win.set_always_on_top(true);
+                hud_reveal_and_step_aside(&win);
             }
         });
     // hermes 同款落点：底部居中、离下沿 72px（拿不到显示器就用系统默认位置）
@@ -2055,16 +2136,52 @@ async fn hud_open(app: tauri::AppHandle) -> Result<(), String> {
         return Err(msg);
     }
     if let Ok(mut slot) = HUD_ACTIVE_LABEL.lock() {
-        *slot = Some(label);
+        *slot = Some(label.clone());
+    }
+    // 关窗路径也要把主窗放回来：hermes 在 HUD 的 `closed` 事件里调
+    // `restoreMainWindowFromHud()`（用户用 Alt+F4 / 系统关闭关掉 HUD 时，hud_close
+    // 命令根本没跑）。
+    //
+    // 两条路一起上，因为事件面靠不住：
+    //  1) CloseRequested 监听（快路径）—— ⚠️ 实测 tauri-runtime-wry 2.11 把
+    //     `TaoWindowEvent::Destroyed` 自己吃掉（只做窗口表移除 + 空表退出），
+    //     **不转发**给窗口监听器（lib.rs:4310-4326），所以不能挂 Destroyed；
+    //  2) 看护线程（兜底，500ms）—— 直接看 HUD 的 hwnd 还在不在，消失就还原。
+    //     事件面再变也不会把用户的主窗弄丢（实测 WM_CLOSE 关 HUD 时，光靠
+    //     CloseRequested 监听并没有触发，所以兜底是必需的，不是保险）。
+    {
+        let handle = app.clone();
+        hud.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                restore_main_from_hud(&handle);
+            }
+        });
+    }
+    {
+        let handle = app.clone();
+        let watched = label.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let alive = handle
+                .get_webview_window(&watched)
+                .map(|w| w.hwnd().is_ok())
+                .unwrap_or(false);
+            if !alive {
+                restore_main_from_hud(&handle);
+                eprintln!("[hud] hud window gone — watchdog ran restore check");
+                break;
+            }
+        });
     }
     // 透明窗口必须显式把 WebView 背景设透明（主窗同样处理，否则透明处发黑）
     let _ = hud.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)));
-    // 兜底：页面就绪事件没来也要显示（hermes 的 did-finish-load 兜底同责）
+    // 兜底：页面就绪事件没来也要显示（hermes 的 did-finish-load 兜底同责；
+    // hud_reveal_and_step_aside 内部的 swap 保证"让位"只发生一次）
     {
         let win = hud.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(1500));
-            let _ = win.show();
+            hud_reveal_and_step_aside(&win);
         });
     }
     // HUD 是语音条宿主，麦克风权限钩子同样要挂（语音面板可能只在 HUD 里开）
@@ -2080,6 +2197,8 @@ async fn hud_close(app: tauri::AppHandle) -> Result<(), String> {
     if let Ok(mut slot) = HUD_ACTIVE_LABEL.lock() {
         *slot = None;
     }
+    // hermes closeHudWindow：关掉窗口后把让位时收起来的主窗放回来（+聚焦）
+    restore_main_from_hud(&app);
     Ok(())
 }
 
